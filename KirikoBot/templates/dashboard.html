@@ -297,11 +297,98 @@ tr:hover td{background:rgba(255,239,242,.5)}
 .switch input:disabled + .slider{opacity:.5;cursor:not-allowed}
 .set-scope-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .set-note{font-size:.72rem;color:var(--muted);padding:10px 18px;border-top:1px dashed var(--border)}
+
+/* ══ Theme toggle button ══ */
+.theme-btn{margin-left:auto;background:transparent;border:1px solid var(--border);border-radius:10px;width:30px;height:30px;font-size:.9rem;cursor:pointer;transition:all .25s;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.theme-btn:hover{background:var(--tint);transform:rotate(14deg) scale(1.08);border-color:var(--accent)}
+
+/* ══ Night mode (Kiriko plum night) ══ */
+body[data-theme="dark"]{
+  --bg:#1d1520; --sidebar:#241a27; --card:#2c2130; --border:#413349;
+  --text:#ede1eb; --muted:#a08da4; --tint:#382b3e;
+  --accent:#ff9fb3; --accent-deep:#ff9cb1;
+  --shadow:0 2px 12px rgba(0,0,0,.35);
+  --shadow-lg:0 10px 30px rgba(0,0,0,.5);
+  color-scheme:dark;
+}
+body[data-theme="dark"]{background:
+  radial-gradient(1200px 300px at 85% -50px, rgba(255,143,163,.09), transparent 60%),
+  radial-gradient(900px 260px at -100px 20%, rgba(178,140,245,.10), transparent 55%),
+  var(--bg)}
+body[data-theme="dark"] aside{box-shadow:2px 0 14px rgba(0,0,0,.4)}
+body[data-theme="dark"] .logs{background:rgba(16,12,18,.45)}
+body[data-theme="dark"] tr:hover td{background:rgba(255,159,179,.05)}
+body[data-theme="dark"] .set-row:hover{background:rgba(255,159,179,.05)}
+body[data-theme="dark"] .feature-item:hover{background:rgba(255,159,179,.05)}
+body[data-theme="dark"] .log-entry:hover{background:rgba(255,159,179,.04)}
+body[data-theme="dark"] .log-entry.T{background:rgba(91,141,239,.10)}
+body[data-theme="dark"] .log-entry.E{background:rgba(224,93,90,.08)}
+body[data-theme="dark"] .log-entry.W{background:rgba(217,148,43,.08)}
+body[data-theme="dark"] .switch .slider{background:#4a3b52}
+body[data-theme="dark"] .switch .slider:before{background:#fff}
+body[data-theme="dark"] ::-webkit-scrollbar-thumb{background:#4a3b52}
+body[data-theme="dark"] ::-webkit-scrollbar-thumb:hover{background:#5d4a66}
+body[data-theme="dark"] .sticker-card img{background:var(--tint)}
+body[data-theme="dark"] .toast.ok{background:rgba(63,174,138,.18);color:#7fd8bc}
+body[data-theme="dark"] .toast.err{background:rgba(224,93,90,.18);color:#ff9d9a}
+body[data-theme="dark"] .bar .fill{background:linear-gradient(90deg,#ff7d9c,#ffb3c1)}
+body[data-theme="dark"] .theme-btn:hover{border-color:var(--accent)}
+body[data-theme="dark"]::before{opacity:.35}
+body[data-theme="dark"]::after{opacity:.3}
+
+/* ══ Motion: floating background blobs ══ */
+body{position:relative}
+body::before,body::after{content:"";position:fixed;border-radius:50%;filter:blur(90px);z-index:0;pointer-events:none;opacity:.55;animation:blobFloat 28s ease-in-out infinite alternate}
+body::before{width:440px;height:440px;background:rgba(255,143,163,.13);top:-130px;right:-90px}
+body::after{width:400px;height:400px;background:rgba(178,140,245,.11);bottom:-120px;left:-70px;animation-delay:-14s}
+aside,main{position:relative;z-index:1}
+@keyframes blobFloat{from{transform:translate(0,0) scale(1)}to{transform:translate(-70px,50px) scale(1.18)}}
+
+/* ══ Motion: entrance & micro-interactions ══ */
+/* fill-mode backwards: entrance plays, then releases transform so hover lift still works */
+.panel{animation:panelIn .35s ease backwards}
+.stat-card{animation:panelIn .4s ease backwards}
+@keyframes panelIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+.stats .stat-card:nth-child(2){animation-delay:.04s}
+.stats .stat-card:nth-child(3){animation-delay:.08s}
+.stats .stat-card:nth-child(4){animation-delay:.12s}
+.stats .stat-card:nth-child(5){animation-delay:.16s}
+.stats .stat-card:nth-child(6){animation-delay:.2s}
+.stats .stat-card:nth-child(7){animation-delay:.24s}
+.stats .stat-card:nth-child(8){animation-delay:.28s}
+
+.btn,.toolbar button,.add-form button{transition:all .18s}
+.btn:hover,.toolbar button:hover,.add-form button:hover{transform:translateY(-1px);box-shadow:0 3px 10px rgba(255,143,163,.25)}
+.btn:active,.toolbar button:active,.add-form button:active{transform:translateY(0);box-shadow:none}
+body[data-theme="dark"] .btn:hover,body[data-theme="dark"] .toolbar button:hover,body[data-theme="dark"] .add-form button:hover{box-shadow:0 3px 12px rgba(0,0,0,.4)}
+
+aside nav a:hover{padding-left:15px}
+aside nav a{transition:all .18s}
+aside .brand .dot{animation:dotPulse 2.4s ease-in-out infinite}
+@keyframes dotPulse{0%,100%{box-shadow:0 0 0 0 rgba(63,174,138,.35)}50%{box-shadow:0 0 0 6px rgba(63,174,138,0)}}
+aside .brand:hover{letter-spacing:.4px}
+
+.page-head{animation:panelIn .3s ease backwards}
+.set-group{animation:panelIn .4s ease backwards}
+.set-group:nth-of-type(2){animation-delay:.05s}
+.set-group:nth-of-type(3){animation-delay:.1s}
+.set-group:nth-of-type(4){animation-delay:.15s}
+.set-group:nth-of-type(5){animation-delay:.2s}
+.set-group:nth-of-type(6){animation-delay:.25s}
+
+/* Smooth theme transition */
+body,aside,main{transition:background-color .35s ease,color .35s ease}
+.panel,.stat-card,.set-group,.group-card,.profile-card,.toolbar button,.theme-btn{transition-property:background-color,color,border-color,box-shadow,transform;transition-duration:.25s}
+
+/* Respect reduced-motion preference */
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}
+}
 </style>
 </head>
 <body>
 <aside>
-  <div class="brand"><span class="dot" id="statusDot"></span> Kiriko<span>Bot</span></div>
+  <div class="brand"><span class="dot" id="statusDot"></span> Kiriko<span>Bot</span><button id="themeToggle" class="theme-btn" onclick="toggleTheme()" title="切换日间/夜间模式">🌙</button></div>
   <nav id="sidenav">
     <a class="active" data-page="overview">📊 总览</a>
     <a data-page="logs">📡 日志</a>
@@ -339,7 +426,7 @@ $$('#sidenav a').forEach(a=>{a.addEventListener('click',()=>{
 async function loadPage(name){
   const mc=$('mainContent');
   switch(name){
-    case 'overview': mc.innerHTML=await overviewHTML(); bindLogsIf('overview-logs'); break;
+    case 'overview': mc.innerHTML=await overviewHTML(); bindLogsIf('overview-logs'); animateCounters(); break;
     case 'logs': mc.innerHTML=logsPageHTML(); bindLogsIf('logs-view'); startLogSSE(); break;
     case 'reminders': mc.innerHTML=await remindersHTML(); break;
     case 'tarot': mc.innerHTML=await tarotHTML(); break;
@@ -1504,6 +1591,38 @@ async function SettingsRefreshGroupList(){
     SettingsGroups=d.groups||[];
     SettingsRenderScopeBar();
   }catch(_){}
+}
+
+// ── Theme (day/night) ──
+function applyTheme(t){
+  document.body.dataset.theme=t;
+  const btn=$('themeToggle');if(btn)btn.textContent=t==='dark'?'☀️':'🌙';
+  try{localStorage.setItem('kiriko-theme',t)}catch(_){}
+}
+function toggleTheme(){
+  applyTheme(document.body.dataset.theme==='dark'?'light':'dark');
+}
+(function initTheme(){
+  let t='';
+  try{t=localStorage.getItem('kiriko-theme')||''}catch(_){}
+  if(!t)t=(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';
+  document.body.dataset.theme=t;
+  const btn=$('themeToggle');if(btn)btn.textContent=t==='dark'?'☀️':'🌙';
+})();
+
+// ── Counter animation (overview stat cards) ──
+function animateCounters(){
+  $$('.stat-card .num').forEach(el=>{
+    const raw=el.textContent.trim();
+    if(!/^\d+$/.test(raw))return;  // only animate pure integers
+    const n=parseInt(raw,10), dur=500, t0=performance.now();
+    const step=t=>{
+      const p=Math.min(1,(t-t0)/dur);
+      el.textContent=Math.round(n*(0.2+0.8*p));
+      if(p<1)requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
 }
 
 // ── Init ──
