@@ -6,12 +6,16 @@
 <title>Kiriko Bot</title>
 <style>
 :root {
-  --bg: #0d1117; --sidebar: #161b22; --card: #1c2128;
-  --border: #30363d; --text: #c9d1d9; --muted: #8b949e;
-  --accent: #f78166; --blue: #58a6ff; --green: #3fb950;
-  --yellow: #d2991d; --red: #f85149; --purple: #bc8cff;
-  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --mono: 'SF Mono', 'Fira Code', monospace;
+  --bg: #faf6f4; --sidebar: #fff9f6; --card: #ffffff;
+  --border: #f2e3e0; --text: #43313c; --muted: #a88f9e;
+  --accent: #ff8fa3; --accent-deep: #f26d8a; --tint: #ffeff2;
+  --blue: #5b8def; --green: #3fae8a; --yellow: #d9942b;
+  --red: #e05d5a; --purple: #9a72e8;
+  --font: 'PingFang SC','Hiragino Sans GB','Noto Sans SC','Microsoft YaHei',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --mono: 'SF Mono','Fira Code','JetBrains Mono',monospace;
+  --radius: 14px; --radius-s: 8px;
+  --shadow: 0 2px 10px rgba(255,143,163,.08);
+  --shadow-lg: 0 8px 24px rgba(255,143,163,.14);
 }
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:var(--bg);color:var(--text);font-family:var(--font);height:100vh;display:flex}
@@ -24,7 +28,7 @@ aside .brand span{color:var(--accent)}
 aside .dot{width:7px;height:7px;border-radius:50%;background:var(--green);transition:background .5s}
 aside nav{flex:1;padding:8px;overflow-y:auto}
 aside nav a{display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:6px;color:var(--muted);text-decoration:none;font-size:.82rem;transition:all .15s;cursor:pointer;margin-bottom:2px}
-aside nav a:hover{color:var(--text);background:rgba(255,255,255,.04)}
+aside nav a:hover{color:var(--text);background:rgba(255,143,163,.07)}
 aside nav a.active{color:var(--text);background:rgba(240,120,100,.1);border:1px solid rgba(240,120,100,.2)}
 aside nav a .badge{font-size:.65rem;background:var(--border);padding:1px 6px;border-radius:8px;margin-left:auto}
 aside .status{padding:12px 16px;border-top:1px solid var(--border);font-size:.7rem;color:var(--muted);line-height:1.6}
@@ -37,7 +41,7 @@ main{flex:1;overflow-y:auto;padding:20px}
 
 .stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-bottom:20px}
 .stat-card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;transition:border-color .2s}
-.stat-card:hover{border-color:rgba(255,255,255,.15)}
+.stat-card:hover{border-color:rgba(255,143,163,.35)}
 .stat-card .num{font-size:1.6rem;font-weight:600}
 .stat-card .lbl{font-size:.72rem;color:var(--muted);margin-top:4px}
 .stat-card.c1 .num{color:var(--blue)}
@@ -67,7 +71,7 @@ main{flex:1;overflow-y:auto;padding:20px}
 
 .logs{font-family:var(--mono);font-size:.74rem;line-height:1.5;max-height:calc(100vh - 300px);overflow-y:auto}
 .log-entry{padding:2px 8px;white-space:pre-wrap;word-break:break-all;border-left:3px solid transparent}
-.log-entry:hover{background:rgba(255,255,255,.02)}
+.log-entry:hover{background:rgba(255,143,163,.05)}
 .log-entry.E{color:var(--red);border-left-color:var(--red)}
 .log-entry.W{color:var(--yellow);border-left-color:var(--yellow)}
 .log-entry.I{color:var(--text)}
@@ -80,8 +84,8 @@ main{flex:1;overflow-y:auto;padding:20px}
 
 table{width:100%;border-collapse:collapse;font-size:.78rem}
 th{text-align:left;padding:6px 10px;color:var(--muted);font-weight:500;font-size:.68rem;text-transform:uppercase;border-bottom:1px solid var(--border)}
-td{padding:5px 10px;border-bottom:1px solid rgba(48,54,61,.5)}
-tr:hover td{background:rgba(255,255,255,.02)}
+td{padding:5px 10px;border-bottom:1px solid var(--border)}
+tr:hover td{background:rgba(255,143,163,.05)}
 .tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:.65rem;white-space:nowrap}
 .tag.u{color:var(--blue)}
 .tag.a{color:var(--accent)}
@@ -118,7 +122,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
 .sticker-card{background:var(--bg);border:1px solid var(--border);border-radius:8px;overflow:hidden;transition:border-color .2s}
 .sticker-card:hover{border-color:var(--accent)}
 .sticker-card:hover .sticker-del-btn{opacity:1 !important}
-.sticker-card img{width:100%;height:120px;object-fit:contain;background:rgba(0,0,0,.2);padding:4px}
+.sticker-card img{width:100%;height:120px;object-fit:contain;background:var(--tint);padding:4px}
 .sticker-card .sinfo{padding:6px 8px;font-size:.62rem;color:var(--muted);display:flex;justify-content:space-between}
 
 .group-card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center}
@@ -128,7 +132,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
 
 .feature-item{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border-bottom:1px solid var(--border);transition:background .15s}
 .feature-item:last-child{border-bottom:none}
-.feature-item:hover{background:rgba(255,255,255,.01)}
+.feature-item:hover{background:rgba(255,143,163,.03)}
 .feature-item .f-top{display:flex;align-items:center;gap:8px;width:100%}
 .feature-item .f-request{font-size:.75rem;color:var(--muted);padding-left:4px}
 .feature-item .f-actions{display:flex;gap:4px;margin-left:auto;flex-shrink:0}
@@ -174,7 +178,125 @@ tr:hover td{background:rgba(255,255,255,.02)}
   .profile-grid{grid-template-columns:1fr}
   .sticker-grid{grid-template-columns:repeat(auto-fill,minmax(100px,1fr))}
   .sched-info{flex-direction:column}
+  .page-head{flex-wrap:wrap}
+  .scope-bar{flex-direction:column;align-items:stretch}
+  .set-row{flex-direction:row}
 }
+
+/* ══ Kiriko theme layer (overrides above) ══ */
+body{background:
+  radial-gradient(1200px 300px at 85% -50px, rgba(255,143,163,.10), transparent 60%),
+  radial-gradient(900px 260px at -100px 20%, rgba(255,183,197,.12), transparent 55%),
+  var(--bg);
+  font-family:var(--font)}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-thumb{background:#f0d7dd;border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:#e8c3cc}
+::-webkit-scrollbar-track{background:transparent}
+
+aside{background:var(--sidebar);border-right:1px solid var(--border);box-shadow:2px 0 12px rgba(255,143,163,.05)}
+aside .brand{font-size:1.02rem;padding:18px 20px}
+aside .brand span{color:var(--accent-deep)}
+aside nav a{border-radius:10px;padding:9px 12px;font-size:.84rem;transition:all .18s}
+aside nav a:hover{color:var(--text);background:var(--tint)}
+aside nav a.active{color:var(--accent-deep);background:var(--tint);border:1px solid rgba(255,143,163,.35);font-weight:600}
+aside nav a .badge{background:var(--tint);color:var(--accent-deep)}
+
+main{max-width:1440px;width:100%;margin:0 auto;padding:24px}
+
+.page-head{display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+.page-head .ph-title{font-weight:700;font-size:1.02rem;letter-spacing:.3px}
+.page-head .ph-title .em{color:var(--accent-deep)}
+.page-head .ph-sub{font-size:.74rem;color:var(--muted)}
+
+.stats{gap:14px;margin-bottom:22px}
+.stat-card{border-radius:var(--radius);box-shadow:var(--shadow);padding:18px;transition:transform .18s,box-shadow .18s}
+.stat-card:hover{transform:translateY(-2px);box-shadow:var(--shadow-lg)}
+.stat-card .num{font-size:1.7rem}
+.stat-card .lbl{font-size:.72rem;margin-top:5px}
+
+.panel{border-radius:var(--radius);box-shadow:var(--shadow);margin-bottom:18px;overflow:hidden}
+.panel-header{font-size:.82rem;padding:13px 18px}
+.panel-body{padding:14px 18px}
+
+.toolbar button{border-radius:8px;padding:5px 12px;font-size:.74rem}
+.toolbar button.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600;box-shadow:0 2px 8px rgba(255,143,163,.35)}
+.toolbar input,.toolbar select{border-radius:8px;background:var(--card)}
+
+.logs{border-radius:var(--radius-s);background:rgba(255,249,246,.6)}
+.log-entry{border-radius:4px}
+.log-entry.E{color:var(--red);background:rgba(224,93,90,.05)}
+.log-entry.W{color:var(--yellow);background:rgba(217,148,43,.05)}
+.log-entry.T{color:var(--blue);background:rgba(91,141,239,.06)}
+.think-tag{background:rgba(91,141,239,.14);color:var(--blue)}
+.err-tag{background:rgba(224,93,90,.12);color:var(--red)}
+.warn-tag{background:rgba(217,148,43,.14);color:var(--yellow)}
+
+table{font-size:.8rem}
+th{color:var(--accent-deep);font-size:.66rem;letter-spacing:.4px}
+td{border-bottom:1px solid var(--border)}
+tr:hover td{background:rgba(255,239,242,.5)}
+.tag{border-radius:6px;padding:1px 8px}
+.tag.ok{color:var(--green);background:rgba(63,174,138,.12)}
+.tag.warn{color:var(--yellow);background:rgba(217,148,43,.14)}
+.tag.err{color:var(--red);background:rgba(224,93,90,.12)}
+.tag.u{color:var(--blue)} .tag.a{color:var(--accent-deep)} .tag.t{color:var(--green)}
+
+.bar .fill{background:linear-gradient(90deg,#ffb3c1,#ff8fa3);box-shadow:0 2px 6px rgba(255,143,163,.3)}
+.profile-card,.group-card,.reminder-item{border-radius:var(--radius)}
+.profile-card{border-radius:var(--radius);box-shadow:var(--shadow)}
+.profile-card h4{color:var(--accent-deep)}
+.profile-card .t{color:var(--blue);background:rgba(91,141,239,.1);border-radius:10px}
+.group-card{box-shadow:var(--shadow);margin-bottom:10px}
+.sticker-card{background:var(--card);border-radius:var(--radius-s);box-shadow:var(--shadow)}
+.sticker-card img{background:var(--tint)}
+.feature-item{border-radius:6px}
+.feature-item:hover{background:rgba(255,239,242,.4)}
+
+.add-form input,.add-form select{border-radius:8px;background:var(--card)}
+.add-form button{border-radius:8px}
+.btn{border-radius:8px}
+.btn.primary{color:var(--blue);border-color:rgba(91,141,239,.35)}
+.btn.primary:hover{background:rgba(91,141,239,.08)}
+.btn.accent{color:var(--accent-deep);border-color:rgba(255,143,163,.4)}
+.btn.accent:hover{background:rgba(255,143,163,.1)}
+
+.sched-info .si-item{background:var(--card);border-radius:var(--radius-s);box-shadow:var(--shadow)}
+.sched-info .si-label{color:var(--muted)}
+.toast{border-radius:10px;box-shadow:var(--shadow-lg);font-size:.8rem}
+.toast.ok{background:rgba(63,174,138,.14);border:1px solid var(--green);color:#2f8a6e}
+.toast.err{background:rgba(224,93,90,.14);border:1px solid var(--red);color:#c74a47}
+
+/* ── Feature settings page ── */
+.tabs{display:flex;gap:6px;margin-bottom:16px;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:4px;width:max-content;box-shadow:var(--shadow)}
+.tabs button{border:none;background:transparent;color:var(--muted);padding:7px 18px;border-radius:9px;font-size:.78rem;cursor:pointer;font-family:var(--font);transition:all .18s}
+.tabs button.on{background:var(--accent);color:#fff;font-weight:600;box-shadow:0 2px 8px rgba(255,143,163,.35)}
+.scope-bar{display:flex;gap:10px;align-items:flex-end;margin-bottom:16px;flex-wrap:wrap}
+.scope-bar .fld{display:flex;flex-direction:column;gap:4px}
+.scope-bar .fld label{font-size:.68rem;color:var(--muted)}
+.scope-bar input,.scope-bar select{padding:7px 12px;border-radius:9px;border:1px solid var(--border);background:var(--card);color:var(--text);font-size:.78rem;font-family:var(--font);outline:none;box-shadow:var(--shadow)}
+.scope-bar input:focus,.scope-bar select:focus{border-color:var(--accent)}
+.scope-bar input{width:180px}
+.scope-bar select{width:240px;max-width:60vw}
+.set-group{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);margin-bottom:16px;overflow:hidden}
+.set-group .sg-head{padding:12px 18px;font-size:.78rem;font-weight:700;color:var(--accent-deep);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px}
+.set-group .sg-head .sg-count{margin-left:auto;font-size:.66rem;color:var(--muted);font-weight:400}
+.set-row{display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid var(--border)}
+.set-row:last-child{border-bottom:none}
+.set-row:hover{background:rgba(255,249,246,.7)}
+.set-row .sr-info{flex:1}
+.set-row .sr-label{font-size:.8rem;font-weight:600}
+.set-row .sr-label .sr-off{color:var(--muted);font-weight:400}
+.set-row .sr-desc{font-size:.68rem;color:var(--muted);margin-top:2px}
+.switch{position:relative;display:inline-block;width:44px;height:24px;flex-shrink:0}
+.switch input{opacity:0;width:0;height:0}
+.switch .slider{position:absolute;cursor:pointer;inset:0;background:#e8dde0;border-radius:24px;transition:.2s}
+.switch .slider:before{content:"";position:absolute;height:18px;width:18px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.2s;box-shadow:0 1px 4px rgba(67,49,60,.25)}
+.switch input:checked + .slider{background:var(--accent)}
+.switch input:checked + .slider:before{transform:translateX(20px)}
+.switch input:disabled + .slider{opacity:.5;cursor:not-allowed}
+.set-scope-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.set-note{font-size:.72rem;color:var(--muted);padding:10px 18px;border-top:1px dashed var(--border)}
 </style>
 </head>
 <body>
@@ -192,6 +314,7 @@ tr:hover td{background:rgba(255,255,255,.02)}
     <a data-page="versions">📦 版本日志</a>
     <a data-page="stickers">🎨 表情包</a>
     <a data-page="groups">👥 群管理</a>
+    <a data-page="settings">⚙️ 群设置</a>
     <a data-page="affection">💕 好感度</a>
     <a data-page="messages">📨 群消息</a>
   </nav>
@@ -227,6 +350,7 @@ async function loadPage(name){
     case 'versions': mc.innerHTML=await versionsHTML(); bindVersions(); break;
     case 'stickers': mc.innerHTML=await stickersHTML(); break;
     case 'groups': mc.innerHTML=await groupsHTML(); break;
+    case 'settings': mc.innerHTML=await settingsHTML(); bindSettings(); break;
     case 'affection': mc.innerHTML=await affectionHTML(); bindAffection(); break;
     case 'messages': mc.innerHTML=await messagesHTML(); break;
   }
@@ -270,8 +394,8 @@ async function overviewHTML(){
   try{st=await fetch('/status').then(r=>r.json())}catch(_){}
   const t=s.totals;
   const pending=r.reminders.filter(x=>!x.fired);
-  let h=`<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-    <span style="font-weight:600;font-size:.9rem">📊 系统总览</span>
+  let h=`<div class="page-head">
+    <span class="ph-title">📊 系统总览</span>
     <button class="btn primary" onclick="refreshOverview()">🔄 刷新</button>
   </div>
   <div class="stats" id="overviewStats">
@@ -302,13 +426,11 @@ async function overviewHTML(){
     const sch=await fetch('/api/scheduler').then(r=>r.json());
     h+=`<div class="panel"><div class="panel-header">⏱️ 定时任务 <span class="tag ${sch.running?'ok':'err'}" style="margin-left:8px">${sch.running?'运行中':'已停'}</span>
       <span class="ph-right">
-        <button class="btn accent" onclick="schedAction('morning')" title="手动触发早安">🌅 早安</button>
-        <button class="btn accent" onclick="schedAction('evening')" title="手动触发晚安">🌙 晚安</button>
+        <button class="btn accent" onclick="schedAction()" title="手动触发早安">🌅 早安</button>
       </span>
     </div><div class="panel-body"><div class="sched-info">
       <div class="si-item"><div class="si-label">检查间隔</div><div class="si-value">${sch.check_interval}秒</div></div>
       <div class="si-item"><div class="si-label">下次早安</div><div class="si-value">${sch.next_morning||'—'}</div></div>
-      <div class="si-item"><div class="si-label">下次晚安</div><div class="si-value">${sch.next_evening||'—'}</div></div>
       <div class="si-item"><div class="si-label">活跃群数</div><div class="si-value">${(sch.active_groups||[]).length}</div></div>
     </div></div></div>`;
   }catch(_){}
@@ -319,11 +441,11 @@ async function overviewHTML(){
 function refreshOverview(){loadPage('overview')}
 
 // ── Scheduler actions ──
-async function schedAction(type){
+async function schedAction(){
   try{
-    const r=await fetch('/api/scheduler/'+type,{method:'POST'});
+    const r=await fetch('/api/scheduler/morning',{method:'POST'});
     const d=await r.json();
-    toast(d.ok?`${type==='morning'?'早安':'晚安'}问候已触发！`:'触发失败: '+d.error, d.ok?'ok':'err');
+    toast(d.ok?'早安问候已触发！':'触发失败: '+d.error, d.ok?'ok':'err');
   }catch(_){toast('请求失败','err')}
 }
 
@@ -630,8 +752,8 @@ async function versionsHTML(){
   // Stats row
   let totalEntries=0;
   versions.forEach(ver=>totalEntries+=(ver.changelog_count||0));
-  let h=`<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-    <span style="font-weight:600;font-size:.9rem">📦 版本日志</span>
+  let h=`<div class="page-head">
+    <span class="ph-title">📦 版本日志</span>
     <button class="btn primary" onclick="loadPage('versions')">🔄 刷新</button>
   </div>
   <div class="stats">
@@ -654,7 +776,7 @@ async function versionsHTML(){
     if(logs.length){
       h+=`<div class="panel-body" style="border-top:1px solid var(--border)">`;
       logs.forEach(e=>{
-        h+=`<div style="padding:6px 0;border-bottom:1px solid rgba(48,54,61,.3);display:flex;align-items:flex-start;gap:8px">
+        h+=`<div style="padding:6px 0;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;gap:8px">
           <span class="tag" style="color:${typeColor[e.entry_type]||'var(--muted)'};background:${typeColor[e.entry_type]||'var(--border)'}22">${typeEmoji[e.entry_type]||e.entry_type}</span>
           <span style="font-size:.78rem;flex:1"><b>${e.title}</b>${e.description?` — <span style="color:var(--muted)">${e.description}</span>`:''}</span>
           <span style="font-size:.62rem;color:var(--muted);flex-shrink:0">${e.created_at}</span>
@@ -716,9 +838,9 @@ async function versionsHTML(){
     versions.forEach(ver=>{
       const logCount=ver.changelog_count||0;
       h+=`<div class="version-block" style="margin-bottom:8px;background:var(--bg);border:1px solid var(--border);border-radius:8px;overflow:hidden" id="ver-${ver.id}">
-        <div style="padding:10px 14px;display:flex;align-items:center;gap:12px;cursor:pointer;transition:background .15s" onclick="toggleVersion(${ver.id})" onmouseenter="this.style.background='rgba(255,255,255,.02)'" onmouseleave="this.style.background=''">
+        <div style="padding:10px 14px;display:flex;align-items:center;gap:12px;cursor:pointer;transition:background .15s" onclick="toggleVersion(${ver.id})" onmouseenter="this.style.background='rgba(255,143,163,.05)'" onmouseleave="this.style.background=''">
           <span style="color:var(--accent);font-weight:600;font-family:var(--mono);font-size:.82rem">v${ver.version}</span>
-          <span style="font-size:.72rem;color:var(--muted)">${ver.release_date}</span>
+          <span class="ph-sub">${ver.release_date}</span>
           <span class="tag" style="color:var(--blue)">${logCount} 条变更</span>
           <span style="font-size:.68rem;color:var(--muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${ver.description||''}</span>
           <span style="font-size:.62rem;color:var(--muted)">${ver.author}</span>
@@ -763,7 +885,7 @@ async function toggleVersion(versionId){
       logsDiv.innerHTML='<div style="color:var(--muted);font-size:.7rem;text-align:center;padding:12px">暂无变更日志</div>';
     }else{
       logsDiv.innerHTML=logs.map(e=>`
-        <div style="padding:6px 0;border-bottom:1px solid rgba(48,54,61,.3);display:flex;align-items:flex-start;gap:8px">
+        <div style="padding:6px 0;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;gap:8px">
           <span class="tag" style="color:${typeColor[e.entry_type]||'var(--muted)'};background:${typeColor[e.entry_type]||'var(--border)'}22;flex-shrink:0">${typeEmoji[e.entry_type]||e.entry_type}</span>
           <div style="font-size:.78rem;flex:1"><b>${e.title}</b>${e.description?`<br><span style="color:var(--muted);font-size:.7rem">${e.description}</span>`:''}</div>
           <div style="font-size:.62rem;color:var(--muted);flex-shrink:0;text-align:right">${e.created_at||''}<br>${e.author||''}</div>
@@ -875,9 +997,9 @@ async function stickersHTML(){
     fetch('/api/stickers/categories').then(r=>r.json()).catch(()=>({categories:[]})),
   ]);
   if(!d.stickers.length)return `<div class="panel"><div class="panel-header">🎨 表情包</div><div class="panel-body"><div class="empty">暂未收集到表情包，群聊中发送的图片会自动收集 ✨</div></div></div>`;
-  let h=`<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap">
-    <span style="font-weight:600;font-size:.9rem">🎨 表情包画廊</span>
-    <span style="font-size:.72rem;color:var(--muted)">共 ${d.total} 个</span>
+  let h=`<div class="page-head">
+    <span class="ph-title">🎨 表情包画廊</span>
+    <span class="ph-sub">共 ${d.total} 个</span>
     <button class="btn primary" onclick="loadPage('stickers')">🔄 刷新</button>
     <button class="btn green" onclick="organizeStickers(event)">📊 批量分类</button>
     <button class="btn accent" onclick="scanDuplicates(event)">🔍 查找重复</button>
@@ -908,8 +1030,8 @@ async function stickersHTML(){
     let fsize = s.file_size || s.size || 0;
     h+=`<div class="sticker-card" data-category="${cat}" id="sticker-${fname.replace(/[^a-zA-Z0-9_.-]/g,'')}">
       <div style="position:relative">
-        <img src="/stickers/${fname}" alt="${fname}" loading="lazy" onerror="this.style.display='none'" style="width:100%;height:120px;object-fit:contain;background:rgba(0,0,0,.2);padding:4px">
-        <button onclick="event.stopPropagation();delSticker('${fname}')" title="删除此表情包" style="position:absolute;top:4px;right:4px;background:rgba(0,0,0,.6);border:none;color:var(--red);cursor:pointer;font-size:.7rem;padding:2px 5px;border-radius:3px;opacity:0;transition:opacity .15s" onmouseenter="this.style.opacity='1'" onmouseleave="this.style.opacity='0'" class="sticker-del-btn">🗑️</button>
+        <img src="/stickers/${fname}" alt="${fname}" loading="lazy" onerror="this.style.display='none'" style="width:100%;height:120px;object-fit:contain;background:var(--tint);padding:4px">
+        <button onclick="event.stopPropagation();delSticker('${fname}')" title="删除此表情包" style="position:absolute;top:4px;right:4px;background:rgba(67,49,60,.55);border:none;color:var(--red);cursor:pointer;font-size:.7rem;padding:2px 5px;border-radius:3px;opacity:0;transition:opacity .15s" onmouseenter="this.style.opacity='1'" onmouseleave="this.style.opacity='0'" class="sticker-del-btn">🗑️</button>
       </div>
       <div class="sinfo">
         <span title="${fname}">${fname.substring(0,15)}${catTag}</span>
@@ -1084,9 +1206,9 @@ async function cleanupDuplicates(ev){
 async function groupsHTML(){
   let d={groups:[],total:0};try{d=await fetch('/api/groups').then(r=>r.json())}catch(_){}
   if(!d.groups.length)return `<div class="panel"><div class="panel-header">👥 群管理</div><div class="panel-body"><div class="empty">暂未发现活跃群组，等待机器人收到群消息后自动注册</div></div></div>`;
-  let h=`<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-    <span style="font-weight:600;font-size:.9rem">👥 群组管理</span>
-    <span style="font-size:.72rem;color:var(--muted)">共 ${d.total} 个群</span>
+  let h=`<div class="page-head">
+    <span class="ph-title">👥 群组管理</span>
+    <span class="ph-sub">共 ${d.total} 个群</span>
     <button class="btn primary" onclick="loadPage('groups')">🔄 刷新</button>
   </div>
   <div class="panel"><div class="panel-header">📋 群列表 (${d.total})</div><div class="panel-body">`;
@@ -1224,6 +1346,164 @@ async function adjustAffection(){
 
 function bindAffection(){
   loadAffectionBoard();
+}
+
+// ── Feature settings (per-group / per-user toggles) ──
+let SettingsScope={type:'group',id:''};
+let SettingsFeatures=[],SettingsGroups=[],SettingsEnabled={};
+
+async function settingsHTML(){
+  try{
+    const d=await fetch('/api/settings/groups').then(r=>r.json());
+    SettingsFeatures=d.features||[];
+    SettingsGroups=d.groups||[];
+  }catch(_){}
+  return `<div class="page-head">
+      <span class="ph-title">⚙️ 群功能设置</span>
+      <span class="ph-sub">每个群 / 每个用户可独立开关各项功能 · 默认全部开启 · 修改即时生效</span>
+      <button class="btn primary" style="margin-left:auto" onclick="loadPage('settings')">🔄 刷新</button>
+    </div>
+    <div class="tabs">
+      <button class="on" data-stab="group">👥 群设置</button>
+      <button data-stab="user">🙍 用户设置</button>
+    </div>
+    <div class="scope-bar" id="scopeBar"></div>
+    <div id="setRows"><div class="panel"><div class="panel-body"><div class="empty">请先选择群聊或用户</div></div></div></div>`;
+}
+
+function bindSettings(){
+  $$('.tabs button[data-stab]').forEach(b=>b.addEventListener('click',()=>{
+    $$('.tabs button[data-stab]').forEach(x=>x.classList.remove('on'));b.classList.add('on');
+    SettingsScope={type:b.dataset.stab,id:''};
+    SettingsEnabled={};
+    SettingsRenderScopeBar();
+    SettingsRenderRows();
+  }));
+  SettingsRenderScopeBar();
+  SettingsRenderRows();
+}
+
+function SettingsRenderScopeBar(){
+  const bar=$('scopeBar');if(!bar)return;
+  if(SettingsScope.type==='group'){
+    const offCount={};
+    SettingsGroups.forEach(g=>offCount[g.group_id]=(g.disabled||[]).length);
+    bar.innerHTML=`<div class="fld"><label>选择群聊</label>
+      <select id="setGroupSelect">
+        <option value="">— 请选择群 —</option>
+        ${SettingsGroups.map(g=>`<option value="${g.group_id}" ${g.group_id===SettingsScope.id?'selected':''}>${g.group_name}（${g.group_id}）${offCount[g.group_id]?` · 已关${offCount[g.group_id]}项`:''}</option>`).join('')}
+      </select></div>
+      <button class="btn accent" id="setResetBtn" onclick="SettingsReset()" ${SettingsScope.id?'':'disabled'}>♻️ 恢复默认（全部开启）</button>
+      <span class="ph-sub" id="setScopeStatus"></span>`;
+    const sel=$('setGroupSelect');
+    sel.addEventListener('change',()=>{SettingsScope.id=sel.value;SettingsLoad()});
+  }else{
+    bar.innerHTML=`<div class="fld"><label>用户 QQ 号</label>
+      <input id="setUserInput" placeholder="输入 QQ 号后回车" value="${SettingsScope.id}"></div>
+      <button class="btn primary" onclick="SettingsLoadUser()">📂 加载</button>
+      <button class="btn accent" id="setResetBtn" onclick="SettingsReset()" ${SettingsScope.id?'':'disabled'}>♻️ 恢复默认（全部开启）</button>
+      <span class="ph-sub" id="setScopeStatus"></span>`;
+    const uin=$('setUserInput');
+    uin.addEventListener('keydown',e=>{if(e.key==='Enter')SettingsLoadUser()});
+  }
+}
+
+function SettingsRenderRows(){
+  const box=$('setRows');if(!box)return;
+  if(!SettingsScope.id){
+    box.innerHTML='<div class="panel"><div class="panel-body"><div class="empty">请先选择群聊或用户</div></div></div>';
+    return;
+  }
+  const cats=[], byCat={};
+  SettingsFeatures.forEach(f=>{if(!byCat[f.category]){byCat[f.category]=[];cats.push(f.category)}byCat[f.category].push(f)});
+  let h='';
+  cats.forEach(cat=>{
+    const items=byCat[cat];
+    const off=items.filter(f=>SettingsEnabled[f.key]===false).length;
+    h+=`<div class="set-group"><div class="sg-head">${cat}<span class="sg-count">${off?`已关 ${off}/${items.length}`:`${items.length} 项 · 全部开启`}</span></div>`;
+    items.forEach(f=>{
+      const on=SettingsEnabled[f.key]!==false;
+      h+=`<div class="set-row" data-fkey="${f.key}">
+        <div class="sr-info">
+          <div class="sr-label">${f.label}${on?'':' <span class="sr-off">· 已关闭</span>'}</div>
+          <div class="sr-desc">${f.desc||''}</div>
+        </div>
+        <label class="switch"><input type="checkbox" data-fkey="${f.key}" ${on?'checked':''} onchange="SettingsToggle(this)"><span class="slider"></span></label>
+      </div>`;
+    });
+    h+=`</div>`;
+  });
+  h+=`<div class="set-note">💡 修改即时生效，无需重启。关闭某项功能后，群内/私聊用户索要该功能时 Kiriko 会礼貌说明暂不可用。</div>`;
+  box.innerHTML=h;
+}
+
+async function SettingsLoad(){
+  if(!SettingsScope.id){SettingsRenderRows();return}
+  SettingsEnabled={};
+  SettingsRenderRows();
+  try{
+    const r=await fetch(`/api/settings/${SettingsScope.type}/${SettingsScope.id}`).then(r=>r.json());
+    if(r.ok)SettingsEnabled=r.settings||{};
+  }catch(_){}
+  SettingsRenderRows();
+  const st=$('setScopeStatus');
+  if(st){
+    const disabled=Object.keys(SettingsEnabled).filter(k=>SettingsEnabled[k]===false).length;
+    st.textContent=disabled?`${disabled} 项已关闭`:'全部开启';
+  }
+}
+
+function SettingsLoadUser(){
+  const inp=$('setUserInput');if(!inp)return;
+  SettingsScope.id=(inp.value||'').trim();
+  const rb=$('setResetBtn');if(rb)rb.disabled=!SettingsScope.id;
+  SettingsLoad();
+}
+
+async function SettingsToggle(cb){
+  const key=cb.dataset.fkey;
+  const enabled=cb.checked;
+  if(!SettingsScope.id){cb.checked=!enabled;toast('请先选择群聊或用户','err');return}
+  cb.disabled=true;
+  try{
+    const r=await fetch(`/api/settings/${SettingsScope.type}/${SettingsScope.id}`,{
+      method:'PATCH',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({key,enabled}),
+    }).then(r=>r.json());
+    if(r.ok){
+      SettingsEnabled=r.settings||{};
+      const label=(SettingsFeatures.find(f=>f.key===key)||{}).label||key;
+      toast((enabled?'✅ 已开启':'🚫 已关闭')+`「${label}」`);
+      SettingsRenderRows();
+      if(SettingsScope.type==='group')SettingsRefreshGroupList();
+    }else{
+      cb.checked=!enabled;toast('保存失败: '+(r.error||'未知'),'err');
+    }
+  }catch(_){cb.checked=!enabled;toast('请求失败','err')}
+  cb.disabled=false;
+}
+
+async function SettingsReset(){
+  if(!SettingsScope.id)return;
+  const what=SettingsScope.type==='group'?'群':'用户';
+  if(!confirm(`确定恢复该${what}的全部功能开关为默认（全部开启）？`))return;
+  try{
+    const r=await fetch(`/api/settings/${SettingsScope.type}/${SettingsScope.id}`,{method:'DELETE'}).then(r=>r.json());
+    if(r.ok){
+      SettingsEnabled=r.settings||{};
+      toast('♻️ 已恢复默认，全部功能开启');
+      SettingsRenderRows();
+      SettingsRefreshGroupList();
+    }else toast('操作失败: '+(r.error||'未知'),'err');
+  }catch(_){toast('请求失败','err')}
+}
+
+async function SettingsRefreshGroupList(){
+  try{
+    const d=await fetch('/api/settings/groups').then(r=>r.json());
+    SettingsGroups=d.groups||[];
+    SettingsRenderScopeBar();
+  }catch(_){}
 }
 
 // ── Init ──

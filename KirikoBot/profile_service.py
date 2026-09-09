@@ -30,9 +30,16 @@ class ProfileService:
     def __init__(self) -> None:
         self._analyzing: set[str] = set()  # prevent duplicate analysis
 
+    @staticmethod
+    def _is_bot(user_id: str) -> bool:
+        """Check if a user_id is a known bot account."""
+        return user_id in Config.BOT_QQ_LIST
+
     def should_analyze(self, db: Any, user_id: str, group_id: str) -> bool:
         """Check if user needs profile analysis."""
         if user_id in self._analyzing:
+            return False
+        if self._is_bot(user_id):
             return False
         existing = db.get_user_profile(user_id)
         if not existing:
@@ -50,6 +57,8 @@ class ProfileService:
     ) -> dict[str, Any] | None:
         """Analyze a user's messages and save profile. Non-blocking wrapper."""
         if user_id in self._analyzing:
+            return None
+        if self._is_bot(user_id):
             return None
         self._analyzing.add(user_id)
         try:

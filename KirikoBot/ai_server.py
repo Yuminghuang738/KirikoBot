@@ -238,15 +238,16 @@ class AiServer:
 
     @staticmethod
     def vision_analyze(image_url_or_path: str, prompt: str = "", response_format: str = "text", max_tokens: int = 300) -> str | None:
-        """Analyze an image via configured vision API (OpenAI-compatible).
+        """Analyze an image via DeepSeek's vision model.
 
-        Uses Config.VISION_API_URL + VISION_API_KEY if configured.
+        Uses the same endpoint and token as the chat model
+        (Config.DEEPSEEK_API + Config.DEEPSEEK_TOKEN) with Config.VISION_MODEL.
         Supports HTTP URLs and local file paths (via base64 data URI).
         Downloads remote URLs locally to avoid CDN access issues.
         Returns the API response content string, or None if vision is unavailable.
         """
-        if not Config.VISION_API_URL:
-            logger.debug("Vision API not configured (set VISION_API_URL in .env)")
+        if not Config.VISION_ENABLED:
+            logger.debug("Vision disabled (set VISION_ENABLED=1 in .env)")
             return None
 
         import base64
@@ -317,10 +318,10 @@ class AiServer:
         session = AiServer._create_session()
         try:
             resp = session.post(
-                Config.VISION_API_URL,
+                Config.DEEPSEEK_API,
                 headers={
                     "Content-Type": "application/json",
-                    "Authorization": f"Bearer {Config.VISION_API_KEY}",
+                    "Authorization": f"Bearer {Config.DEEPSEEK_TOKEN}",
                 },
                 json=payload,
                 timeout=45,

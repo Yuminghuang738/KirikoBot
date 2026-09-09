@@ -165,7 +165,7 @@ class PoliticalNewsScraper:
         return items
 
     def fetch_for_greeting(self) -> list[dict[str, str]]:
-        """Fetch news for morning/evening greeting. Returns up to 6 items."""
+        """Fetch news for the morning greeting. Returns up to 6 items."""
         return self.fetch_all()[:6]
 
     def fetch_for_tool(self) -> str:

@@ -12,23 +12,23 @@ logger = logging.getLogger(__name__)
 
 
 class BotScheduler:
-    """Background scheduler for reminders + morning/evening greetings."""
+    """Background scheduler for reminders + morning greetings."""
 
     CHECK_INTERVAL = 5  # seconds between checks (supports second-precision reminders)
 
     def __init__(
         self, db: Any, llbot: Any, political_news: Any, news_crawler: Any,
-        hitokoto_service: Any = None,
+        hitokoto_service: Any = None, feature_gate: Any = None,
     ) -> None:
         self.db = db
         self.llbot = llbot
         self.political_news = political_news
         self.news_crawler = news_crawler
         self.hitokoto_service = hitokoto_service
+        self.feature_gate = feature_gate
         self._running = False
         self._thread: threading.Thread | None = None
         self._last_morning: str = ""
-        self._last_evening: str = ""
 
     def _get_active_groups(self) -> list[str]:
         """Get all distinct group IDs from recorded messages."""
@@ -80,6 +80,19 @@ class BotScheduler:
         self, rid: int, uid: str, gid: str | None, uname: str, content: str,
         remind_time: str = "", repeat_daily: int = 0,
     ) -> None:
+        # Respect per-group / per-user feature toggles: skip delivery, then
+        # finalize like a normal fire (one-shot → fired, daily → tomorrow) so
+        # the due row doesn't retry every scheduler tick.
+        if self.feature_gate:
+            if gid and not self.feature_gate.is_enabled("group", str(gid), "reminder"):
+                logger.info("Reminder #%d skipped: reminder disabled in group %s", rid, gid)
+                self._finalize_reminder(rid, remind_time, repeat_daily)
+                return
+            if not gid and not self.feature_gate.is_enabled("user", str(uid), "reminder"):
+                logger.info("Reminder #%d skipped: reminder disabled for user %s", rid, uid)
+                self._finalize_reminder(rid, remind_time, repeat_daily)
+                return
+
         from llbot_client import MessageBuilder
         builder = MessageBuilder()
         if gid:
@@ -89,6 +102,11 @@ class BotScheduler:
             builder.text(f"⏰ 提醒：{content}")
             self.llbot.send_private_msg(uid, builder.build())
 
+        self._finalize_reminder(rid, remind_time, repeat_daily)
+        logger.info("Fired reminder #%d for %s: %s", rid, uname, content[:40])
+
+    def _finalize_reminder(self, rid: int, remind_time: str, repeat_daily: int) -> None:
+        """Mark a reminder as handled: reschedule daily ones to tomorrow, fire one-shots."""
         if repeat_daily:
             # Reschedule to same time tomorrow
             try:
@@ -98,10 +116,7 @@ class BotScheduler:
                     "UPDATE reminders SET remind_time=?, fired=0 WHERE id=?",
                     (next_str, rid),
                 )
-                logger.info(
-                    "Daily reminder #%d rescheduled to %s: %s",
-                    rid, next_str, content[:40],
-                )
+                logger.info("Daily reminder #%d rescheduled to %s", rid, next_str)
             except Exception:
                 logger.exception("Failed to reschedule daily reminder #%d", rid)
                 self.db.execute_action(
@@ -111,9 +126,8 @@ class BotScheduler:
             self.db.execute_action(
                 "UPDATE reminders SET fired=1 WHERE id=?", (rid,),
             )
-            logger.info("Fired reminder #%d for %s: %s", rid, uname, content[:40])
 
-    # ── Morning / Evening ──────────────────────────────
+    # ── Morning greeting ────────────────────────────────
 
     def _check_greetings(self) -> None:
         now = datetime.now()
@@ -124,13 +138,14 @@ class BotScheduler:
             self._last_morning = today
             threading.Thread(target=self._morning_greeting, daemon=True).start()
 
-        # Evening: 22:00-22:05
-        if now.hour == 22 and now.minute < 5 and self._last_evening != today:
-            self._last_evening = today
-            threading.Thread(target=self._evening_greeting, daemon=True).start()
-
     def _morning_greeting(self) -> None:
         groups = self._get_active_groups()
+        # Respect per-group feature toggles: skip groups with morning_news off
+        if self.feature_gate:
+            groups = [
+                g for g in groups
+                if self.feature_gate.is_enabled("group", g, "morning_news")
+            ]
         if not groups:
             return
 
@@ -190,39 +205,6 @@ class BotScheduler:
             builder.text("\n".join(lines))
             self.llbot.send_group_msg(gid, builder.build())
             logger.info("Morning greeting sent to %s", gid)
-
-    def _evening_greeting(self) -> None:
-        groups = self._get_active_groups()
-        if not groups:
-            return
-
-        # Fetch political news brief for evening
-        news_items: list[dict[str, str]] = []
-        try:
-            news_items = self.political_news.translate_news(
-                self.political_news.fetch_for_greeting()
-            )
-        except Exception:
-            logger.exception("Evening political news fetch failed")
-
-        for gid in groups:
-            lines = ["🌙 夜深了～该休息啦！", ""]
-
-            if news_items:
-                lines.append("📰 今日时政回顾：")
-                for i, n in enumerate(news_items[:4], 1):
-                    src = f" [{n['source']}]" if n.get("source") else ""
-                    lines.append(f"  {i}. {n['title']}{src}")
-                lines.append("")
-
-            lines.append("Kiriko提醒大家早点睡觉，不要熬夜打游戏哦 (｡•́︿•̀｡)")
-            lines.append("💤 晚安好梦～明天见！✨")
-
-            from llbot_client import MessageBuilder
-            builder = MessageBuilder()
-            builder.text("\n".join(lines))
-            self.llbot.send_group_msg(gid, builder.build())
-            logger.info("Evening greeting sent to %s", gid)
 
 
 # ── Time parsing for reminders ─────────────────────────

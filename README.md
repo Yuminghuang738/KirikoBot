@@ -38,7 +38,6 @@
 
 ### 🌅 定时任务
 - 早安问候（7:00）— 时政新闻 + 游戏资讯 + 每日一言
-- 晚安问候（22:00）— 时政回顾 + 休息提醒
 - 精确到秒的提醒触发器
 
 ### 🖥 Web 管理面板
@@ -114,7 +113,7 @@ KirikoBot/
 ├── msg_package.py         # 消息封装
 ├── config.py              # 环境变量配置
 ├── database_manager.py    # SQLite 数据库管理
-├── scheduler.py           # 定时任务（早安/晚安/提醒）
+├── scheduler.py           # 定时任务（早安/提醒）
 ├── version_manager.py     # 版本号 + 变更日志 + 群聊推送
 ├── music_service.py       # 网易云音乐搜索
 ├── weather_service.py     # 天气查询服务

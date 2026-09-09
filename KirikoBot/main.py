@@ -27,6 +27,10 @@ from balance_service import BalanceService
 from ai_tools_list import AiTools
 from config import Config
 from database_manager import DatabaseManager
+from feature_gate import (
+    FEATURE_DEFS, FeatureGate, VALID_SCOPES,
+    disabled_tool_names, disabled_labels,
+)
 from extra_services import HitokotoService, BilibiliTrending
 from hot_news import HotNewsScraper
 from llbot_client import LLBotClient, MessageBuilder
@@ -69,6 +73,7 @@ BATTLE_TIMEOUT = 60  # seconds before battle auto-ends
 # ── Services ────────────────────────────────────────────
 llbot = LLBotClient(Config.ONEBOT_API or "http://llbot:3000", Config.ONEBOT_TOKEN or "")
 db = DatabaseManager()
+feature_gate = FeatureGate(db)
 pkg = MsgPackage()
 tools_def = AiTools()
 
@@ -100,7 +105,7 @@ music_service = MusicService()
 music_tool = MusicTool(music_service, pkg)
 hot_news_scraper = HotNewsScraper()
 
-scheduler = BotScheduler(db, llbot, political_news_scraper, news_crawler, hitokoto_service)
+scheduler = BotScheduler(db, llbot, political_news_scraper, news_crawler, hitokoto_service, feature_gate)
 scheduler.start()
 sticker_collector = StickerCollector(db=db)
 profile_service = ProfileService()
@@ -248,13 +253,15 @@ TOOL_INTENT_MAP: dict[str, list[str]] = {
 # Tools always available even for plain chat (commonly useful, low cost)
 FALLBACK_TOOLS = ["sticker"]
 
-def _filter_tools(user_msg: str) -> list[dict[str, Any]]:
+def _filter_tools(user_msg: str, banned: set[str] | None = None) -> list[dict[str, Any]]:
     """Pre-filter tools by message content to reduce noise and hallucination risk.
     - Keyword match → matched tools + sticker
     - No match but substantive (>10 chars) → common tools (web_search, music, dice, food, sticker)
     - Trivial/short → sticker only
+    - `banned`: tool names removed by per-group/per-user feature toggles
     Returns filtered tool list."""
     all_tools = tools_def.ai_tools()
+    banned = banned or set()
     msg_lower = user_msg.lower()
 
     matched: set[str] = set()
@@ -264,22 +271,26 @@ def _filter_tools(user_msg: str) -> list[dict[str, Any]]:
 
     if matched:
         matched.update(FALLBACK_TOOLS)
-        return [t for t in all_tools if t["function"]["name"] in matched]
+        return [t for t in all_tools
+                if t["function"]["name"] in matched and t["function"]["name"] not in banned]
 
     # No keyword match — check if message has enough substance to warrant common tools
     if len(user_msg.strip()) > 10:
         matched = {"sticker", "web_search", "music_search", "dice", "food_picker", "hitokoto"}
-        return [t for t in all_tools if t["function"]["name"] in matched]
+        return [t for t in all_tools
+                if t["function"]["name"] in matched and t["function"]["name"] not in banned]
 
     # Very short / trivial — sticker only
-    return [t for t in all_tools if t["function"]["name"] == "sticker"]
+    return [t for t in all_tools
+            if t["function"]["name"] == "sticker" and t["function"]["name"] not in banned]
 
-def _build_system_prompt(robot: RobotServer) -> str:
+def _build_system_prompt(robot: RobotServer, disabled: set[str] | None = None) -> str:
     """Build the system prompt with role, tool rules, profiles, and learning context.
     All behavioral instructions live here — the AI treats system messages with highest priority."""
     from datetime import datetime
     now = datetime.now().strftime("%Y年%m月%d日 %H:%M")
     weekday = ["一", "二", "三", "四", "五", "六", "日"][datetime.now().weekday()]
+    disabled = disabled or set()
 
     is_private = robot.msg_type == "private"
     base_role = (Config.PRIVATE_ROLE if is_private else Config.GROUP_ROLE) or ""
@@ -303,7 +314,7 @@ def _build_system_prompt(robot: RobotServer) -> str:
         parts.append("你是群聊机器人，只在群内回复，不要建议私聊。")
 
     # ── Profile context (system-level, for understanding users) ──
-    if not is_private and robot.group_id:
+    if not is_private and robot.group_id and "profiles" not in disabled:
         try:
             profile_text = profile_service.build_context_prompt(db, robot.group_id, robot.user_id)
             if profile_text:
@@ -312,15 +323,16 @@ def _build_system_prompt(robot: RobotServer) -> str:
             pass
 
     # ── Learning notes (system-level, accumulated behavioral lessons) ──
-    try:
-        learning_text = learning_service.get_context(db, robot.user_id)
-        if learning_text:
-            parts.append(learning_text)
-    except Exception:
-        pass
+    if "learning" not in disabled:
+        try:
+            learning_text = learning_service.get_context(db, robot.user_id)
+            if learning_text:
+                parts.append(learning_text)
+        except Exception:
+            pass
 
     # ── Affection context (relationship with current user) ──
-    if not is_private and robot.group_id:
+    if not is_private and robot.group_id and "affection" not in disabled:
         try:
             affection_text = affection_service.build_context_prompt(
                 db, robot.user_id, robot.group_id, robot.user_name,
@@ -330,15 +342,30 @@ def _build_system_prompt(robot: RobotServer) -> str:
         except Exception:
             pass
 
+    # ── Disabled features notice (per-group / per-user toggles) ──
+    if disabled:
+        labels = disabled_labels(disabled)
+        if labels:
+            scope_desc = "本群" if not is_private else "你的设置下"
+            parts.append(
+                f"【已关闭的功能】{scope_desc}已关闭以下功能：{'、'.join(labels)}。"
+                "当用户索要这些功能时，请礼貌地说明该功能已关闭、暂不可用；"
+                "不要调用相关工具，也不要假装执行。"
+            )
+
     return "\n\n".join(parts)
 
 def _context(robot: RobotServer) -> str:
     """Build the user message — clean, focused, just the current interaction."""
+    msg = robot.msg.strip()
+    if not msg:
+        # Fallback so image-only / empty messages never reach the AI as blank text
+        msg = "[图片消息]" if robot.incoming.has_images else "[空消息]"
     if robot.msg_type == "group":
         return (f"群「{robot.group_name or ''}」中 "
-                f"用户 {robot.user_name} 说：{robot.msg}")
+                f"用户 {robot.user_name} 说：{msg}")
     else:
-        return f"用户 {robot.user_name} 说：{robot.msg}"
+        return f"用户 {robot.user_name} 说：{msg}"
 
 def _log_thinking(user_name: str, reasoning: str) -> None:
     """Log thinking chain to dedicated logger (visible in logs + frontend)."""
@@ -362,7 +389,7 @@ def _process_sticker_analysis(robot: RobotServer, image_url: str) -> None:
         reply_text: str | None = None
 
         # Step 1: Vision API end-to-end (understand image + generate Kiriko reply)
-        if Config.VISION_API_URL:
+        if Config.VISION_ENABLED:
             try:
                 role = (
                     Config.GROUP_ROLE
@@ -409,7 +436,7 @@ def _process_sticker_analysis(robot: RobotServer, image_url: str) -> None:
         robot.reply(reply_text)
 
         # Step 3: Background sticker categorization (best-effort, non-blocking)
-        if Config.VISION_API_URL:
+        if Config.VISION_ENABLED:
             executor.submit(_background_sticker_categorize, image_url)
 
         # Record to chat history
@@ -551,7 +578,7 @@ def _process_battle_round(robot: RobotServer, battle_key: str, battle: dict, ima
         battle["started_at"] = time.time()
 
 
-def _check_and_handle_battle(robot: RobotServer, battle_key: str, has_images: bool, image_url: str, now: float) -> bool:
+def _check_and_handle_battle(robot: RobotServer, battle_key: str, has_images: bool, image_url: str, now: float, disabled: set[str] | None = None) -> bool:
     """Check if this user has an active battle, and handle the incoming message.
 
     Returns True if the battle consumed this message (caller should return from main_logic).
@@ -561,6 +588,15 @@ def _check_and_handle_battle(robot: RobotServer, battle_key: str, has_images: bo
         battle = _battle_state.get(battle_key)
         if not battle or not battle.get("active"):
             return False
+
+        # Feature gate: sticker battle turned off mid-battle → end it now.
+        # (Battle-round images are internal to sticker_battle and intentionally
+        #  unaffected by the sticker / vision toggles.)
+        if disabled and "sticker_battle" in disabled:
+            del _battle_state[battle_key]
+            robot.reply("本群已关闭斗图功能，本次对战到此结束～(◕‿◕✿)")
+            logger.info("Battle ended for %s: sticker_battle disabled", robot.user_name)
+            return True
 
         # Check timeout
         if now - battle.get("started_at", 0) > BATTLE_TIMEOUT:
@@ -606,9 +642,15 @@ def _clean_expired_battles(now: float) -> None:
             del _battle_state[k]
 
 
-def _trigger_profile_update(robot: RobotServer) -> None:
+def _trigger_profile_update(robot: RobotServer, disabled: set[str] | None = None) -> None:
     """Check if user needs profile analysis and submit if so."""
     if robot.msg_type != "group" or not robot.group_id:
+        return
+    # Skip bot accounts
+    if robot.user_id in Config.BOT_QQ_LIST:
+        return
+    # Respect per-group feature toggle
+    if disabled and "profiles" in disabled:
         return
     try:
         if profile_service.should_analyze(db, robot.user_id, robot.group_id):
@@ -620,11 +662,14 @@ def _trigger_profile_update(robot: RobotServer) -> None:
         pass
 
 
-def _evaluate_learning_with_affection(robot: RobotServer) -> None:
+def _evaluate_learning_with_affection(robot: RobotServer, disabled: set[str] | None = None) -> None:
     """Evaluate previous AI response and feed back into affection scoring."""
+    disabled = disabled or set()
+    if "learning" in disabled:
+        return
     try:
         note = learning_service.evaluate_and_learn(db, robot.user_id, robot.msg)
-        if note and robot.group_id:
+        if note and robot.group_id and "affection" not in disabled:
             affection_service.apply_learning_feedback(
                 db, robot.user_id, robot.group_id, robot.user_name, note,
             )
@@ -647,6 +692,11 @@ def main_logic(robot: RobotServer) -> None:
             if msg_content:
                 db.record_group_message(robot.group_id, robot.user_id, robot.user_name, msg_content, robot.user_role or "")
 
+        # ── Feature gate: effective scope + disabled features ──
+        scope_type, scope_id = feature_gate.scope_of(robot)
+        disabled = feature_gate.disabled_keys(scope_type, scope_id)
+        vision_on = Config.VISION_ENABLED and "vision" not in disabled
+
         # ── Sticker understanding flow ────────────────────
         now = time.time()
         pending_key = f"{robot.user_id}:{robot.group_id or 'private'}"
@@ -661,7 +711,7 @@ def main_logic(robot: RobotServer) -> None:
 
         # ── Sticker battle check (highest priority) ──────
         _clean_expired_battles(now)
-        if _check_and_handle_battle(robot, pending_key, has_images, first_image_url, now):
+        if _check_and_handle_battle(robot, pending_key, has_images, first_image_url, now, disabled):
             return
 
         # Check for pending sticker request from this user (2-step flow)
@@ -672,15 +722,15 @@ def main_logic(robot: RobotServer) -> None:
                 del _sticker_pending[pending_key]
 
         if has_pending:
-            if has_images:
+            if has_images and vision_on:
                 logger.info("🎯 Sticker flow: pending request found, analyzing image from %s", robot.user_name)
                 _process_sticker_analysis(robot, first_image_url)
                 return
-            # User sent text instead of image — clear pending, continue normally
+            # No image (or vision off) — clear pending, continue normally
 
         # ── @bot + image → analyze ──────────────────────
         if robot.at_judgement and robot.msg_type == "group":
-            if has_images:
+            if has_images and vision_on:
                 logger.info("🎯 Sticker flow: direct analysis (@bot+image) from %s", robot.user_name)
                 _process_sticker_analysis(robot, first_image_url)
                 return
@@ -688,7 +738,7 @@ def main_logic(robot: RobotServer) -> None:
             # No image — sticker intent keywords OR empty message: set pending
             has_sticker_keywords = any(kw in robot.msg for kw in STICKER_INTENT_KEYWORDS)
             no_text = not robot.msg.strip()
-            if has_sticker_keywords or no_text:
+            if vision_on and (has_sticker_keywords or no_text):
                 with _sticker_pending_lock:
                     _sticker_pending[pending_key] = now
                 logger.info("🎯 Sticker flow: pending set for %s, waiting for image", robot.user_name)
@@ -696,7 +746,7 @@ def main_logic(robot: RobotServer) -> None:
                 return
 
         # ── Private chat with images — always analyze ──
-        if has_images and robot.msg_type == "private":
+        if has_images and robot.msg_type == "private" and vision_on:
             logger.info("🎯 Sticker flow: private chat image from %s", robot.user_name)
             _process_sticker_analysis(robot, first_image_url)
             return
@@ -705,8 +755,12 @@ def main_logic(robot: RobotServer) -> None:
         if not robot.at_judgement and robot.msg_type != "private":
             return
 
+        # Skip bot accounts (self + other bots like QQ 小冰)
+        if robot.user_id in Config.BOT_QQ_LIST:
+            return
+
         # ── Affection: record valid interaction ──────────
-        if robot.msg_type == "group" and robot.group_id:
+        if robot.msg_type == "group" and robot.group_id and "affection" not in disabled:
             try:
                 affection_service.record_interaction(
                     db, robot.user_id, robot.group_id, robot.user_name, robot.msg,
@@ -715,18 +769,18 @@ def main_logic(robot: RobotServer) -> None:
                 pass
 
         # Evaluate previous AI response + feed into affection (async)
-        executor.submit(_evaluate_learning_with_affection, robot)
+        executor.submit(_evaluate_learning_with_affection, robot, disabled)
 
         # Trigger profile analysis for group messages (async, non-blocking)
-        _trigger_profile_update(robot)
+        _trigger_profile_update(robot, disabled)
 
         history = _load_history(robot.user_id, robot.group_id)
         user_text = _context(robot)
-        system_prompt = _build_system_prompt(robot)
+        system_prompt = _build_system_prompt(robot, disabled)
         is_private = robot.msg_type == "private"
 
         # Filter tools based on message content — plain chat gets minimal tools
-        active_tools = _filter_tools(robot.msg)
+        active_tools = _filter_tools(robot.msg, disabled_tool_names(disabled))
 
         if is_private:
             logger.info("Private chat with %s (%d tools)", robot.user_name, len(active_tools))
@@ -756,12 +810,13 @@ def main_logic(robot: RobotServer) -> None:
                     pass
 
                 # Affection bonus for tool engagement
-                try:
-                    affection_service.record_tool_usage(
-                        db, robot.user_id, robot.group_id, robot.user_name,
-                    )
-                except Exception:
-                    pass
+                if "affection" not in disabled:
+                    try:
+                        affection_service.record_tool_usage(
+                            db, robot.user_id, robot.group_id, robot.user_name,
+                        )
+                    except Exception:
+                        pass
 
                 if fn in SELF_CONTAINED_TOOLS:
                     handler(robot, ai)
@@ -783,11 +838,12 @@ def main_logic(robot: RobotServer) -> None:
         _save_turn(robot.user_id, robot.group_id, robot.msg, ai.ai_text)
 
         # Record turn for learning (evaluated on next user message)
-        tool_name = ""
-        if tool_calls:
-            names = [tc.get("function", {}).get("name", "") for tc in (tool_calls if isinstance(tool_calls, list) else [tool_calls])]
-            tool_name = ",".join(names)
-        learning_service.record_turn(robot.user_id, robot.msg, ai.ai_text or "", tool_name)
+        if "learning" not in disabled:
+            tool_name = ""
+            if tool_calls:
+                names = [tc.get("function", {}).get("name", "") for tc in (tool_calls if isinstance(tool_calls, list) else [tool_calls])]
+                tool_name = ",".join(names)
+            learning_service.record_turn(robot.user_id, robot.msg, ai.ai_text or "", tool_name)
 
     except Exception:
         logger.exception("Error for user %s", robot.user_id)
@@ -1322,15 +1378,10 @@ def api_scheduler():
     next_morning = now.replace(hour=7, minute=0, second=0, microsecond=0)
     if now >= next_morning:
         next_morning = next_morning.replace(day=now.day + 1) if now.month == next_morning.month else now
-    next_evening = now.replace(hour=22, minute=0, second=0, microsecond=0)
-    if now >= next_evening:
-        from datetime import timedelta
-        next_evening = next_evening + timedelta(days=1)
     return jsonify({"running": scheduler._running, "check_interval": scheduler.CHECK_INTERVAL,
-                    "last_morning": scheduler._last_morning, "last_evening": scheduler._last_evening,
+                    "last_morning": scheduler._last_morning,
                     "active_groups": scheduler._get_active_groups(),
-                    "next_morning": next_morning.strftime("%Y-%m-%d %H:%M"),
-                    "next_evening": next_evening.strftime("%Y-%m-%d %H:%M")})
+                    "next_morning": next_morning.strftime("%Y-%m-%d %H:%M")})
 
 @app.route("/api/scheduler/morning", methods=["POST"])
 def api_scheduler_morning():
@@ -1339,15 +1390,6 @@ def api_scheduler_morning():
         return jsonify({"ok": True, "msg": "Morning greeting triggered"})
     except Exception:
         logger.exception("Failed to trigger morning greeting")
-        return jsonify({"ok": False, "error": "Failed to trigger"}), 500
-
-@app.route("/api/scheduler/evening", methods=["POST"])
-def api_scheduler_evening():
-    try:
-        executor.submit(scheduler._evening_greeting)
-        return jsonify({"ok": True, "msg": "Evening greeting triggered"})
-    except Exception:
-        logger.exception("Failed to trigger evening greeting")
         return jsonify({"ok": False, "error": "Failed to trigger"}), 500
 
 @app.route("/api/stickers")
@@ -1620,20 +1662,17 @@ def _cleanup_duplicates(dry_run: bool):
     finally:
         _sticker_dedup_state["running"] = False
 
-@app.route("/api/groups")
-def api_groups():
+def _list_groups() -> list[dict]:
+    """All groups that ever spoke, with message stats (shared by /api/groups and settings)."""
     groups = []
-    for gid in _seeded_groups:
-        try:
-            rows = db.fetch_data(
-                "SELECT COUNT(*), MAX(timestamp) FROM group_messages WHERE group_id = ?",
-                (gid,),
-            )
-            msg_count = rows[0][0] if rows else 0
-            last_active = rows[0][1] if rows and rows[0][1] else ""
-        except Exception:
-            msg_count = 0
-            last_active = ""
+    try:
+        rows = db.fetch_data(
+            "SELECT group_id, COUNT(*), MAX(timestamp) FROM group_messages "
+            "WHERE group_id IS NOT NULL GROUP BY group_id"
+        )
+    except Exception:
+        rows = []
+    for gid, msg_count, last_active in rows:
         # Get group name from cache or API
         gname = ""
         try:
@@ -1641,9 +1680,57 @@ def api_groups():
             gname = info.get("group_name", "") if info else ""
         except Exception:
             pass
-        groups.append({"group_id": gid, "group_name": gname or gid, "msg_count": msg_count, "last_active": last_active})
+        groups.append({"group_id": gid, "group_name": gname or gid,
+                       "msg_count": msg_count, "last_active": last_active or ""})
     groups.sort(key=lambda g: g["msg_count"], reverse=True)
+    return groups
+
+@app.route("/api/groups")
+def api_groups():
+    groups = _list_groups()
     return jsonify({"groups": groups, "total": len(groups)})
+
+# ── Feature settings (per-group / per-user toggles) ─────
+
+@app.route("/api/settings/groups")
+def api_settings_groups():
+    groups = []
+    for g in _list_groups():
+        groups.append({**g, "disabled": sorted(feature_gate.disabled_keys("group", g["group_id"]))})
+    return jsonify({"ok": True, "features": FEATURE_DEFS, "groups": groups})
+
+@app.route("/api/settings/<scope_type>/<scope_id>")
+def api_settings_get(scope_type: str, scope_id: str):
+    if scope_type not in VALID_SCOPES:
+        return jsonify({"ok": False, "error": "invalid scope_type"}), 400
+    return jsonify({"ok": True, "settings": feature_gate.effective_map(scope_type, scope_id)})
+
+@app.route("/api/settings/<scope_type>/<scope_id>", methods=["PATCH"])
+def api_settings_patch(scope_type: str, scope_id: str):
+    if scope_type not in VALID_SCOPES:
+        return jsonify({"ok": False, "error": "invalid scope_type"}), 400
+    data = request.json or {}
+    key = str(data.get("key", ""))
+    enabled = bool(data.get("enabled", True))
+    try:
+        settings = feature_gate.set_enabled(scope_type, scope_id, key, enabled)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    except Exception:
+        logger.exception("Failed to update feature settings %s:%s", scope_type, scope_id)
+        return jsonify({"ok": False, "error": "failed to save"}), 500
+    return jsonify({"ok": True, "settings": settings})
+
+@app.route("/api/settings/<scope_type>/<scope_id>", methods=["DELETE"])
+def api_settings_delete(scope_type: str, scope_id: str):
+    if scope_type not in VALID_SCOPES:
+        return jsonify({"ok": False, "error": "invalid scope_type"}), 400
+    try:
+        settings = feature_gate.reset(scope_type, scope_id)
+    except Exception:
+        logger.exception("Failed to reset feature settings %s:%s", scope_type, scope_id)
+        return jsonify({"ok": False, "error": "failed to reset"}), 500
+    return jsonify({"ok": True, "settings": settings})
 
 @app.route("/stickers/<path:filename>")
 def serve_sticker(filename: str):
@@ -1668,7 +1755,9 @@ def receive():
         return jsonify({"status": "ignored", "reason": f"post_type={post_type}"}), 200
 
     if msg_data.get("message_type") == "group":
-        executor.submit(sticker_collector.collect, msg_data)
+        gid = str(msg_data.get("group_id") or "")
+        if gid and feature_gate.is_enabled("group", gid, "sticker_collect"):
+            executor.submit(sticker_collector.collect, msg_data)
     try:
         robot = RobotServer(msg_data, llbot, Config.ROBOT_QQ or "")
     except Exception:

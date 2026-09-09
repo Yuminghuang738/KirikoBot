@@ -11,6 +11,14 @@ load_dotenv()
 class Config:
     ROBOT_QQ: Final[str | None] = os.getenv("ROBOT_QQ")
     ONEBOT_API: Final[str | None] = os.getenv("ONEBOT_API")
+    # QQ accounts to exclude from profiling, affection, and data collection
+    # (the bot itself + other known bots like QQ's built-in 小冰)
+    BOT_QQ_LIST: Final[set[str]] = {
+        qq for qq in [
+            os.getenv("ROBOT_QQ"),
+            os.getenv("EXTRA_BOT_QQ", "2854196306"),  # QQ 小冰
+        ] if qq
+    }
     ONEBOT_TOKEN: Final[str | None] = os.getenv("ONEBOT_TOKEN")
     DEEPSEEK_API: Final[str] = os.getenv("DEEPSEEK_API") or "https://api.deepseek.com/chat/completions"
     DEEPSEEK_TOKEN: Final[str | None] = os.getenv("DEEPSEEK_TOKEN")
@@ -21,13 +29,13 @@ class Config:
     REQUEST_TIMEOUT: Final[int] = 30
     MAX_RETRIES: Final[int] = 3
 
-    # ── Vision API (optional, for image description) ──────
-    # Supports any OpenAI-compatible vision API endpoint.
-    # Examples: SiliconFlow (Qwen-VL), Together AI, local vLLM, etc.
-    # If not configured, image understanding falls back to context-based responses.
-    VISION_API_URL: Final[str | None] = os.getenv("VISION_API_URL")
-    VISION_API_KEY: Final[str | None] = os.getenv("VISION_API_KEY")
-    VISION_MODEL: Final[str] = os.getenv("VISION_MODEL") or "Qwen/Qwen2-VL-7B-Instruct"
+    # ── Vision (optional, for image description) ──────
+    # Uses DeepSeek's official vision model via the same API endpoint and
+    # token as the chat model (DEEPSEEK_API / DEEPSEEK_TOKEN).
+    # Set VISION_ENABLED=0 to disable; image understanding then falls back
+    # to context-based responses.
+    VISION_ENABLED: Final[bool] = os.getenv("VISION_ENABLED", "1") == "1"
+    VISION_MODEL: Final[str] = os.getenv("VISION_MODEL") or "deepseek-v4-flash-vision-exp"
 
     @classmethod
     def validate(cls) -> None:

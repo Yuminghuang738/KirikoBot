@@ -17,7 +17,8 @@ QQRobot/
 ├── ai_tools_list.py      # 工具函数定义（给 AI 的 function calling schema）
 ├── config.py             # 环境变量配置
 ├── database_manager.py   # SQLite 数据库管理
-├── scheduler.py          # 定时任务（早安/晚安/提醒）
+├── feature_gate.py       # 每群/每用户功能开关（FEATURE_DEFS 注册表 + FeatureGate）
+├── scheduler.py          # 定时任务（早安/提醒）
 ├── version_manager.py    # 版本号管理 + 变更日志 + 群聊通知
 ├── music_service.py      # 音乐搜索服务（网易云 API）
 ├── weather_service.py    # 天气服务
@@ -413,24 +414,42 @@ feat: 添加贴纸理解功能和自动分类
 
 ### 10.5 图像识别配置
 
-DeepSeek API 不支持图像输入，需额外配置视觉模型 API（兼容 OpenAI 格式的任意提供商）。
+图像识别使用 DeepSeek 官方视觉模型（`deepseek-v4-flash-vision-exp`），与聊天模型共用同一 API 地址和密钥（`DEEPSEEK_API` / `DEEPSEEK_TOKEN`），无需额外申请。
 
-**推荐方案**：硅基流动 (SiliconFlow) — 免费额度，支持 Qwen-VL 系列
-
-在 `.env` 中添加：
+如需更换模型或关闭图像识别，可在 `.env` 中调整：
 ```ini
-VISION_API_URL="https://api.siliconflow.cn/v1/chat/completions"
-VISION_API_KEY="your_siliconflow_api_key"
-VISION_MODEL="Qwen/Qwen2-VL-7B-Instruct"
+# 关闭图像识别（回退为上下文推断）
+VISION_ENABLED="0"
+# 更换视觉模型（默认 deepseek-v4-flash-vision-exp）
+VISION_MODEL="deepseek-v4-flash-vision-exp"
 ```
 
 **工作流程**：
 ```
-用户发图片 → 视觉API描述图片 → DeepSeek根据描述生成回复
-                                     → DeepSeek根据描述分类贴纸
+用户发图片 → DeepSeek 视觉模型理解图片并直接生成回复（单次调用）
+         → 后台异步调用视觉模型分类贴纸
 ```
 
-**未配置视觉 API 时**：贴纸理解回退为上下文推断（基于用户之前说的话），贴纸分类需手动通过管理面板标记。
+**关闭图像识别时**：贴纸理解回退为上下文推断（基于用户之前说的话），贴纸分类需手动通过管理面板标记。
+
+### 10.6 群功能开关（每群/每用户独立配置）
+
+每个功能一个独立开关，默认全部开启。群聊按**群**配置，私聊按**用户**配置。管理面板 →「⚙️ 群设置」页面操作，修改即时生效（无需重启）。
+
+**存储**：`feature_settings` 表（`scope_type`='group'/'user' + `scope_id` + `settings_json`），json 只存关闭项；缺行/缺 key = 开启；json 为空自动删行。
+
+**门控模块**：`feature_gate.py`
+- `FEATURE_DEFS`：功能注册表（key/label/category/desc），UI 与门控共用，顺序即 UI 顺序
+- `TOOL_FEATURE`：工具名 → 功能 key 映射（工具类功能的门控入口）
+- `FeatureGate`：`scope_of(robot)` / `disabled_keys()` / `is_enabled()` / `set_enabled()` / `reset()`
+
+**新增可开关功能时**需要：
+1. `FEATURE_DEFS` 加一条（含中文 label、分类、描述）
+2. 若走 AI 工具：`TOOL_FEATURE` 加 `工具名: key`（`_filter_tools` 会自动剔除）
+3. 若有硬编码路径（非工具触发）：在对应入口加 `feature_gate.is_enabled(...)` 守卫
+4. 定时推送类（如早间新闻）：在 scheduler 对应方法里按群过滤
+
+**注意**：dashboard 管理端 API 不受群开关影响；版本/变更日志推送是管理员广播，不过滤。
 
 - [ ] 在 GitHub 仓库页面确认提交已到达
 - [ ] 检查 CI/CD（如有）是否通过

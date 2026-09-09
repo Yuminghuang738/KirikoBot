@@ -12,6 +12,7 @@ VALID_TABLES = {
     "reminders", "learning_log", "feature_requests",
     "app_versions", "changelog", "stickers",
     "user_affection", "user_affection_log",
+    "feature_settings",
 }
 
 
@@ -214,6 +215,17 @@ class DatabaseManager:
                         date       TEXT NOT NULL,
                         delta      REAL DEFAULT 0,
                         timestamp  DATETIME DEFAULT (datetime('now', 'localtime'))
+                    )"""
+                )
+                # Per-group / per-user feature toggles. settings_json only stores
+                # DISABLED keys; missing key or missing row = enabled.
+                connect.execute(
+                    """CREATE TABLE IF NOT EXISTS feature_settings(
+                        scope_type    TEXT NOT NULL,
+                        scope_id      TEXT NOT NULL,
+                        settings_json TEXT NOT NULL DEFAULT '{}',
+                        updated_at    DATETIME DEFAULT (datetime('now', 'localtime')),
+                        PRIMARY KEY (scope_type, scope_id)
                     )"""
                 )
                 # Index for fast lookups
@@ -520,24 +532,43 @@ class DatabaseManager:
             (group_id, min_messages),
         )
 
+    def get_latest_user_name(self, user_id: str, group_id: str | None = None) -> str | None:
+        """Return the most recent user_name for a user_id from group_messages."""
+        if group_id:
+            rows = self.fetch_data(
+                "SELECT user_name FROM group_messages WHERE user_id=? AND group_id=? "
+                "ORDER BY id DESC LIMIT 1",
+                (user_id, group_id),
+            )
+        else:
+            rows = self.fetch_data(
+                "SELECT user_name FROM group_messages WHERE user_id=? "
+                "ORDER BY id DESC LIMIT 1",
+                (user_id,),
+            )
+        return rows[0][0] if rows else None
+
     # ── User profiles ──────────────────────────────────
 
     def save_user_profile(
         self, user_id: str, group_id: str, user_name: str,
         profile_json: str, message_count: int,
     ) -> None:
+        # Use the latest user_name from group_messages if available
+        latest = self.get_latest_user_name(user_id, group_id)
+        effective_name = latest or user_name
         self.execute_action(
             "INSERT INTO user_profiles (user_id, group_id, user_name, profile_json, message_count, last_updated) "
             "VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime')) "
             "ON CONFLICT(user_id) DO UPDATE SET "
             "user_name=excluded.user_name, profile_json=excluded.profile_json, "
             "message_count=excluded.message_count, last_updated=datetime('now', 'localtime')",
-            (user_id, group_id, user_name, profile_json, message_count),
+            (user_id, group_id, effective_name, profile_json, message_count),
         )
 
     def get_user_profile(self, user_id: str) -> dict[str, Any] | None:
         rows = self.fetch_data(
-            "SELECT profile_json, user_name, message_count, last_updated FROM user_profiles WHERE user_id = ?",
+            "SELECT profile_json, user_name, message_count, last_updated, group_id FROM user_profiles WHERE user_id = ?",
             (user_id,),
         )
         if not rows:
@@ -547,9 +578,11 @@ class DatabaseManager:
             profile = json.loads(rows[0][0])
         except (json.JSONDecodeError, TypeError):
             profile = {}
+        # Resolve current user name from group_messages (handles nick changes)
+        latest_name = self.get_latest_user_name(user_id, rows[0][4])
         return {
             "profile": profile,
-            "user_name": rows[0][1],
+            "user_name": latest_name or rows[0][1],
             "message_count": rows[0][2],
             "last_updated": rows[0][3],
         }
@@ -683,9 +716,13 @@ class DatabaseManager:
                 p = json.loads(pj)
             except (json.JSONDecodeError, TypeError):
                 p = {}
+            # Resolve current user name from group_messages (handles nick changes)
+            latest_name = self.get_latest_user_name(user_id, group_id)
             profiles.append({
-                "user_id": user_id, "user_name": user_name,
-                "profile": p, "message_count": cnt,
+                "user_id": user_id,
+                "user_name": latest_name or user_name,
+                "profile": p,
+                "message_count": cnt,
             })
         return profiles
 
