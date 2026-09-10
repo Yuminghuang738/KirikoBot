@@ -60,6 +60,7 @@ TOOL_FEATURE: dict[str, str] = {
     "weather": "weather",
     "music_search": "music",
     "sticker": "sticker",
+    "request_sticker": "vision",
     "sticker_battle": "sticker_battle",
     "hitokoto": "hitokoto",
     "food_picker": "food",
@@ -71,7 +72,7 @@ TOOL_FEATURE: dict[str, str] = {
 
 
 def disabled_tool_names(disabled_keys: set[str]) -> set[str]:
-    """Map disabled feature keys → disabled tool names for _filter_tools."""
+    """Map disabled feature keys → disabled tool names for _enabled_tools."""
     return {tool for tool, feat in TOOL_FEATURE.items() if feat in disabled_keys}
 
 

@@ -15,29 +15,6 @@ RELATIONSHIP_LEVELS = [
     (0,  "冷淡", "❄️"),
 ]
 
-# ── Positive keywords (reward +0.3~0.8, long-term and gradual) ───
-POSITIVE_PATTERNS: list[tuple[str, float]] = [
-    ("最喜欢", 0.8), ("爱了", 0.8), ("好喜欢你", 0.8), ("真棒", 0.7),
-    ("厉害", 0.6), ("好强", 0.6), ("太强了", 0.6),
-    ("谢谢", 0.4), ("感谢", 0.4), ("多谢", 0.4),
-    ("可爱", 0.6), ("好萌", 0.6), ("贴心", 0.6),
-    ("好用", 0.4), ("不错", 0.3),
-    ("好有趣", 0.5), ("好棒", 0.5), ("太好了", 0.5), ("完美", 0.5),
-    ("好评", 0.4), ("真香", 0.5),
-    ("哈哈", 0.2), ("笑死", 0.3),
-    ("方便", 0.2), ("牛", 0.4),
-]
-
-# ── Negative keywords (penalty -0.3~0.8, proportional to hostility) ──
-NEGATIVE_PATTERNS: list[tuple[str, float]] = [
-    ("垃圾", -0.6), ("废物", -0.8), ("没用", -0.6), ("真没用", -0.8),
-    ("滚", -0.8), ("闭嘴", -0.6), ("别说了", -0.4), ("烦死了", -0.6),
-    ("笨", -0.4), ("蠢", -0.5), ("傻逼", -0.8), ("SB", -0.8),
-    ("不好用", -0.5), ("什么鬼", -0.3), ("乱说", -0.5),
-    ("无语", -0.3), ("失望", -0.5), ("差评", -0.5),
-    ("别@我", -0.5), ("别叫我", -0.4),
-]
-
 # ── Score bounds ─────────────────────────────────────────
 SCORE_MIN = 0.0
 SCORE_MAX = 100.0
@@ -63,27 +40,10 @@ LEARNING_SCORE_MAP: dict[str, float] = {
 class AffectionService:
     """Manages user affection scores based on interaction patterns.
 
-    Scores are deterministic (no API calls). The service tracks per-user
-    interaction frequency, sentiment keywords, and learning feedback to
-    compute a 0-100 affection score, which then influences the AI's tone.
+    This service performs no API calls and no keyword matching: base
+    interaction points are deterministic, while sentiment and learning
+    deltas arrive from judge_service (AI-judged) asynchronously.
     """
-
-    # ── Positive / negative keyword scoring ───────────────
-
-    @staticmethod
-    def score_keywords(text: str) -> float:
-        """Scan text for positive/negative patterns, return net delta.
-        Only the single strongest match from each category counts."""
-        text_lower = text.lower()
-        best_pos = 0.0
-        best_neg = 0.0
-        for pattern, value in POSITIVE_PATTERNS:
-            if pattern.lower() in text_lower and value > best_pos:
-                best_pos = value
-        for pattern, value in NEGATIVE_PATTERNS:
-            if pattern.lower() in text_lower and abs(value) > abs(best_neg):
-                best_neg = value
-        return best_pos + best_neg
 
     # ── Relationship level ────────────────────────────────
 
@@ -187,10 +147,9 @@ class AffectionService:
     @staticmethod
     def record_interaction(
         db: Any, user_id: str, group_id: str | None, user_name: str,
-        msg_text: str = "",
     ) -> float | None:
-        """Record a valid interaction and return the new score.
-        Call this after confirming the user's message is @bot or private chat.
+        """Record a valid interaction (base point + first-interaction bonus).
+        Sentiment / learning deltas are applied asynchronously by JudgeService.
         Returns None for private chats (no group_id)."""
         if not group_id:
             return None
@@ -208,8 +167,6 @@ class AffectionService:
         today_count = today_count_rows[0][0] if today_count_rows else 0
 
         delta = 0.0
-        is_pos = False
-        is_neg = False
 
         # Base interaction (capped daily)
         if today_count < MAX_INTERACTION_BONUS_PER_DAY:
@@ -228,21 +185,10 @@ class AffectionService:
             except (ValueError, TypeError):
                 pass
 
-        # 3. Keyword sentiment
-        if msg_text:
-            kw_score = AffectionService.score_keywords(msg_text)
-            if kw_score > 0:
-                delta += kw_score
-                is_pos = True
-            elif kw_score < 0:
-                delta += kw_score
-                is_neg = True
-
         # Apply
         if delta != 0:
             new_score = AffectionService.update_score(
                 db, user_id, group_id, user_name, delta,
-                positive=is_pos, negative=is_neg,
             )
 
             # Log for daily cap tracking
@@ -280,26 +226,9 @@ class AffectionService:
     # ── Learning feedback integration ─────────────────────
 
     @staticmethod
-    def apply_learning_feedback(
-        db: Any, user_id: str, group_id: str | None, user_name: str,
-        note: str,
-    ) -> None:
-        """Adjust affection based on learning_service evaluation note."""
-        if not group_id:
-            return
-
-        for label, delta in LEARNING_SCORE_MAP.items():
-            if label in note:
-                positive = delta > 0
-                AffectionService.update_score(
-                    db, user_id, group_id, user_name, delta,
-                    positive=positive, negative=not positive,
-                )
-                logger.info(
-                    "Affection learning: %s → %+.1f (%s)",
-                    user_name, delta, label,
-                )
-                return  # first match wins
+    def learning_delta(lesson_type: str | None) -> float:
+        """Score delta for a structured learning verdict type (0.0 if unknown/None)."""
+        return LEARNING_SCORE_MAP.get(lesson_type or "", 0.0)
 
     # ── System prompt context ─────────────────────────────
 
