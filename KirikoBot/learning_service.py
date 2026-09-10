@@ -32,12 +32,48 @@ class LearningService:
             "tool": tool_name,
         }
 
+    def take_pending(self, user_id: str) -> dict[str, str] | None:
+        """Pop and return the cached previous turn (None if nothing cached)."""
+        return self._pending.pop(user_id, None)
+
+    def peek_pending(self, user_id: str) -> dict[str, str] | None:
+        """Return the cached previous turn WITHOUT consuming it."""
+        return self._pending.get(user_id)
+
+    def clear_pending(self, user_id: str) -> None:
+        self._pending.pop(user_id, None)
+
+    def save_note(self, db: Any, user_id: str, note: str,
+                  prev: dict[str, str] | None = None) -> bool:
+        """Persist one learning note. Shared by the legacy evaluator and the AI judge.
+        Returns True when the row was written (incl. legacy-schema fallback)."""
+        prev = prev or {}
+        try:
+            db.execute_action(
+                "INSERT INTO learning_log (user_id, note, user_msg, ai_text, tool_name) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (user_id, note, (prev.get("user_msg") or "")[:200],
+                 (prev.get("ai_text") or "")[:200], prev.get("tool", "")),
+            )
+            return True
+        except Exception:
+            try:
+                db.execute_action(
+                    "INSERT INTO learning_log (user_id, note) VALUES (?, ?)",
+                    (user_id, note),
+                )
+                return True
+            except Exception:
+                logger.debug("Failed to save learning note")
+                return False
+
     def evaluate_and_learn(
         self, db: Any, user_id: str, follow_up_msg: str,
     ) -> str | None:
-        """Evaluate the previous turn based on the user's follow-up message.
-        Returns a learning note string, or None if no evaluation is needed."""
-        prev = self._pending.pop(user_id, None)
+        """Legacy path: standalone evaluation of the pending turn.
+        Used only when the AI judge is not running (e.g. affection disabled
+        in a group, or private chat)."""
+        prev = self.take_pending(user_id)
         if not prev:
             return None
 
@@ -45,6 +81,12 @@ class LearningService:
         if len(follow_up_msg.strip()) < self.MIN_MSG_LENGTH:
             return None
 
+        return self.evaluate_prev(db, user_id, prev, follow_up_msg)
+
+    def evaluate_prev(
+        self, db: Any, user_id: str, prev: dict[str, str], follow_up_msg: str,
+    ) -> str | None:
+        """One flash call: (previous turn + user feedback) → one-line learning note."""
         # Build richer evaluation prompt with context
         tool_info = prev['tool'] or '无(直接回复)'
         prompt = (
@@ -88,22 +130,8 @@ class LearningService:
         if not note or len(note) < 3:
             return None
 
-        # Save to database with context
-        try:
-            db.execute_action(
-                "INSERT INTO learning_log (user_id, note, user_msg, ai_text, tool_name) VALUES (?, ?, ?, ?, ?)",
-                (user_id, note, prev['user_msg'][:200], prev['ai_text'][:200], prev['tool']),
-            )
-        except Exception:
-            # Fallback for old schema without extra columns
-            try:
-                db.execute_action(
-                    "INSERT INTO learning_log (user_id, note) VALUES (?, ?)",
-                    (user_id, note),
-                )
-            except Exception:
-                logger.debug("Failed to save learning note")
-                return None
+        if not self.save_note(db, user_id, note, prev):
+            return None
 
         logger.info("Learned [%s]: %s", user_id, note)
         return note
