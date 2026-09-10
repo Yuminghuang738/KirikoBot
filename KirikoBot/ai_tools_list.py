@@ -84,6 +84,17 @@ class AiTools:
                 "required": [],
             },
         }
+        function_request_sticker = {
+            "name": "request_sticker",
+            "description": (
+                "当用户想给你看一张图片/表情包、想让你看/评价某张图（例如说“帮我看看这个图”“这张图怎么样”"
+                "“我给你看个好东西”“看下我的表情包”），但当前这条消息并没有附带图片时，调用此函数。"
+                "调用后系统会进入等待图片状态（30秒），你随后要用 Kiriko 的语气请对方把图片发过来。"
+                "注意：这不是发送表情包给用户（那是 sticker 工具）；用户只是闲聊时提到“图片/表情包”这个词、"
+                "或当前消息已经带了图片时，都不要调用。"
+            ),
+            "parameters": empty_params,
+        }
         function_hitokoto = {
             "name": "hitokoto",
             "description": "当用户表示想听一句话、来句名言、励志语录、每日一句、一言时，调用此函数获取随机一言",
@@ -242,6 +253,7 @@ class AiTools:
         tool_web_search = {"type": "function", "function": function_web_search}
         tool_weather = {"type": "function", "function": function_weather}
         tool_sticker = {"type": "function", "function": function_sticker}
+        tool_request_sticker = {"type": "function", "function": function_request_sticker}
         tool_hitokoto = {"type": "function", "function": function_hitokoto}
         tool_food = {"type": "function", "function": function_food}
         tool_dice = {"type": "function", "function": function_dice}
@@ -266,6 +278,7 @@ class AiTools:
             tool_web_search,
             tool_weather,
             tool_sticker,
+            tool_request_sticker,
             tool_hitokoto,
             tool_food,
             tool_dice,

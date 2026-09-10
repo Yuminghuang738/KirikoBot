@@ -33,6 +33,7 @@ from feature_gate import (
 )
 from extra_services import HitokotoService, BilibiliTrending
 from hot_news import HotNewsScraper
+from judge_service import JudgeService
 from llbot_client import LLBotClient, MessageBuilder
 from msg_package import MsgPackage
 from news_crawler import NewsCrawler
@@ -111,6 +112,7 @@ sticker_collector = StickerCollector(db=db)
 profile_service = ProfileService()
 learning_service = LearningService()
 affection_service = AffectionService()
+judge_service = JudgeService(learning_service)
 affection_tool = AffectionTool(pkg, db)
 affection_leaderboard_tool = AffectionLeaderboardTool(pkg, db)
 version_manager = VersionManager(db, llbot)
@@ -129,22 +131,25 @@ _sticker_pending: dict[str, float] = {}  # "user_id:group_id" → timestamp
 _sticker_pending_lock = threading.Lock()
 STICKER_REQUEST_TIMEOUT = 30  # seconds
 
-# Sticker battle keywords (checked before AI processing)
-BATTLE_INTENT_KEYWORDS = [
-    "斗图", "来斗图", "斗图吗",
-]
-
-# Keywords that indicate user wants sticker analysis
-STICKER_INTENT_KEYWORDS = [
-    "表情包", "这张图", "这图", "表情", "贴纸", "sticker",
-    "看看", "看一下", "帮我看看", "图片", "这个图", "看看这个",
-]
+def _request_sticker_call(robot: Any, ai: Any) -> None:
+    """request_sticker tool: arm the 2-step image flow.
+    Only registers pending state — the natural-language invite is written by the
+    AI follow-up turn (this tool is NOT in SELF_CONTAINED_TOOLS)."""
+    pending_key = f"{robot.user_id}:{robot.group_id or 'private'}"
+    with _sticker_pending_lock:
+        _sticker_pending[pending_key] = time.time()
+    ai.tool_result_text = (
+        "已进入等待图片状态（30秒内有效）。请用 Kiriko 的语气友好地请用户把图片/表情包发过来，"
+        "一句话即可（可带颜文字），不要编造图片内容。"
+    )
+    logger.info("🎯 Sticker flow: request_sticker armed for %s", robot.user_name)
 
 # ── Tool routing ────────────────────────────────────────
 ROUTES = {
     "tarot": tarot.tarot_call, "tarot_history": tarot_history.tarot_history_call,
     "gaming_news": gaming_news.gaming_news_call, "web_search": web_search_tool.web_search_call,
     "weather": weather_tool.weather_call, "sticker": sticker_tool.sticker_call,
+    "request_sticker": _request_sticker_call,
     "hitokoto": hitokoto_tool.hitokoto_call, "food_picker": food_picker_tool.food_picker_call,
     "dice": dice_tool.dice_call, "bilibili_trending": bilibili_tool.bilibili_call,
     "at_member": at_member_tool.at_member_call, "set_reminder": reminder_tool.set_reminder_call,
@@ -158,14 +163,6 @@ ROUTES = {
     "sticker_battle": sticker_battle_tool.sticker_battle_call,
     "check_affection": affection_tool.check_affection_call,
     "affection_leaderboard": affection_leaderboard_tool.affection_leaderboard_call,
-}
-
-# ── Multi-turn: tools that should trigger an AI follow-up response ──
-FOLLOW_UP_TOOLS = {
-    "weather", "food_picker", "dice", "set_reminder",
-    "get_current_time", "check_balance", "submit_feature",
-    "list_reminders", "delete_reminder",
-    "check_affection", "affection_leaderboard",
 }
 
 # Self-contained tools format and send their own reply — no AI follow-up needed
@@ -218,71 +215,11 @@ def _seed_group(gid: str) -> None:
 
 # ── Core logic ──────────────────────────────────────────
 
-# Lightweight intent keywords for tool pre-filtering
-TOOL_INTENT_MAP: dict[str, list[str]] = {
-    "塔罗牌": ["tarot"], "占卜": ["tarot"], "抽牌": ["tarot"], "抽一张": ["tarot"],
-    "运势": ["tarot"], "算卦": ["tarot"], "算命": ["tarot"],
-    "塔罗历史": ["tarot_history"], "抽牌记录": ["tarot_history"],
-    "点歌": ["music_search"], "放歌": ["music_search"], "来首歌": ["music_search"],
-    "我想听": ["music_search"], "放一首": ["music_search"], "来首": ["music_search"],
-    "歌曲": ["music_search"], "播放": ["music_search"], "音乐": ["music_search"],
-    "歌": ["music_search"],  # catch-all: "来首XXX的歌"
-    "天气": ["weather"], "气温": ["weather"], "下雨": ["weather"], "温度": ["weather"],
-    "新闻": ["political_news", "gaming_news"], "时政": ["political_news"],
-    "热搜": ["bilibili_trending"], "B站": ["bilibili_trending"], "bilibili": ["bilibili_trending"],
-    "搜索": ["web_search"], "查一下": ["web_search"], "帮我查": ["web_search"],
-    "搜索一下": ["web_search"], "查查": ["web_search"],
-    "表情包": ["sticker"], "贴纸": ["sticker"],
-    "吃什么": ["food_picker"], "推荐吃什么": ["food_picker"], "不知道吃": ["food_picker"],
-    "吃啥": ["food_picker"], "吃点什么": ["food_picker"],
-    "掷骰子": ["dice"], "roll": ["dice"], "骰子": ["dice"], "随机数": ["dice"],
-    "一言": ["hitokoto"], "名言": ["hitokoto"], "语录": ["hitokoto"], "来句": ["hitokoto"],
-    "提醒": ["set_reminder", "list_reminders", "delete_reminder"], "叫我": ["set_reminder"],
-    "余额": ["check_balance"], "额度": ["check_balance"],
-    "建议": ["submit_feature"], "希望能": ["submit_feature"],
-    "能不能加": ["submit_feature"], "加一个": ["submit_feature"],
-    "@": ["at_member"],
-    "游戏新闻": ["gaming_news"], "游戏资讯": ["gaming_news"],
-    "斗图": ["sticker_battle"], "battle": ["sticker_battle"], "PK": ["sticker_battle"],
-    "对决": ["sticker_battle"], "来战": ["sticker_battle"],
-    "好感度": ["check_affection", "affection_leaderboard"],
-    "好感": ["check_affection"], "关系": ["check_affection"],
-    "排行": ["affection_leaderboard"], "排行榜": ["affection_leaderboard"],
-}
-
-# Tools always available even for plain chat (commonly useful, low cost)
-FALLBACK_TOOLS = ["sticker"]
-
-def _filter_tools(user_msg: str, banned: set[str] | None = None) -> list[dict[str, Any]]:
-    """Pre-filter tools by message content to reduce noise and hallucination risk.
-    - Keyword match → matched tools + sticker
-    - No match but substantive (>10 chars) → common tools (web_search, music, dice, food, sticker)
-    - Trivial/short → sticker only
-    - `banned`: tool names removed by per-group/per-user feature toggles
-    Returns filtered tool list."""
-    all_tools = tools_def.ai_tools()
-    banned = banned or set()
-    msg_lower = user_msg.lower()
-
-    matched: set[str] = set()
-    for keyword, tool_names in TOOL_INTENT_MAP.items():
-        if keyword.lower() in msg_lower:
-            matched.update(tool_names)
-
-    if matched:
-        matched.update(FALLBACK_TOOLS)
-        return [t for t in all_tools
-                if t["function"]["name"] in matched and t["function"]["name"] not in banned]
-
-    # No keyword match — check if message has enough substance to warrant common tools
-    if len(user_msg.strip()) > 10:
-        matched = {"sticker", "web_search", "music_search", "dice", "food_picker", "hitokoto"}
-        return [t for t in all_tools
-                if t["function"]["name"] in matched and t["function"]["name"] not in banned]
-
-    # Very short / trivial — sticker only
-    return [t for t in all_tools
-            if t["function"]["name"] == "sticker" and t["function"]["name"] not in banned]
+def _enabled_tools(disabled: set[str] | None = None) -> list[dict[str, Any]]:
+    """Every AI tool minus those whose feature is disabled for this scope.
+    All tool selection now happens in the model via native function calling."""
+    banned = disabled_tool_names(disabled or set())
+    return [t for t in tools_def.ai_tools() if t["function"]["name"] not in banned]
 
 def _build_system_prompt(robot: RobotServer, disabled: set[str] | None = None) -> str:
     """Build the system prompt with role, tool rules, profiles, and learning context.
@@ -306,6 +243,8 @@ def _build_system_prompt(robot: RobotServer, disabled: set[str] | None = None) -
         "只根据当前这条消息决定是否调用工具。不要受历史消息影响。"
         "普通聊天/打招呼/感谢/简单问答 → 直接回复，不调用任何工具。"
         "只有当前消息明确要求某功能时才调用对应工具。"
+        "当用户想给你看图片/表情包但当前消息没有附带图片时（例如“帮我看看这个图”），调用 request_sticker 让用户把图发过来；"
+        "如果当前消息已经带了图片，或用户只是闲聊提到“图片”这个词，不要调用它。"
         "不确定时宁可文字回复也不乱调工具。禁止编造任何功能结果。"
     )
 
@@ -662,19 +601,22 @@ def _trigger_profile_update(robot: RobotServer, disabled: set[str] | None = None
         pass
 
 
-def _evaluate_learning_with_affection(robot: RobotServer, disabled: set[str] | None = None) -> None:
-    """Evaluate previous AI response and feed back into affection scoring."""
-    disabled = disabled or set()
-    if "learning" in disabled:
-        return
+def _run_ai_judge(
+    robot: RobotServer, prev_turn: dict[str, str] | None,
+    learning_on: bool, affection_on: bool,
+) -> None:
+    """Async AI judge: ONE flash call for sentiment + previous-turn learning.
+    Silent on failure (no note, no delta) — must never affect the chat path."""
     try:
-        note = learning_service.evaluate_and_learn(db, robot.user_id, robot.msg)
-        if note and robot.group_id and "affection" not in disabled:
-            affection_service.apply_learning_feedback(
-                db, robot.user_id, robot.group_id, robot.user_name, note,
+        if affection_on:
+            judge_service.judge_turn(
+                db, robot, prev_turn=prev_turn,
+                learning_on=learning_on, affection_on=True,
             )
+        elif learning_on and prev_turn:
+            learning_service.evaluate_prev(db, robot.user_id, prev_turn, robot.msg)
     except Exception:
-        pass
+        logger.exception("AI judge failed for %s", robot.user_id)
 
 
 def main_logic(robot: RobotServer) -> None:
@@ -714,19 +656,20 @@ def main_logic(robot: RobotServer) -> None:
         if _check_and_handle_battle(robot, pending_key, has_images, first_image_url, now, disabled):
             return
 
-        # Check for pending sticker request from this user (2-step flow)
+        # ── Pending sticker request armed by the request_sticker AI tool ──
+        # Consume ONLY when this message actually carries an image, so an
+        # in-between text message does not silently cancel the request.
+        # Stale entries are removed by the lazy cleanup above (30s timeout).
         has_pending = False
         with _sticker_pending_lock:
-            if pending_key in _sticker_pending:
+            if pending_key in _sticker_pending and has_images and vision_on:
                 has_pending = True
                 del _sticker_pending[pending_key]
 
         if has_pending:
-            if has_images and vision_on:
-                logger.info("🎯 Sticker flow: pending request found, analyzing image from %s", robot.user_name)
-                _process_sticker_analysis(robot, first_image_url)
-                return
-            # No image (or vision off) — clear pending, continue normally
+            logger.info("🎯 Sticker flow: pending request consumed, analyzing image from %s", robot.user_name)
+            _process_sticker_analysis(robot, first_image_url)
+            return
 
         # ── @bot + image → analyze ──────────────────────
         if robot.at_judgement and robot.msg_type == "group":
@@ -735,14 +678,11 @@ def main_logic(robot: RobotServer) -> None:
                 _process_sticker_analysis(robot, first_image_url)
                 return
 
-            # No image — sticker intent keywords OR empty message: set pending
-            has_sticker_keywords = any(kw in robot.msg for kw in STICKER_INTENT_KEYWORDS)
-            no_text = not robot.msg.strip()
-            if vision_on and (has_sticker_keywords or no_text):
-                with _sticker_pending_lock:
-                    _sticker_pending[pending_key] = now
-                logger.info("🎯 Sticker flow: pending set for %s, waiting for image", robot.user_name)
-                robot.reply("好的，把表情包发给我看看吧～(っ´▽`)っ")
+            # No image and no text (bare @bot ping / QQ-face-only) → cheap canned
+            # greeting. No pending, no AI call.
+            if not robot.msg.strip() and not has_images:
+                logger.info("🎯 Empty @bot message from %s → canned greeting", robot.user_name)
+                robot.reply("我在哦～有什么可以帮你的吗？(｡･ω･｡)")
                 return
 
         # ── Private chat with images — always analyze ──
@@ -759,17 +699,26 @@ def main_logic(robot: RobotServer) -> None:
         if robot.user_id in Config.BOT_QQ_LIST:
             return
 
-        # ── Affection: record valid interaction ──────────
+        # ── Affection: record valid interaction (base points only, sync) ──
         if robot.msg_type == "group" and robot.group_id and "affection" not in disabled:
             try:
                 affection_service.record_interaction(
-                    db, robot.user_id, robot.group_id, robot.user_name, robot.msg,
+                    db, robot.user_id, robot.group_id, robot.user_name,
                 )
             except Exception:
                 pass
 
-        # Evaluate previous AI response + feed into affection (async)
-        executor.submit(_evaluate_learning_with_affection, robot, disabled)
+        # ── AI judge (async): sentiment of THIS message + lesson for the previous turn.
+        # The pending turn is captured synchronously so the worker always judges the
+        # turn that preceded THIS message (no executor-timing race on _pending).
+        has_text = bool(robot.msg.strip())
+        learning_on = "learning" not in disabled
+        affection_on = bool(robot.group_id) and "affection" not in disabled and has_text
+        if learning_on or affection_on:
+            prev_turn = learning_service.take_pending(robot.user_id) if learning_on else None
+            if prev_turn and len(robot.msg.strip()) < learning_service.MIN_MSG_LENGTH:
+                prev_turn = None   # very short follow-ups are ignored (same rule as before)
+            executor.submit(_run_ai_judge, robot, prev_turn, learning_on, affection_on)
 
         # Trigger profile analysis for group messages (async, non-blocking)
         _trigger_profile_update(robot, disabled)
@@ -779,8 +728,8 @@ def main_logic(robot: RobotServer) -> None:
         system_prompt = _build_system_prompt(robot, disabled)
         is_private = robot.msg_type == "private"
 
-        # Filter tools based on message content — plain chat gets minimal tools
-        active_tools = _filter_tools(robot.msg, disabled_tool_names(disabled))
+        # Every enabled tool is offered — the AI picks via native function calling
+        active_tools = _enabled_tools(disabled)
 
         if is_private:
             logger.info("Private chat with %s (%d tools)", robot.user_name, len(active_tools))
