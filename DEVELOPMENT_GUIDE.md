@@ -67,11 +67,11 @@ LLBot 的 OneBot API 在 Docker 内网监听 `llbot:3000`，**不对外暴露**�
 | 1 | `ai_tools_list.py` | 添加 `function_xxx` 定义 + `tool_xxx` 对象 + 加入 return 列表 |
 | 2 | `ai_tools.py` | 创建 `XxxTool` 类，实现 `xxx_call(robot, ai)` 方法 |
 | 3 | `main.py` | 导入类 → 初始化实例 → 注册到 `ROUTES` |
-| 4 | `main.py` | 决定加入 `SELF_CONTAINED_TOOLS` 还是 `FOLLOW_UP_TOOLS` |
+| 4 | `main.py` | 决定工具是否自己完成回复（自回复工具加入 `SELF_CONTAINED_TOOLS`） |
 
 **工具分类规则**：
-- `SELF_CONTAINED_TOOLS`：工具自己完成回复（发送消息/图片/语音），不需要 AI 二次回复。如：`tarot`, `sticker`, `music_search`, `web_search`
-- `FOLLOW_UP_TOOLS`：工具只返回数据，需要 AI 根据结果生成回复。如：`weather`, `dice`, `set_reminder`
+- 自回复工具：工具自己完成回复（发送消息/图片/语音），不需要 AI 二次回复，加入 `SELF_CONTAINED_TOOLS`。如：`tarot`, `sticker`, `music_search`, `web_search`
+- 其余工具：处理器只需设置 `ai.tool_result_text` 返回数据，AI 会自动根据结果生成二次回复。如：`weather`, `dice`, `set_reminder`
 
 ```python
 # ai_tools.py 中的标准模式
@@ -445,7 +445,7 @@ VISION_MODEL="deepseek-v4-flash-vision-exp"
 
 **新增可开关功能时**需要：
 1. `FEATURE_DEFS` 加一条（含中文 label、分类、描述）
-2. 若走 AI 工具：`TOOL_FEATURE` 加 `工具名: key`（`_filter_tools` 会自动剔除）
+2. 若走 AI 工具：`TOOL_FEATURE` 加 `工具名: key`（`_enabled_tools` 会自动剔除）
 3. 若有硬编码路径（非工具触发）：在对应入口加 `feature_gate.is_enabled(...)` 守卫
 4. 定时推送类（如早间新闻）：在 scheduler 对应方法里按群过滤
 
