@@ -380,6 +380,173 @@ aside .brand:hover{letter-spacing:.4px}
 body,aside,main{transition:background-color .35s ease,color .35s ease}
 .panel,.stat-card,.set-group,.group-card,.profile-card,.toolbar button,.theme-btn{transition-property:background-color,color,border-color,box-shadow,transform;transition-duration:.25s}
 
+/* ══ Modern polish & extra motion ══ */
+html{scroll-behavior:smooth}
+
+/* Dotted texture + aurora hue drift on background blobs */
+body{background:
+  radial-gradient(1200px 300px at 85% -50px, rgba(255,143,163,.10), transparent 60%),
+  radial-gradient(900px 260px at -100px 20%, rgba(255,183,197,.12), transparent 55%),
+  radial-gradient(circle, rgba(255,143,163,.05) 1px, transparent 1.6px),
+  var(--bg);
+  background-size:auto,auto,22px 22px,auto}
+body[data-theme="dark"]{background:
+  radial-gradient(1200px 300px at 85% -50px, rgba(255,143,163,.09), transparent 60%),
+  radial-gradient(900px 260px at -100px 20%, rgba(178,140,245,.10), transparent 55%),
+  radial-gradient(circle, rgba(255,159,179,.045) 1px, transparent 1.6px),
+  var(--bg);
+  background-size:auto,auto,22px 22px,auto}
+body::before,body::after{animation:blobFloat 28s ease-in-out infinite alternate,blobHue 24s ease-in-out infinite alternate}
+@keyframes blobHue{to{filter:blur(90px) hue-rotate(45deg)}}
+
+/* Sidebar entrance stagger + active indicator */
+aside .brand{animation:navIn .35s ease backwards}
+aside .brand span{background:linear-gradient(120deg,var(--accent-deep),#b18af0 60%,var(--accent-deep));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+aside nav a{position:relative;animation:navIn .35s ease backwards}
+aside nav a:nth-child(1){animation-delay:.02s}
+aside nav a:nth-child(2){animation-delay:.045s}
+aside nav a:nth-child(3){animation-delay:.07s}
+aside nav a:nth-child(4){animation-delay:.095s}
+aside nav a:nth-child(5){animation-delay:.12s}
+aside nav a:nth-child(6){animation-delay:.145s}
+aside nav a:nth-child(7){animation-delay:.17s}
+aside nav a:nth-child(8){animation-delay:.195s}
+aside nav a:nth-child(9){animation-delay:.22s}
+aside nav a:nth-child(10){animation-delay:.245s}
+aside nav a:nth-child(11){animation-delay:.27s}
+aside nav a:nth-child(12){animation-delay:.295s}
+aside nav a:nth-child(13){animation-delay:.32s}
+aside nav a:nth-child(14){animation-delay:.345s}
+aside nav a.active::before{content:"";position:absolute;left:-8px;top:50%;transform:translateY(-50%);width:3px;height:16px;border-radius:2px;background:var(--accent)}
+aside .status{animation:navIn .45s ease backwards;animation-delay:.45s}
+@keyframes navIn{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:none}}
+
+/* Page swap transition */
+#mainContent.page-anim{animation:pageIn .3s ease}
+@keyframes pageIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+/* Panel & table polish */
+.panel{position:relative}
+.panel::before{content:"";position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,var(--accent),rgba(255,143,163,0) 70%);border-radius:14px 14px 0 0;opacity:.6;pointer-events:none}
+.panel-header{background:linear-gradient(180deg,rgba(255,143,163,.05),rgba(255,143,163,0))}
+body[data-theme="dark"] .panel-header{background:linear-gradient(180deg,rgba(255,159,179,.05),rgba(255,159,179,0))}
+td{padding:7px 10px}
+th{padding:7px 10px}
+tbody tr:nth-child(even):not(:hover) td{background:rgba(255,143,163,.028)}
+body[data-theme="dark"] tbody tr:nth-child(even):not(:hover) td{background:rgba(255,159,179,.03)}
+tbody tr{animation:rowIn .35s ease backwards}
+tbody tr:nth-child(2){animation-delay:.04s}
+tbody tr:nth-child(3){animation-delay:.08s}
+tbody tr:nth-child(4){animation-delay:.12s}
+tbody tr:nth-child(5){animation-delay:.16s}
+tbody tr:nth-child(6){animation-delay:.2s}
+tbody tr:nth-child(7){animation-delay:.24s}
+tbody tr:nth-child(8){animation-delay:.28s}
+tbody tr:nth-child(9){animation-delay:.32s}
+tbody tr:nth-child(10){animation-delay:.36s}
+@keyframes rowIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:none}}
+
+/* Stat cards: shine sweep + number micro-zoom */
+.stat-card{position:relative;overflow:hidden}
+.stat-card::after{content:"";position:absolute;top:-20%;left:-80%;width:45%;height:140%;background:linear-gradient(105deg,transparent,rgba(255,255,255,.55),transparent);transform:skewX(-18deg);transition:left .55s ease;pointer-events:none}
+.stat-card:hover::after{left:135%}
+.stat-card .num{transition:transform .2s ease}
+.stat-card:hover .num{transform:scale(1.05)}
+body[data-theme="dark"] .stat-card::after{background:linear-gradient(105deg,transparent,rgba(255,255,255,.09),transparent)}
+
+/* Cards & rows micro-interactions */
+.profile-card{transition:transform .2s ease,box-shadow .2s ease}
+.profile-card:hover{transform:translateY(-3px);box-shadow:var(--shadow-lg)}
+.group-card{transition:transform .2s ease,box-shadow .2s ease,border-color .2s}
+.group-card:hover{transform:translateY(-2px);box-shadow:var(--shadow-lg);border-color:rgba(255,143,163,.45)}
+.feature-item{transition:background .15s,transform .2s ease}
+.feature-item:hover{transform:translateX(4px)}
+.sticker-card img{transition:transform .3s ease}
+.sticker-card:hover img{transform:scale(1.07)}
+.version-block{transition:transform .2s ease,box-shadow .2s ease}
+.version-block:hover{transform:translateY(-1px);box-shadow:var(--shadow)}
+.sched-info .si-item{transition:transform .2s ease,box-shadow .2s ease}
+.sched-info .si-item:hover{transform:translateY(-2px);box-shadow:var(--shadow-lg)}
+.reminder-item{transition:background .15s}
+.reminder-item:hover{background:rgba(255,143,163,.04)}
+body[data-theme="dark"] .reminder-item:hover{background:rgba(255,159,179,.04)}
+
+/* Bar fills: grow-in + shine sweep */
+.bar .fill{position:relative;overflow:hidden;animation:growX .7s cubic-bezier(.22,1,.36,1) backwards}
+.bar .fill::after{content:"";position:absolute;top:0;left:-60%;width:40%;height:100%;background:linear-gradient(100deg,transparent,rgba(255,255,255,.5),transparent);animation:barShine 3.2s ease-in-out infinite}
+.bar:nth-child(2) .fill{animation-delay:.07s}
+.bar:nth-child(3) .fill{animation-delay:.14s}
+.bar:nth-child(4) .fill{animation-delay:.21s}
+.bar:nth-child(5) .fill{animation-delay:.28s}
+.bar:nth-child(6) .fill{animation-delay:.35s}
+.bar:nth-child(7) .fill{animation-delay:.42s}
+.bar:nth-child(8) .fill{animation-delay:.49s}
+@keyframes growX{from{width:0}}
+@keyframes barShine{0%{left:-60%}55%,100%{left:115%}}
+
+/* New log lines slide & flash in */
+.log-entry.log-new{animation:logIn .28s ease,logFlash 1.4s ease}
+@keyframes logIn{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:none}}
+@keyframes logFlash{0%{background:rgba(255,143,163,.16)}100%{background:transparent}}
+body[data-theme="dark"] .log-entry.log-new{animation:logIn .28s ease,darkLogFlash 1.4s ease}
+@keyframes darkLogFlash{0%{background:rgba(255,159,179,.14)}100%{background:transparent}}
+
+/* Buttons: gradient fills, chip filters, click ripple */
+.toolbar button{border-radius:999px}
+.btn.primary{color:#fff;border:none;background:linear-gradient(135deg,#8fb2f7,var(--blue));box-shadow:0 3px 10px rgba(91,141,239,.28)}
+.btn.primary:hover{color:#fff;background:linear-gradient(135deg,#9dbcf9,#6b9af2);box-shadow:0 5px 16px rgba(91,141,239,.4)}
+.btn.accent:hover{background:linear-gradient(135deg,#ffb3c1,#ff8fa3);color:#fff;border-color:transparent}
+.add-form button{background:linear-gradient(135deg,#5fc9a3,var(--green));color:#fff;border:none;box-shadow:0 3px 10px rgba(63,174,138,.25)}
+.add-form button:hover{background:linear-gradient(135deg,#72d4af,#46b98f);color:#fff}
+button{position:relative;overflow:hidden}
+.ripple{position:absolute;border-radius:50%;background:rgba(255,143,163,.35);transform:scale(0);animation:rippleAnim .6s ease-out forwards;pointer-events:none}
+body[data-theme="dark"] .ripple{background:rgba(255,159,179,.3)}
+@keyframes rippleAnim{to{transform:scale(1);opacity:0}}
+button:disabled{opacity:.45;cursor:not-allowed;transform:none!important;box-shadow:none!important}
+
+/* Sliding tabs indicator (settings) */
+.tab-ind{position:absolute;top:4px;bottom:4px;border-radius:9px;background:linear-gradient(135deg,var(--accent),#ff7d9c);box-shadow:0 3px 10px rgba(255,143,163,.4);transition:left .28s cubic-bezier(.4,1.4,.6,1),width .28s cubic-bezier(.4,1.4,.6,1);z-index:0;pointer-events:none}
+.tabs button{position:relative;z-index:1}
+.tabs button:hover{color:var(--text);background:rgba(255,143,163,.08)}
+.tabs button.on{background:transparent;color:#fff;box-shadow:none}
+
+/* Springy switches */
+.switch .slider{transition:background .25s ease}
+.switch .slider:before{transition:transform .3s cubic-bezier(.34,1.56,.64,1)}
+.switch input:checked + .slider:before{box-shadow:0 2px 6px rgba(255,143,163,.5)}
+
+/* Toast progress bar & exit */
+.toast{overflow:hidden;display:flex;flex-direction:column;gap:6px}
+.toast-bar{display:block;height:2px;border-radius:2px;background:currentColor;opacity:.55;transform-origin:left;animation:toastBar 2.3s linear forwards}
+.toast.out{animation:toastOut .28s ease forwards}
+@keyframes toastBar{from{transform:scaleX(1)}to{transform:scaleX(0)}}
+@keyframes toastOut{to{opacity:0;transform:translateX(18px)}}
+
+/* Forms & empty states */
+#addVersionForm,#addChangelogForm{animation:formIn .3s ease}
+@keyframes formIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+.empty{animation:emptyBob 3.6s ease-in-out infinite}
+@keyframes emptyBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
+
+/* Theme toggle spin */
+.theme-btn.spin{animation:themeSpin .5s cubic-bezier(.4,1.4,.6,1)}
+@keyframes themeSpin{from{transform:rotate(-180deg) scale(.6)}to{transform:rotate(0) scale(1)}}
+
+/* Affection leaderboard: medal bounce + bar growth */
+.aff-fill{animation:growX .8s cubic-bezier(.22,1,.36,1) backwards}
+#aff-board tbody tr:nth-child(1) .aff-fill{animation-delay:.05s}
+#aff-board tbody tr:nth-child(2) .aff-fill{animation-delay:.12s}
+#aff-board tbody tr:nth-child(3) .aff-fill{animation-delay:.19s}
+#aff-board tbody tr:nth-child(4) .aff-fill{animation-delay:.26s}
+#aff-board tbody tr:nth-child(5) .aff-fill{animation-delay:.33s}
+#aff-board tbody tr:first-child td:first-child{animation:medalBounce 2.2s ease-in-out infinite}
+@keyframes medalBounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-3px)}}
+
+/* Focus & selection */
+::selection{background:rgba(255,143,163,.3)}
+input:focus,select:focus{border-color:var(--accent)!important;box-shadow:0 0 0 3px rgba(255,143,163,.15)}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
 /* Respect reduced-motion preference */
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{animation:none!important;transition:none!important}
@@ -416,7 +583,29 @@ let allLines=[], msgTotal=0, errTotal=0, thinkTotal=0, activeLevel='all', startT
 let sseRetry=0, sseStarted=false;
 
 // ── Toast ──
-function toast(msg,type='ok'){const t=document.createElement('div');t.className='toast '+type;t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),2500)}
+function toast(msg,type='ok'){
+  const t=document.createElement('div');
+  t.className='toast '+type;
+  t.innerHTML='<span class="toast-msg"></span><span class="toast-bar"></span>';
+  t.querySelector('.toast-msg').textContent=msg;
+  document.body.appendChild(t);
+  setTimeout(()=>{t.classList.add('out');setTimeout(()=>t.remove(),280)},2200);
+}
+
+// ── Button click ripple ──
+document.addEventListener('click',e=>{
+  const b=e.target.closest('button');
+  if(!b)return;
+  const rect=b.getBoundingClientRect();
+  const size=Math.max(rect.width,rect.height)*2.2;
+  const s=document.createElement('span');
+  s.className='ripple';
+  s.style.width=s.style.height=size+'px';
+  s.style.left=(e.clientX-rect.left-size/2)+'px';
+  s.style.top=(e.clientY-rect.top-size/2)+'px';
+  b.appendChild(s);
+  setTimeout(()=>s.remove(),650);
+});
 
 // ── Navigation ──
 $$('#sidenav a').forEach(a=>{a.addEventListener('click',()=>{
@@ -441,6 +630,7 @@ async function loadPage(name){
     case 'affection': mc.innerHTML=await affectionHTML(); bindAffection(); break;
     case 'messages': mc.innerHTML=await messagesHTML(); break;
   }
+  mc.classList.remove('page-anim');void mc.offsetWidth;mc.classList.add('page-anim');
 }
 
 // ── Helper ──
@@ -547,19 +737,24 @@ function logsPageHTML(){
     </div>
     <div class="logs" id="logs-view" style="max-height:calc(100vh - 260px)"></div></div>`;
 }
-function bindLogsIf(id){const lv=$(id);if(!lv)return;lv.innerHTML=allLines.slice(-50).map(l=>'<div class="log-entry '+entryClass(l)+'">'+(l.display||('<span class="ts">'+l.time+'</span>'+l.msg))+'</div>').join('');const tb=lv.parentElement.parentElement;if(tb)$$('button[data-lvl]',tb).forEach(b=>b.addEventListener('click',()=>{$$('button[data-lvl]',tb).forEach(x=>x.classList.remove('on'));b.classList.add('on');activeLevel=b.dataset.lvl;renderLogs(lv)}))}
+function bindLogsIf(id){const lv=$(id);if(!lv)return;lv.innerHTML=allLines.slice(-50).map(l=>'<div class="log-entry '+entryClass(l)+'">'+(l.display||('<span class="ts">'+l.time+'</span>'+l.msg))+'</div>').join('');lv.dataset.count=String(allLines.length);const tb=lv.parentElement.parentElement;if(tb)$$('button[data-lvl]',tb).forEach(b=>b.addEventListener('click',()=>{$$('button[data-lvl]',tb).forEach(x=>x.classList.remove('on'));b.classList.add('on');activeLevel=b.dataset.lvl;renderLogs(lv)}))}
 function entryClass(l){if(l.level==='ERROR')return'E';if(l.level==='WARNING')return'W';if(l.name==='think')return'T';return'I'}
 function renderLogs(lv){
   if(!lv)lv=$('logs-view');if(!lv)return;
   const q=($('logFilter')||{value:''}).value.toLowerCase();
+  const unfiltered=activeLevel==='all'&&!q;
+  const prev=parseInt(lv.dataset.count||'0',10);
   lv.innerHTML='';let n=0;
-  allLines.forEach(l=>{
+  allLines.forEach((l,idx)=>{
     // Filter by level
     if(activeLevel==='THINK'){if(l.name!=='think')return}
     else if(activeLevel!=='all'&&l.level!==activeLevel)return;
     if(q&&!(l.time+' '+l.msg).toLowerCase().includes(q))return;
-    const d=document.createElement('div');d.className='log-entry '+entryClass(l);d.innerHTML=l.display||('<span class="ts">'+l.time+'</span>'+l.msg);lv.appendChild(d);n++
+    const d=document.createElement('div');
+    d.className='log-entry '+entryClass(l)+(unfiltered&&idx>=prev?' log-new':'');
+    d.innerHTML=l.display||('<span class="ts">'+l.time+'</span>'+l.msg);lv.appendChild(d);n++
   });
+  lv.dataset.count=String(allLines.length);
   if(!n)lv.innerHTML='<div class="empty">无匹配日志</div>';
   if($('autoScroll')&&$('autoScroll').checked)lv.scrollTop=lv.scrollHeight;
   const lc=$('logCount');if(lc)lc.textContent=n+' 条'
@@ -1394,7 +1589,7 @@ function renderAffectionBoard(board){
         <div style="display:flex;align-items:center;gap:6px">
           <span style="font-weight:600;min-width:40px">${x.affection_score}分</span>
           <div style="flex:1;height:8px;background:var(--border);border-radius:4px;overflow:hidden">
-            <div style="height:100%;width:${barW}%;background:${barColor};border-radius:4px;transition:width .3s"></div>
+            <div class="aff-fill" style="height:100%;width:${barW}%;background:${barColor};border-radius:4px;transition:width .3s"></div>
           </div>
         </div>
       </td>
@@ -1468,6 +1663,18 @@ function bindSettings(){
   }));
   SettingsRenderScopeBar();
   SettingsRenderRows();
+  $$('.tabs').forEach(initTabIndicator);
+}
+
+function initTabIndicator(tabs){
+  if(!tabs||tabs.querySelector('.tab-ind'))return;
+  tabs.style.position='relative';
+  const ind=document.createElement('span');ind.className='tab-ind';tabs.appendChild(ind);
+  const place=()=>{const on=tabs.querySelector('button.on')||tabs.querySelector('button');if(!on)return;ind.style.left=on.offsetLeft+'px';ind.style.width=on.offsetWidth+'px'};
+  place();requestAnimationFrame(place);
+  if(document.fonts&&document.fonts.ready)document.fonts.ready.then(place);
+  $$('button',tabs).forEach(b=>b.addEventListener('click',()=>requestAnimationFrame(place)));
+  window.addEventListener('resize',place);
 }
 
 function SettingsRenderScopeBar(){
@@ -1596,7 +1803,11 @@ async function SettingsRefreshGroupList(){
 // ── Theme (day/night) ──
 function applyTheme(t){
   document.body.dataset.theme=t;
-  const btn=$('themeToggle');if(btn)btn.textContent=t==='dark'?'☀️':'🌙';
+  const btn=$('themeToggle');
+  if(btn){
+    btn.textContent=t==='dark'?'☀️':'🌙';
+    btn.classList.remove('spin');void btn.offsetWidth;btn.classList.add('spin');
+  }
   try{localStorage.setItem('kiriko-theme',t)}catch(_){}
 }
 function toggleTheme(){
@@ -1618,7 +1829,8 @@ function animateCounters(){
     const n=parseInt(raw,10), dur=500, t0=performance.now();
     const step=t=>{
       const p=Math.min(1,(t-t0)/dur);
-      el.textContent=Math.round(n*(0.2+0.8*p));
+      const e=1-Math.pow(1-p,3); // ease-out cubic
+      el.textContent=Math.round(n*(0.2+0.8*e));
       if(p<1)requestAnimationFrame(step);
     };
     requestAnimationFrame(step);
