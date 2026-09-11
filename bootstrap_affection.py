@@ -179,19 +179,24 @@ def main() -> None:
     db.row_factory = sqlite3.Row
 
     # Get users who have actually interacted with the bot (from history table)
-    # Exclude the bot's own QQ
+    # Exclude bot accounts (ROBOT_QQ + known bots like QQ 小冰)
     from dotenv import load_dotenv
     import os
     load_dotenv("/home/bosak/Documents/ClaudeCode_Projects/KirikoBot/KirikoBot/.env")
     bot_qq = os.getenv("ROBOT_QQ", "")
+    extra_bot_qq = os.getenv("EXTRA_BOT_QQ", "2854196306")  # QQ 小冰
+    bot_qqs = {q for q in [bot_qq, extra_bot_qq] if q}
+    exclude_placeholders = ",".join("?" for _ in bot_qqs)
 
     users = db.execute(
-        "SELECT DISTINCT h.user_id, h.group_id, "
-        "COALESCE(up.user_name, (SELECT user_name FROM group_messages WHERE user_id=h.user_id AND group_id=h.group_id ORDER BY id DESC LIMIT 1), h.user_id) as user_name "
+        f"SELECT DISTINCT h.user_id, h.group_id, "
+        "COALESCE("
+        "(SELECT user_name FROM group_messages WHERE user_id=h.user_id AND group_id=h.group_id ORDER BY id DESC LIMIT 1),"
+        "h.user_id"
+        ") as user_name "
         "FROM history h "
-        "LEFT JOIN user_profiles up ON h.user_id = up.user_id "
-        "WHERE h.role = 'user' AND h.user_id != ? AND h.group_id IS NOT NULL",
-        (bot_qq,),
+        f"WHERE h.role = 'user' AND h.user_id NOT IN ({exclude_placeholders}) AND h.group_id IS NOT NULL",
+        tuple(bot_qqs),
     ).fetchall()
 
     # Deduplicate by (user_id, group_id)

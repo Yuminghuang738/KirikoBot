@@ -108,7 +108,7 @@ class PoliticalNewsScraper:
         return items
 
     def translate_news(self, items: list[dict[str, str]]) -> list[dict[str, str]]:
-        """Translate English news titles to Chinese via DeepSeek v4 flash."""
+        """Translate English news titles to Chinese via DeepSeek V4.1 Flash."""
         if not items:
             return items
 
@@ -128,10 +128,12 @@ class PoliticalNewsScraper:
             "messages": [
                 {"role": "user", "content": prompt},
             ],
-            "model": "deepseek-v4-flash",
+            "model": Config.DEEPSEEK_MODEL,
             "max_tokens": 1024,
             "temperature": 0.3,
             "stream": False,
+            # Pure translation — skip the chain-of-thought (API defaults to high).
+            "thinking": {"type": "disabled"},
         }
 
         try:

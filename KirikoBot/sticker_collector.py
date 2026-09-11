@@ -481,11 +481,40 @@ class StickerCollector:
     # ── Auto-categorization ─────────────────────────────
 
     def _auto_categorize(self, fname: str, image_url_or_path: str) -> None:
-        """Mark new sticker as uncategorized in DB. Vision analysis is deferred to
-        on-demand @bot interaction (see _process_sticker_analysis in main.py)."""
+        """Classify a freshly collected sticker with one vision call.
+
+        Called on the background executor from collect(), so the webhook reply
+        is never blocked. Prefers the already-downloaded local file (the source
+        URL often expires); falls back to 未分类 when vision is unavailable or
+        returns something outside STICKER_CATEGORIES.
+        """
         if not self._db:
             return
+        local_path = os.path.join(STICKER_DIR, fname)
+        target = local_path if os.path.isfile(local_path) else image_url_or_path
+        if not target:
+            return
         try:
-            self._db.update_sticker_category(fname, "未分类", "", "")
+            # Local import: ai_server.vision_analyze_with_category imports
+            # STICKER_CATEGORIES from this module, so a top-level import
+            # would create a cycle.
+            from ai_server import AiServer
+
+            data = AiServer.vision_analyze_with_category(target)
+            if not data:
+                self._db.update_sticker_category(fname, "未分类", "", "")
+                logger.info("Sticker %s left uncategorized (vision unavailable)", fname)
+                return
+
+            category = str(data.get("category") or "").strip()
+            if category not in STICKER_CATEGORIES:
+                category = "其他"
+            self._db.update_sticker_category(
+                fname,
+                category,
+                str(data.get("description") or ""),
+                str(data.get("emotion") or ""),
+            )
+            logger.info("Auto-categorized sticker %s → %s", fname, category)
         except Exception:
-            logger.debug("Auto-categorize DB update failed for %s", fname)
+            logger.debug("Auto-categorize failed for %s", fname, exc_info=True)
