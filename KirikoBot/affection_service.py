@@ -246,24 +246,23 @@ class AffectionService:
         notes = record.get("notes", "")
 
         lines = [
-            "【与当前用户的关系】",
-            f"你与 {user_name} 的好感度为 {score:.0f}/100（{emoji}{label}）。",
-            f"历史互动：{record['interaction_count']}次 "
-            f"| 好评：{record['positive_count']}次 "
-            f"| 差评：{record['negative_count']}次",
+            "【你和这个人的关系】（心里有数就行，别把好感度念出来）",
+            f"{user_name}：好感度 {score:.0f}/100（{emoji}{label}），"
+            f"聊过 {record['interaction_count']} 次，"
+            f"被 TA 夸过 {record['positive_count']} 次、怼过 {record['negative_count']} 次。",
         ]
 
-        # Tone guidance
+        # Tone guidance — phrased as Kiriko's own feeling, not as a rule to obey
         if score >= 80:
-            lines.append("回应建议：这是你最亲密的群友，用非常亲切随意的语气说话，可使用亲昵称呼和丰富颜文字，偶尔可以撒娇或吐槽。")
+            lines.append("你对 TA 很亲近，说话随意点，可以撒娇，也可以吐槽对方。")
         elif score >= 60:
-            lines.append("回应建议：这是和你关系很好的群友，语气可以亲切友好，适当使用颜文字，可以主动关心。")
+            lines.append("你跟 TA 挺熟，语气自然亲切，可以主动关心两句。")
         elif score >= 40:
-            lines.append("回应建议：保持友善的聊天语气，适度使用颜文字即可。")
+            lines.append("普通朋友，正常聊天就行。")
         elif score >= 20:
-            lines.append("回应建议：保持基本礼貌，减少颜文字。")
+            lines.append("还不太熟，话少一点，也不用刻意热络。")
         else:
-            lines.append("回应建议：尽量简洁专业地回复，不必过于热情。")
+            lines.append("你对 TA 印象一般，别硬凑近乎，正常回就行。")
 
         if notes:
             lines.append(f"关系备注：{notes}")
