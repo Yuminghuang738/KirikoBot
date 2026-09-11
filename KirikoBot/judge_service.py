@@ -7,6 +7,7 @@ from typing import Any
 import requests
 
 from affection_service import AffectionService, LEARNING_SCORE_MAP
+from ai_server import quick_chat
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -138,32 +139,14 @@ class JudgeService:
     # ── API ───────────────────────────────────────────────
 
     def _call_api(self, prompt: str) -> str | None:
-        try:
-            r = requests.post(
-                Config.DEEPSEEK_API,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {Config.DEEPSEEK_TOKEN}",
-                },
-                json={
-                    "messages": [
-                        {"role": "system", "content": self.SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "model": self.MODEL,
-                    "thinking": {"type": "disabled"},
-                    "response_format": {"type": "text"},
-                    "max_tokens": self.MAX_TOKENS,
-                    "temperature": 0,
-                    "stream": False,
-                },
-                timeout=self.TIMEOUT,
-            )
-            r.raise_for_status()
-            return r.json()["choices"][0]["message"]["content"]
-        except Exception:
+        text = quick_chat(
+            self.SYSTEM_PROMPT, prompt,
+            max_tokens=self.MAX_TOKENS, temperature=0, timeout=self.TIMEOUT,
+            model=self.MODEL,
+        )
+        if text is None:
             logger.info("AI judge skipped (API unavailable)")
-            return None
+        return text
 
     # ── Parsing / validation (pure, unit-testable) ────────
 

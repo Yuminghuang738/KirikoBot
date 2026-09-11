@@ -8,6 +8,7 @@ from xml.etree import ElementTree as ET
 
 import requests
 
+from ai_server import quick_chat
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -119,34 +120,9 @@ class PoliticalNewsScraper:
             "只返回序号+中文翻译，不要其他内容：\n\n" + titles_text
         )
 
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "Authorization": f"Bearer {Config.DEEPSEEK_TOKEN}",
-        }
-        body = {
-            "messages": [
-                {"role": "user", "content": prompt},
-            ],
-            "model": Config.DEEPSEEK_MODEL,
-            "max_tokens": 1024,
-            "temperature": 0.3,
-            "stream": False,
-            # Pure translation — skip the chain-of-thought (API defaults to high).
-            "thinking": {"type": "disabled"},
-        }
-
-        try:
-            r = requests.post(
-                Config.DEEPSEEK_API,
-                headers=headers,
-                json=body,
-                timeout=30,
-            )
-            r.raise_for_status()
-            result = r.json()["choices"][0]["message"]["content"].strip()
-        except Exception:
-            logger.exception("News translation failed, returning original")
+        result = quick_chat("", prompt, max_tokens=1024, temperature=0.3, timeout=30)
+        if result is None:
+            logger.warning("News translation failed, returning original")
             return items
 
         # Parse translated lines: "1. 中文标题"

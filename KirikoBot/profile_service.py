@@ -6,6 +6,7 @@ from typing import Any
 
 import requests
 
+from ai_server import quick_chat
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ class ProfileService:
             return False
         if self._is_bot(user_id):
             return False
-        existing = db.get_user_profile(user_id)
+        existing = db.get_user_profile(user_id, group_id)
         if not existing:
             return True
         # Re-analyze if enough new messages accumulated
@@ -88,30 +89,13 @@ class ProfileService:
             (user_id, group_id),
         )[0][0]
 
-        try:
-            response = requests.post(
-                Config.DEEPSEEK_API,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {Config.DEEPSEEK_TOKEN}",
-                },
-                json={
-                    "messages": [
-                        {"role": "system", "content": self.SYSTEM_PROMPT},
-                        {"role": "user", "content": f"用户 {user_name} 的聊天记录：\n{sample}"},
-                    ],
-                    "model": Config.DEEPSEEK_MODEL,
-                    "thinking": {"type": "disabled"},
-                    "max_tokens": 500,
-                    "temperature": 0.3,
-                    "response_format": {"type": "text"},
-                },
-                timeout=30,
-            )
-            response.raise_for_status()
-            result = response.json()["choices"][0]["message"]["content"]
-        except Exception:
-            logger.exception("Profile analysis API failed for %s", user_name)
+        result = quick_chat(
+            self.SYSTEM_PROMPT,
+            f"用户 {user_name} 的聊天记录：\n{sample}",
+            max_tokens=500, temperature=0.3, timeout=30,
+        )
+        if result is None:
+            logger.warning("Profile analysis API failed for %s", user_name)
             return None
 
         # Parse JSON from response

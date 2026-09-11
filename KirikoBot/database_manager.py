@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import threading
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -20,16 +21,84 @@ class DatabaseManager:
     def __init__(self, db_file: str = "robot.db") -> None:
         self.db_file = db_file
         self._member_cache: dict[str, list[dict[str, str]]] = {}
+        # One connection per thread. Previously every call opened a new
+        # sqlite3 connection and — because `with conn:` only commits, it does
+        # not close — leaked it until GC. The app runs a 16-thread WSGI pool
+        # plus a 12-thread worker pool, so those added up.
+        self._local = threading.local()
         self._create_table()
 
     def get_connect(self) -> sqlite3.Connection:
-        try:
-            conn = sqlite3.connect(self.db_file)
-            conn.execute("PRAGMA journal_mode=WAL")
-            return conn
-        except sqlite3.Error:
-            logger.exception("Failed to connect to database %s", self.db_file)
-            raise
+        """Thread-local connection. Use as a context manager:
+
+            with db.get_connect() as conn:   # commits / rolls back on exit
+                ...
+        """
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            try:
+                conn = sqlite3.connect(self.db_file, timeout=15)
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+                self._local.conn = conn
+            except sqlite3.Error:
+                logger.exception("Failed to connect to database %s", self.db_file)
+                raise
+        return conn
+
+    def close(self) -> None:
+        """Close this thread's connection (call on shutdown / in tests)."""
+        conn = getattr(self._local, "conn", None)
+        if conn is not None:
+            try:
+                conn.close()
+            finally:
+                self._local.conn = None
+
+    @staticmethod
+    def _migrate_user_profiles(connect: sqlite3.Connection) -> None:
+        """Rebuild user_profiles with a composite (user_id, group_id) key.
+
+        The original schema was `user_id TEXT NOT NULL UNIQUE` plus a single
+        group_id column, so a user active in several groups could only ever
+        keep ONE profile — it was overwritten each time they spoke elsewhere,
+        and get_group_profiles() silently lost them in the other groups.
+
+        SQLite cannot drop a UNIQUE constraint, so the table is rebuilt. The
+        index is dropped explicitly because renaming a table keeps its indexes
+        attached to the renamed table, which would make the later
+        `CREATE INDEX IF NOT EXISTS` a no-op.
+        """
+        row = connect.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='user_profiles'"
+        ).fetchone()
+        table_sql = (row[0] or "") if row else ""
+        if "(user_id, group_id)" in table_sql or "UNIQUE(user_id, group_id)" in table_sql:
+            return
+
+        logger.info("Migrating user_profiles to UNIQUE(user_id, group_id)")
+        connect.execute("ALTER TABLE user_profiles RENAME TO user_profiles_old")
+        connect.execute("DROP INDEX IF EXISTS idx_up_user")
+        connect.execute(
+            """CREATE TABLE user_profiles(
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id      TEXT NOT NULL,
+                group_id     TEXT NOT NULL,
+                user_name    TEXT NOT NULL,
+                profile_json TEXT NOT NULL DEFAULT '{}',
+                message_count INTEGER DEFAULT 0,
+                last_updated DATETIME DEFAULT (datetime('now', 'localtime')),
+                UNIQUE(user_id, group_id)
+            )"""
+        )
+        connect.execute(
+            """INSERT OR IGNORE INTO user_profiles
+                   (user_id, group_id, user_name, profile_json, message_count, last_updated)
+               SELECT user_id, group_id, user_name, profile_json, message_count, last_updated
+               FROM user_profiles_old"""
+        )
+        connect.execute("DROP TABLE user_profiles_old")
+        logger.info("user_profiles migration done")
 
     def _create_table(self) -> None:
         try:
@@ -77,14 +146,16 @@ class DatabaseManager:
                 connect.execute(
                     """CREATE TABLE IF NOT EXISTS user_profiles(
                         id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                        user_id      TEXT NOT NULL UNIQUE,
+                        user_id      TEXT NOT NULL,
                         group_id     TEXT NOT NULL,
                         user_name    TEXT NOT NULL,
                         profile_json TEXT NOT NULL DEFAULT '{}',
                         message_count INTEGER DEFAULT 0,
-                        last_updated DATETIME DEFAULT (datetime('now', 'localtime'))
+                        last_updated DATETIME DEFAULT (datetime('now', 'localtime')),
+                        UNIQUE(user_id, group_id)
                     )"""
                 )
+                self._migrate_user_profiles(connect)
                 connect.execute(
                     """CREATE TABLE IF NOT EXISTS reminders(
                         id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -560,17 +631,23 @@ class DatabaseManager:
         self.execute_action(
             "INSERT INTO user_profiles (user_id, group_id, user_name, profile_json, message_count, last_updated) "
             "VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime')) "
-            "ON CONFLICT(user_id) DO UPDATE SET "
+            "ON CONFLICT(user_id, group_id) DO UPDATE SET "
             "user_name=excluded.user_name, profile_json=excluded.profile_json, "
             "message_count=excluded.message_count, last_updated=datetime('now', 'localtime')",
             (user_id, group_id, effective_name, profile_json, message_count),
         )
 
-    def get_user_profile(self, user_id: str) -> dict[str, Any] | None:
-        rows = self.fetch_data(
-            "SELECT profile_json, user_name, message_count, last_updated, group_id FROM user_profiles WHERE user_id = ?",
-            (user_id,),
-        )
+    def get_user_profile(self, user_id: str, group_id: str | None = None) -> dict[str, Any] | None:
+        """Profile for a user — scoped to a group when one is given.
+
+        Profiles are per (user, group); omitting group_id falls back to the
+        most recently updated one for backwards compatibility.
+        """
+        cols = "SELECT profile_json, user_name, message_count, last_updated, group_id FROM user_profiles WHERE user_id = ?"
+        if group_id:
+            rows = self.fetch_data(cols + " AND group_id = ?", (user_id, group_id))
+        else:
+            rows = self.fetch_data(cols + " ORDER BY last_updated DESC LIMIT 1", (user_id,))
         if not rows:
             return None
         import json

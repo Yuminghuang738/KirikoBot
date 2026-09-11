@@ -189,6 +189,42 @@ OneBot `set_group_leave` 让机器人退群（退群后需重新邀请）。
 > 若提示「未找到 LLBot WebUI 密码」，确认 `docker-compose.yml` 中
 > `my-robot` 服务保留了 `./llbot_config:/app/llbot_config:ro` 挂载。
 
+### 🔐 访问口令
+
+面板可以删除数据、向所有群推送消息，还能通过 WebQQ 操作你的 QQ 账号，
+所以默认启用 **HTTP Basic 鉴权**：
+
+- 首次启动自动生成口令，保存在 `KirikoBot/.dashboard_password`（已 gitignore），
+  同时打印在启动日志里：`docker logs kiriko_robot | grep 面板密码`
+- 想自己指定就设 `DASHBOARD_USER` / `DASHBOARD_PASSWORD`
+- 浏览器只需登录一次，之后同源的图片、SSE 日志流都会自动带上凭据
+
+⚠️ Basic 认证在纯 HTTP 下只等于「网络有多私密就有多安全」。**不要把 5000 端口
+直接暴露到公网**；确需外部访问请套一层 HTTPS 反向代理。
+
+### 📡 Webhook 验签
+
+LLBot 上报事件时会带 `x-signature`（对报文体的 HMAC-SHA1 签名）。
+默认拿 `ONEBOT_TOKEN` 当密钥，所以**只需在 LLBot 配置里把 `ob11 → http-post`
+那条连接的 token 填成与 `ONEBOT_TOKEN` 相同的值**再重启 llbot 容器即可。
+两边不一致时事件会被 403 拒绝，日志里会写明原因。
+
+### 💾 数据保留与备份
+
+- 原始消息默认保留 **180 天**（`RETENTION_DAYS`，0 = 永久）；画像 / 好感度 /
+  工具统计等聚合数据不受影响
+- 每天自动备份数据库到 `KirikoBot/backups/`，保留最近 14 份（`BACKUP_KEEP`），
+  使用 SQLite 在线备份 API，WAL 模式下同样安全
+
+### 🧪 测试
+
+```bash
+pip install -r KirikoBot/requirements-dev.txt
+python -m pytest tests/ -q
+```
+
+GitHub Actions 会在 PR 上自动跑测试与语法检查。
+
 ---
 
 ## 🔧 开发指南
