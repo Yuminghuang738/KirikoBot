@@ -107,7 +107,7 @@ class LearningService:
         note = quick_chat(
             "你是一个AI行为评估器，根据用户反馈总结AI表现教训。输出简洁的一句话。",
             prompt,
-            max_tokens=100, temperature=0, timeout=15,
+            max_tokens=100, temperature=0, timeout=15, source="learning",
         )
         if note is None:
             logger.info("Learning evaluation skipped (API unavailable)")

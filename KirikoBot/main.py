@@ -29,6 +29,7 @@ from affection_service import AffectionService
 from balance_service import BalanceService
 from ai_tools_list import AiTools
 from config import Config
+import ai_metrics
 import dashboard_auth
 import webhook_auth
 from prompt_builder import (
@@ -140,6 +141,12 @@ read_context_tool = ReadContextTool(db, pkg)
 # Persist the bot's own outgoing messages so transcripts are complete and
 # "recall the last thing I said" works across restarts.
 llbot.set_recorder(db.record_bot_message)
+
+# Every DeepSeek call (chat / background jobs / vision) is recorded for the
+# dashboard's usage page. Never on the critical path — metrics failures are
+# swallowed inside ai_metrics.
+if Config.AI_METRICS_ENABLED:
+    ai_metrics.set_sink(db.record_ai_call)
 version_manager = VersionManager(db, llbot)
 version_manager.seed_initial_version()
 
@@ -726,6 +733,7 @@ def main_logic(robot: RobotServer) -> None:
 
         ai = AiServer(system_prompt, user_text, history, active_tools,
                       model_type=Config.DEEPSEEK_MODEL, thinking_type="enabled")
+        ai.group_id = robot.group_id or ""   # metrics attribution
         ai.ai_request()
 
         # Log thinking chain
@@ -1729,6 +1737,16 @@ def api_group_messages(group_id: str):
         size=size,
     )
     return jsonify({"ok": True, "group_id": group_id, **result})
+
+
+@app.route("/api/ai/metrics")
+def api_ai_metrics():
+    """AI usage over the last N hours: volume, latency, tokens, cost, errors."""
+    try:
+        hours = int(request.args.get("hours", 24))
+    except ValueError:
+        hours = 24
+    return jsonify({"ok": True, **db.get_ai_metrics(hours)})
 
 
 # ── Feature settings (per-group / per-user toggles) ─────

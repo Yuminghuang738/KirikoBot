@@ -120,7 +120,8 @@ class PoliticalNewsScraper:
             "只返回序号+中文翻译，不要其他内容：\n\n" + titles_text
         )
 
-        result = quick_chat("", prompt, max_tokens=1024, temperature=0.3, timeout=30)
+        result = quick_chat("", prompt, max_tokens=1024, temperature=0.3, timeout=30,
+                   source="news")
         if result is None:
             logger.warning("News translation failed, returning original")
             return items
