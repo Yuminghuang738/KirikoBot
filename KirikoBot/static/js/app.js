@@ -30,6 +30,7 @@ const PAGE_META={
   groups:['群管理','已接入的群'],
   activity:['群活跃','单日发言统计与时段分布'],
   history:['聊天回看','按天回看群聊完整记录'],
+  ai:['AI 用量','调用量、延迟、token 与成本'],
   settings:['群设置','按群 / 用户精细开关功能'],
   llbot:['LLBot 连接','登录状态、运行指标与配置'],
   webqq:['WebQQ','LLBot 完整 WebUI（内嵌）'],
@@ -85,6 +86,7 @@ async function loadPage(name){
     case 'groups': mc.innerHTML=await groupsHTML(); break;
     case 'activity': mc.innerHTML=await activityHTML(); bindActivity(); break;
     case 'history': mc.innerHTML=await historyHTML(); bindHistory(); break;
+    case 'ai': mc.innerHTML=aiUsageHTML(); bindAiUsage(); break;
     case 'settings': mc.innerHTML=await settingsHTML(); bindSettings(); break;
     case 'affection': mc.innerHTML=await affectionHTML(); bindAffection(); break;
     case 'messages': mc.innerHTML=await messagesHTML(); break;
@@ -2016,6 +2018,110 @@ async function loadHistory(page){
       <span class="ph-sub" style="margin-left:auto">每页 100 条</span>
     </div>
   </div>`;
+}
+
+// ══════════════════════════════════════════════════════════
+//  AI usage — where the tokens and the seconds go
+// ══════════════════════════════════════════════════════════
+
+const AI_SOURCE_LABEL={
+  chat:'主对话', followup:'工具追问', judge:'行为判定', learning:'自学习',
+  profile:'用户画像', news:'新闻翻译', vision:'图像理解', tarot:'塔罗',
+  at_member:'@群友', feature_request:'功能建议', sticker_fallback:'表情包回退',
+  quick:'其它后台',
+};
+
+function aiUsageHTML(){
+  return `<div class="page-head">
+    <div><div class="ph-title">AI <span class="em">用量</span></div>
+      <div class="ph-sub">调用量、延迟、token 消耗与成本估算 · 成本按官方峰谷价计算</div></div>
+    <div class="ph-right">
+      <select id="aiHours" onchange="loadAiUsage()">
+        <option value="24" selected>最近 24 小时</option>
+        <option value="6">最近 6 小时</option>
+        <option value="1">最近 1 小时</option>
+        <option value="72">最近 3 天</option>
+        <option value="168">最近 7 天</option>
+      </select>
+      <button class="btn primary" onclick="loadAiUsage()">🔄 刷新</button>
+    </div>
+  </div>
+  <div id="aiBody"><div class="empty">读取中…</div></div>`;
+}
+
+function bindAiUsage(){ loadAiUsage(); }
+
+async function loadAiUsage(){
+  const box=$('aiBody'); if(!box)return;
+  const hours=($('aiHours')||{}).value||'24';
+  box.innerHTML='<div class="empty">读取中…</div>';
+
+  let d=null;
+  try{d=await fetch('/api/ai/metrics?hours='+encodeURIComponent(hours)).then(r=>r.json())}catch(_){}
+  if(!d||!d.ok){box.innerHTML='<div class="empty">读取失败</div>';return}
+
+  const t=d.totals, L=d.latency;
+  if(!t.calls){
+    box.innerHTML='<div class="empty"><span class="em-ico">🤖</span>这段时间还没有 AI 调用记录</div>';
+    return;
+  }
+
+  const maxHour=Math.max(1,...d.hourly.map(h=>h.calls));
+  const hours24=d.hourly.map(h=>`<div class="hc" title="${h.hour}:00 — ${h.calls} 次 / ${h.tokens} token">
+    <i style="height:${Math.round((h.calls/maxHour)*100)}%"></i><span>${h.hour}</span></div>`).join('');
+
+  const rows=d.by_source.map(b=>`<tr>
+    <td>${esc(AI_SOURCE_LABEL[b.source]||b.source)}</td>
+    <td style="font-variant-numeric:tabular-nums">${b.calls}</td>
+    <td style="font-variant-numeric:tabular-nums">${b.tokens.toLocaleString()}</td>
+    <td style="font-variant-numeric:tabular-nums">$${b.cost_usd.toFixed(4)}</td>
+    <td style="font-variant-numeric:tabular-nums">${b.avg_ms} ms</td>
+    <td>${b.failed?`<span class="tag err">${b.failed}</span>`:'<span class="tag ok">0</span>'}</td>
+  </tr>`).join('');
+
+  const cachePct=t.prompt_tokens?Math.round(t.cache_hit_tokens/t.prompt_tokens*100):0;
+  const errBlock=d.recent_errors.length?`
+    <div class="panel reveal" style="--i:5;margin-top:16px">
+      <div class="panel-header"><span class="hicon">⚠️</span>最近失败（最多 10 条）</div>
+      <div class="panel-body tight"><div class="list">
+        ${d.recent_errors.map(e=>`<div class="item">
+          <div class="iava">⚠️</div>
+          <div class="imain"><div class="ititle">${esc(AI_SOURCE_LABEL[e.source]||e.source)}</div>
+            <div class="isub">${esc(e.error)}</div></div>
+          <div class="imeta"><span class="tag">${esc(e.timestamp)}</span></div>
+        </div>`).join('')}
+      </div></div>
+    </div>`:'';
+
+  box.innerHTML=`
+  <div class="bento">
+    <div class="tile c1 b-3 reveal" style="--i:0"><div class="tico">📞</div><div class="tbody"><div class="num">${t.calls}</div><div class="lbl">调用次数</div></div></div>
+    <div class="tile ${t.success_rate>=99?'c2':'c6'} b-3 reveal" style="--i:1"><div class="tico">✅</div><div class="tbody"><div class="num">${t.success_rate}%</div><div class="lbl">成功率${t.failed?`（失败 ${t.failed}）`:''}</div></div></div>
+    <div class="tile c4 b-3 reveal" style="--i:2"><div class="tico">⚡</div><div class="tbody"><div class="num">${L.p95_ms}<span style="font-size:.8rem;font-weight:600"> ms</span></div><div class="lbl">P95 延迟（均值 ${L.avg_ms}）</div></div></div>
+    <div class="tile c5 b-3 reveal" style="--i:3"><div class="tico">💵</div><div class="tbody"><div class="num">$${t.cost_usd.toFixed(4)}</div><div class="lbl">成本估算</div></div></div>
+  </div>
+
+  <div class="bento" style="margin-top:16px">
+    <div class="tile c2 b-3 reveal" style="--i:4"><div class="tico">📥</div><div class="tbody"><div class="num">${t.prompt_tokens.toLocaleString()}</div><div class="lbl">输入 token（缓存命中 ${cachePct}%）</div></div></div>
+    <div class="tile c3 b-3 reveal" style="--i:5"><div class="tico">📤</div><div class="tbody"><div class="num">${t.completion_tokens.toLocaleString()}</div><div class="lbl">输出 token</div></div></div>
+    <div class="tile c5 b-3 reveal" style="--i:6"><div class="tico">🧠</div><div class="tbody"><div class="num">${t.reasoning_tokens.toLocaleString()}</div><div class="lbl">其中思考 token</div></div></div>
+    <div class="tile c4 b-3 reveal" style="--i:7"><div class="tico">🐢</div><div class="tbody"><div class="num">${L.max_ms}<span style="font-size:.8rem;font-weight:600"> ms</span></div><div class="lbl">最慢一次（P50 ${L.p50_ms}）</div></div></div>
+  </div>
+
+  <div class="bento" style="margin-top:16px">
+    <div class="panel b-12 reveal" style="--i:8">
+      <div class="panel-header"><span class="hicon">🕐</span>按小时调用分布</div>
+      <div class="panel-body"><div class="hour-chart">${hours24}</div></div>
+    </div>
+    <div class="panel b-12 reveal" style="--i:9">
+      <div class="panel-header"><span class="hicon">📊</span>按来源拆分</div>
+      <div class="panel-body tight">
+        <table><thead><tr><th>来源</th><th>调用</th><th>Token</th><th>成本</th><th>平均延迟</th><th>失败</th></tr></thead>
+        <tbody>${rows}</tbody></table>
+      </div>
+    </div>
+  </div>
+  ${errBlock}`;
 }
 
 // ── Init ──
