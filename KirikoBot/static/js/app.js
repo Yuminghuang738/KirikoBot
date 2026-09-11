@@ -28,6 +28,8 @@ const PAGE_META={
   features:['功能清单','群友提出的功能请求'],
   versions:['版本日志','版本与变更记录'],
   groups:['群管理','已接入的群'],
+  activity:['群活跃','单日发言统计与时段分布'],
+  history:['聊天回看','按天回看群聊完整记录'],
   settings:['群设置','按群 / 用户精细开关功能'],
   llbot:['LLBot 连接','登录状态、运行指标与配置'],
   webqq:['WebQQ','LLBot 完整 WebUI（内嵌）'],
@@ -81,6 +83,8 @@ async function loadPage(name){
     case 'versions': mc.innerHTML=await versionsHTML(); bindVersions(); break;
     case 'stickers': mc.innerHTML=await stickersHTML(); break;
     case 'groups': mc.innerHTML=await groupsHTML(); break;
+    case 'activity': mc.innerHTML=await activityHTML(); bindActivity(); break;
+    case 'history': mc.innerHTML=await historyHTML(); bindHistory(); break;
     case 'settings': mc.innerHTML=await settingsHTML(); bindSettings(); break;
     case 'affection': mc.innerHTML=await affectionHTML(); bindAffection(); break;
     case 'messages': mc.innerHTML=await messagesHTML(); break;
@@ -1843,6 +1847,174 @@ function webqqHTML(){
       <span class="eb-right"><span class="pill info">首次使用需在此页面登录一次</span></span>
     </div>
     <iframe id="llbotFrame" src="${esc(base)}" title="LLBot WebUI" referrerpolicy="no-referrer"></iframe>
+  </div>`;
+}
+
+// ══════════════════════════════════════════════════════════
+//  Group activity — single-day speech statistics
+// ══════════════════════════════════════════════════════════
+
+function _todayStr(){
+  const d=new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+async function _groupOptions(selected){
+  if(!_groupsCache.length){
+    try{_groupsCache=(await fetch('/api/groups').then(r=>r.json())).groups||[]}catch(_){_groupsCache=[]}
+  }
+  return _groupsCache.map(g=>
+    `<option value="${esc(g.group_id)}"${String(g.group_id)===String(selected)?' selected':''}>${esc(g.group_name||g.group_id)}</option>`
+  ).join('');
+}
+
+async function activityHTML(){
+  const opts=await _groupOptions();
+  return `<div class="page-head">
+    <div><div class="ph-title">群 <span class="em">活跃</span></div>
+      <div class="ph-sub">单日发言统计：谁在说、什么时候最热闹</div></div>
+  </div>
+  <div class="panel reveal" style="--i:0"><div class="panel-body">
+    <div class="toolbar" style="margin:0">
+      <label>群</label><select id="actGroup">${opts}</select>
+      <label>日期</label><input type="date" id="actDate" value="${_todayStr()}">
+      <button class="btn primary" onclick="loadActivity()">查询</button>
+    </div>
+  </div></div>
+  <div id="actBody"><div class="empty"><span class="em-ico">📈</span>选择群和日期后点「查询」</div></div>`;
+}
+
+function bindActivity(){ loadActivity(); }
+
+async function loadActivity(){
+  const box=$('actBody'); if(!box)return;
+  const gid=($('actGroup')||{}).value||'';
+  const date=($('actDate')||{}).value||_todayStr();
+  if(!gid){box.innerHTML='<div class="empty">还没有任何群</div>';return}
+  box.innerHTML='<div class="empty">查询中…</div>';
+
+  let s=null;
+  try{
+    s=(await fetch(`/api/groups/${encodeURIComponent(gid)}/stats?date=${encodeURIComponent(date)}`).then(r=>r.json())).stats;
+  }catch(_){}
+  if(!s){box.innerHTML='<div class="empty">查询失败</div>';return}
+  if(!s.total){
+    box.innerHTML='<div class="empty"><span class="em-ico">🌙</span>'+esc(date)+' 这一天群里没有发言记录</div>';
+    return;
+  }
+
+  const maxTop=Math.max(1,...s.top.map(t=>t.count));
+  const maxHour=Math.max(1,...s.hourly);
+  const bars=s.top.map(t=>`<div class="bar"><span class="name">${esc(t.user_name)}</span>
+    <div class="track"><div class="fill" style="width:${Math.max(4,(t.count/maxTop)*100)}%">${t.count}</div></div></div>`).join('');
+
+  const hours=s.hourly.map((c,h)=>`<div class="hc" title="${h}:00 — ${c} 条">
+    <i style="height:${Math.round((c/maxHour)*100)}%"></i><span>${h}</span></div>`).join('');
+
+  box.innerHTML=`
+  <div class="bento" style="margin-top:16px">
+    <div class="tile c1 b-4 reveal" style="--i:0"><div class="tico">💬</div><div class="tbody"><div class="num">${s.total}</div><div class="lbl">总消息</div></div></div>
+    <div class="tile c2 b-4 reveal" style="--i:1"><div class="tico">👥</div><div class="tbody"><div class="num">${s.active_users}</div><div class="lbl">活跃人数</div></div></div>
+    <div class="tile c3 b-4 reveal" style="--i:2"><div class="tico">🖼️</div><div class="tbody"><div class="num">${s.images}</div><div class="lbl">图片 / 表情</div></div></div>
+  </div>
+  <div class="bento" style="margin-top:16px">
+    <div class="panel b-5 reveal" style="--i:3">
+      <div class="panel-header"><span class="hicon">🏆</span>发言排行</div>
+      <div class="panel-body">${bars||'<div class="empty">暂无数据</div>'}</div>
+    </div>
+    <div class="panel b-7 reveal" style="--i:4">
+      <div class="panel-header"><span class="hicon">🕐</span>时段分布</div>
+      <div class="panel-body"><div class="hour-chart">${hours}</div></div>
+    </div>
+  </div>`;
+}
+
+// ══════════════════════════════════════════════════════════
+//  Chat review — paginated group transcript
+// ══════════════════════════════════════════════════════════
+
+async function historyHTML(){
+  const opts=await _groupOptions();
+  return `<div class="page-head">
+    <div><div class="ph-title">聊天 <span class="em">回看</span></div>
+      <div class="ph-sub">按天回看群聊完整记录（含机器人自己说过的话）</div></div>
+  </div>
+  <div class="panel reveal" style="--i:0"><div class="panel-body">
+    <div class="toolbar" style="margin:0">
+      <label>群</label><select id="histGroup">${opts}</select>
+      <label>日期</label><input type="date" id="histDate" value="${_todayStr()}">
+      <input id="histQ" placeholder="搜索关键词…" style="width:150px">
+      <input id="histUser" placeholder="按昵称筛选" style="width:130px">
+      <button class="btn primary" onclick="loadHistory(1)">查询</button>
+      <button class="btn" onclick="resetHistory()">清空筛选</button>
+    </div>
+  </div></div>
+  <div id="histBody"><div class="empty"><span class="em-ico">🗂️</span>选择群后点「查询」（留空日期 = 不限日期）</div></div>`;
+}
+
+function bindHistory(){ loadHistory(1); }
+
+function resetHistory(){
+  ['histDate','histQ','histUser'].forEach(id=>{const el=$(id);if(el)el.value=''});
+  loadHistory(1);
+}
+
+async function loadHistory(page){
+  const box=$('histBody'); if(!box)return;
+  const gid=($('histGroup')||{}).value||'';
+  const date=($('histDate')||{}).value||'';
+  const q=($('histQ')||{}).value?.trim()||'';
+  const user=($('histUser')||{}).value?.trim()||'';
+  if(!gid){box.innerHTML='<div class="empty">还没有任何群</div>';return}
+  box.innerHTML='<div class="empty">读取中…</div>';
+
+  const params=new URLSearchParams({page:String(page||1),size:'100'});
+  if(date)params.set('date',date);
+  if(q)params.set('q',q);
+  if(user)params.set('user',user);
+
+  let d=null;
+  try{d=await fetch(`/api/groups/${encodeURIComponent(gid)}/messages?${params}`).then(r=>r.json())}catch(_){}
+  if(!d||!d.ok){box.innerHTML='<div class="empty">读取失败</div>';return}
+  if(!d.total){
+    box.innerHTML='<div class="empty"><span class="em-ico">🗂️</span>没有符合条件的聊天记录</div>';
+    return;
+  }
+
+  // Resolve quotes within this page so a reply shows what it answers.
+  const seqMap={};
+  d.items.forEach(m=>{if(m.message_seq!=null)seqMap[String(m.message_seq)]=m});
+
+  const rows=d.items.map(m=>{
+    const stamp=String(m.timestamp||'');
+    // Without a date filter the list spans days, so show the date too.
+    const t=esc(date?stamp.slice(11,16):stamp.slice(5,16));
+    let quote='';
+    if(m.reply_to_seq!=null){
+      const src=seqMap[String(m.reply_to_seq)];
+      const label=src
+        ? `${esc(src.user_name)}：${esc(String(src.content||'').slice(0,40))}`
+        : `#${m.reply_to_seq}`;
+      quote=`<div class="m-quote">↩ ${label}</div>`;
+    }
+    return `<div class="msg-row${m.is_bot?' bot':''}">
+      <div class="m-time">${t}</div>
+      <div class="m-who" title="${esc(m.user_name)}">${esc(m.user_name)}</div>
+      <div class="m-text">${quote}${esc(m.content)}</div>
+    </div>`;
+  }).join('');
+
+  box.innerHTML=`
+  <div class="panel reveal" style="--i:1">
+    <div class="panel-header"><span class="hicon">🗂️</span>聊天记录
+      <span class="ph-right"><span class="tag u">共 ${d.total} 条 · 第 ${d.page}/${d.pages} 页</span></span>
+    </div>
+    <div class="panel-body tight"><div class="msg-list">${rows}</div></div>
+    <div class="panel-body" style="border-top:1px solid var(--border);display:flex;gap:8px;align-items:center">
+      <button class="btn" ${d.page<=1?'disabled':''} onclick="loadHistory(${d.page-1})">← 上一页</button>
+      <button class="btn" ${d.page>=d.pages?'disabled':''} onclick="loadHistory(${d.page+1})">下一页 →</button>
+      <span class="ph-sub" style="margin-left:auto">每页 100 条</span>
+    </div>
   </div>`;
 }
 

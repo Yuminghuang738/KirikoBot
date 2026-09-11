@@ -1259,3 +1259,192 @@ class AffectionLeaderboardTool:
 
         ai.tool_result_text = "\n".join(lines)
         ai.user_text = ai.tool_result_text
+
+
+# ══════════════════════════════════════════════════════════
+#  Recall (撤回机器人自己的消息)
+# ══════════════════════════════════════════════════════════
+
+class RecallMessageTool:
+    """FOLLOW_UP tool: recall the bot's own most recent message in this group.
+
+    QQ only lets a member recall their own message for about two minutes, so
+    the lookup is bounded by that window instead of failing at the API.
+    """
+
+    RECALL_WINDOW = 110  # seconds, comfortably inside QQ's ~2 minute limit
+
+    def __init__(self, database_manager: Any, llbot: Any) -> None:
+        self.db = database_manager
+        self.llbot = llbot
+
+    def recall_message_call(self, robot: Any, ai: Any) -> None:
+        _set_tool_meta(ai, ai.ai_message.get("tool_calls"))
+
+        if robot.msg_type != "group" or not robot.group_id:
+            ai.tool_result_text = "只能在群聊里撤回消息。"
+            ai.user_text = ai.tool_result_text
+            return
+
+        last = self.db.get_last_bot_message(robot.group_id, self.RECALL_WINDOW)
+        if not last:
+            ai.tool_result_text = (
+                "你最近两分钟内没有在这个群发过消息，或者那条已经撤回了，没有可撤回的内容。"
+                "直接告诉对方没有可撤回的消息就行，不要假装撤回了。"
+            )
+            ai.user_text = ai.tool_result_text
+            return
+
+        if self.llbot.recall(last["message_id"]):
+            self.db.mark_bot_message_recalled(last["message_id"])
+            preview = (last["text"] or "").strip()[:20]
+            logger.info("Recalled own message %s in group %s", last["message_id"], robot.group_id)
+            ai.tool_result_text = (
+                f"已成功撤回你刚才发的那条消息（开头是「{preview}」）。"
+                "用很自然的语气应一声就好，比如「好啦撤回啦」。"
+            )
+        else:
+            logger.warning("Recall failed for message %s", last["message_id"])
+            ai.tool_result_text = (
+                "撤回失败了（可能超过了 QQ 的两分钟限制）。"
+                "用轻松的语气说明一下就行，不要反复重试。"
+            )
+        ai.user_text = ai.tool_result_text
+
+
+# ══════════════════════════════════════════════════════════
+#  Group activity stats (单群单日发言统计)
+# ══════════════════════════════════════════════════════════
+
+class GroupStatsTool:
+    """FOLLOW_UP tool: one day of activity for the current group."""
+
+    def __init__(self, database_manager: Any, msg_package: Any) -> None:
+        self.db = database_manager
+        self.msg_package = msg_package
+
+    def group_stats_call(self, robot: Any, ai: Any) -> None:
+        from datetime import datetime, timedelta
+
+        tool_calls = ai.ai_message.get("tool_calls")
+        _set_tool_meta(ai, tool_calls)
+
+        args: dict[str, Any] = {}
+        if tool_calls:
+            try:
+                args = json.loads(tool_calls[0]["function"].get("arguments", "{}"))
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+
+        raw_day = str(args.get("day") or "today").strip().lower()
+        today = datetime.now()
+        if raw_day in ("today", "今天", ""):
+            day = today.strftime("%Y-%m-%d")
+        elif raw_day in ("yesterday", "昨天"):
+            day = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+        else:
+            day = raw_day
+
+        if not robot.group_id:
+            ai.tool_result_text = "这个功能只能在群里用。"
+            ai.user_text = ai.tool_result_text
+            return
+
+        try:
+            stats = self.db.get_daily_group_stats(robot.group_id, day)
+        except Exception:
+            logger.exception("Group stats failed")
+            ai.tool_result_text = "统计查询失败了，稍后再试吧。"
+            ai.user_text = ai.tool_result_text
+            return
+
+        if not stats["total"]:
+            ai.tool_result_text = f"{day} 这个群还没有说话记录。用自然的语气说一下今天很安静即可。"
+            ai.user_text = ai.tool_result_text
+            return
+
+        lines = [
+            f"{day} 的发言统计（数据可直接用于回复）：",
+            f"- 总消息：{stats['total']} 条",
+            f"- 活跃人数：{stats['active_users']} 人",
+            f"- 其中图片/表情：{stats['images']} 条",
+        ]
+        if stats["top"]:
+            lines.append("- 发言最多：")
+            for i, item in enumerate(stats["top"][:5], 1):
+                lines.append(f"    {i}. {item['user_name']} — {item['count']} 条")
+        peak = max(range(24), key=lambda h: stats["hourly"][h])
+        if stats["hourly"][peak]:
+            lines.append(f"- 最热闹的时段：{peak:02d}:00 - {peak + 1:02d}:00（{stats['hourly'][peak]} 条）")
+        lines.append("请用 Kiriko 的语气把这些数据讲出来，不要直接念条目。")
+
+        ai.tool_result_text = "\n".join(lines)
+        ai.user_text = ai.tool_result_text
+
+
+# ══════════════════════════════════════════════════════════
+#  Read group context (AI 自决获取整体语境)
+# ══════════════════════════════════════════════════════════
+
+class ReadContextTool:
+    """FOLLOW_UP tool: pull the recent group transcript when the model asks.
+
+    Deliberately tool-driven rather than always-on: attaching a transcript to
+    every message would multiply token cost, and the model usually knows when
+    it is missing something.
+    """
+
+    def __init__(self, database_manager: Any, msg_package: Any) -> None:
+        self.db = database_manager
+        self.msg_package = msg_package
+
+    def read_context_call(self, robot: Any, ai: Any) -> None:
+        tool_calls = ai.ai_message.get("tool_calls")
+        _set_tool_meta(ai, tool_calls)
+
+        args: dict[str, Any] = {}
+        if tool_calls:
+            try:
+                args = json.loads(tool_calls[0]["function"].get("arguments", "{}"))
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+
+        minutes = args.get("minutes", 30)
+        limit = args.get("limit", 40)
+
+        if not robot.group_id:
+            ai.tool_result_text = "只有在群里才需要读群聊记录。"
+            ai.user_text = ai.tool_result_text
+            return
+
+        try:
+            rows = self.db.get_recent_group_context(
+                robot.group_id, minutes=minutes, limit=limit,
+                exclude_user=robot.user_id,
+            )
+        except Exception:
+            logger.exception("read_context failed")
+            ai.tool_result_text = "读取群聊记录失败了。"
+            ai.user_text = ai.tool_result_text
+            return
+
+        if not rows:
+            ai.tool_result_text = (
+                f"最近 {minutes} 分钟群里没有别的消息（当前这条已经排除）。"
+                "就按你已有的信息正常回应即可。"
+            )
+            ai.user_text = ai.tool_result_text
+            return
+
+        lines = [f"本群最近 {minutes} 分钟的聊天记录（已排除当前这条，按时间正序）："]
+        for r in rows:
+            hhmm = str(r.get("timestamp") or "")[11:16]
+            who = self.db.BOT_DISPLAY_NAME if r.get("is_bot") else r.get("user_name", "?")
+            lines.append(f"[{hhmm}] {who}：{r.get('content', '')}")
+        lines.append(
+            "这些只是背景信息，用来理解对方在说什么；"
+            "回复时不要逐条复述，也不要提「我看了聊天记录」这种话。"
+        )
+
+        ai.tool_result_text = "\n".join(lines)
+        ai.user_text = ai.tool_result_text
