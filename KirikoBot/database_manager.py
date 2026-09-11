@@ -15,7 +15,7 @@ VALID_TABLES = {
     "reminders", "learning_log", "feature_requests",
     "app_versions", "changelog", "stickers",
     "user_affection", "user_affection_log",
-    "feature_settings", "bot_messages",
+    "feature_settings", "bot_messages", "ai_calls",
 }
 
 
@@ -164,6 +164,29 @@ class DatabaseManager:
                         )
                     except sqlite3.OperationalError:
                         pass  # Column already exists
+                connect.execute(
+                    """CREATE TABLE IF NOT EXISTS ai_calls(
+                        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                        timestamp         DATETIME DEFAULT (datetime('now', 'localtime')),
+                        source            TEXT DEFAULT '',
+                        kind              TEXT DEFAULT 'chat',
+                        model             TEXT DEFAULT '',
+                        group_id          TEXT DEFAULT '',
+                        prompt_tokens     INTEGER DEFAULT 0,
+                        completion_tokens INTEGER DEFAULT 0,
+                        reasoning_tokens  INTEGER DEFAULT 0,
+                        cache_hit_tokens  INTEGER DEFAULT 0,
+                        cache_miss_tokens INTEGER DEFAULT 0,
+                        latency_ms        INTEGER DEFAULT 0,
+                        success           INTEGER DEFAULT 1,
+                        error             TEXT DEFAULT '',
+                        utc_hour          INTEGER,
+                        utc_weekday       INTEGER
+                    )"""
+                )
+                connect.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_ai_ts ON ai_calls(timestamp)"
+                )
                 connect.execute(
                     """CREATE TABLE IF NOT EXISTS bot_messages(
                         id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -706,6 +729,155 @@ class DatabaseManager:
         except sqlite3.Error:
             return []
         return [{"date": r[0], "count": r[1]} for r in rows if r[0]]
+
+    # ── AI usage metrics ─────────────────────────────────
+
+    # Peak hours are 01:00-04:00 and 06:00-10:00 UTC, Mon-Fri; off-peak is half.
+    _PEAK_HOURS = (1, 2, 3, 6, 7, 8, 9)
+
+    @classmethod
+    def _is_peak(cls, utc_hour: Any, utc_weekday: Any) -> bool:
+        try:
+            hour, weekday = int(utc_hour), int(utc_weekday)
+        except (TypeError, ValueError):
+            return False
+        return weekday < 5 and hour in cls._PEAK_HOURS
+
+    @classmethod
+    def estimate_cost_usd(cls, *, cache_hit: int, cache_miss: int, output: int,
+                          utc_hour: Any = None, utc_weekday: Any = None) -> float:
+        """Cost estimate in USD from Config's per-1M rates (off-peak halved)."""
+        from config import Config
+
+        factor = 1.0 if cls._is_peak(utc_hour, utc_weekday) else 0.5
+        return (
+            cache_hit / 1_000_000 * Config.AI_PRICE_CACHE_HIT
+            + cache_miss / 1_000_000 * Config.AI_PRICE_CACHE_MISS
+            + output / 1_000_000 * Config.AI_PRICE_OUTPUT
+        ) * factor
+
+    def record_ai_call(self, entry: dict[str, Any]) -> None:
+        """Append one instrumented API call (see ai_metrics.record)."""
+        cols = ("source", "kind", "model", "group_id", "prompt_tokens",
+                "completion_tokens", "reasoning_tokens", "cache_hit_tokens",
+                "cache_miss_tokens", "latency_ms", "success", "error",
+                "utc_hour", "utc_weekday")
+        self.deposit(
+            "ai_calls",
+            "(" + ", ".join(cols) + ")",
+            "(" + ", ".join("?" * len(cols)) + ")",
+            tuple(entry.get(c) for c in cols),
+        )
+
+    def get_ai_metrics(self, hours: int = 24) -> dict[str, Any]:
+        """Aggregated AI usage for the dashboard: volume, latency, cost, errors."""
+        hours = self._clamp_int(hours, 24, 1, 24 * 30)
+        try:
+            rows = self.fetch_data(
+                "SELECT timestamp, source, kind, model, prompt_tokens, "
+                "       completion_tokens, reasoning_tokens, cache_hit_tokens, "
+                "       cache_miss_tokens, latency_ms, success, error, "
+                "       utc_hour, utc_weekday "
+                "FROM ai_calls WHERE timestamp >= datetime('now','localtime',?) "
+                "ORDER BY id DESC LIMIT 20000",
+                (f"-{hours} hours",),
+            )
+        except sqlite3.Error:
+            logger.exception("ai metrics query failed")
+            rows = []
+
+        empty = {
+            "hours": hours,
+            "totals": {"calls": 0, "failed": 0, "success_rate": 100.0,
+                       "prompt_tokens": 0, "completion_tokens": 0,
+                       "reasoning_tokens": 0, "cache_hit_tokens": 0,
+                       "cache_miss_tokens": 0, "tokens": 0, "cost_usd": 0.0},
+            "latency": {"avg_ms": 0, "p50_ms": 0, "p95_ms": 0, "max_ms": 0},
+            "by_source": [],
+            # Always 24 buckets so consumers never special-case the empty shape.
+            "hourly": [{"hour": h, "calls": 0, "tokens": 0} for h in range(24)],
+            "recent_errors": [],
+        }
+        if not rows:
+            return empty
+
+        totals = {"calls": len(rows), "failed": 0, "prompt_tokens": 0,
+                  "completion_tokens": 0, "reasoning_tokens": 0,
+                  "cache_hit_tokens": 0, "cache_miss_tokens": 0, "cost_usd": 0.0}
+        latencies: list[int] = []
+        by_source: dict[str, dict[str, Any]] = {}
+        hourly = {h: {"hour": h, "calls": 0, "tokens": 0} for h in range(24)}
+        errors: list[dict[str, Any]] = []
+
+        for (ts, source, kind, model, pt, ct, rt, hit, miss, latency,
+             success, error, uhour, uwday) in rows:
+            pt, ct, rt = int(pt or 0), int(ct or 0), int(rt or 0)
+            hit, miss = int(hit or 0), int(miss or 0)
+            latency = int(latency or 0)
+            tokens = pt + ct
+            cost = self.estimate_cost_usd(cache_hit=hit, cache_miss=miss,
+                                          output=ct, utc_hour=uhour, utc_weekday=uwday)
+
+            totals["prompt_tokens"] += pt
+            totals["completion_tokens"] += ct
+            totals["reasoning_tokens"] += rt
+            totals["cache_hit_tokens"] += hit
+            totals["cache_miss_tokens"] += miss
+            totals["cost_usd"] += cost
+            if not success:
+                totals["failed"] += 1
+                if len(errors) < 10:
+                    errors.append({"timestamp": ts, "source": source or "?",
+                                   "error": (error or "")[:160]})
+            if success:
+                latencies.append(latency)
+
+            bucket = by_source.setdefault(source or "unknown", {
+                "source": source or "unknown", "calls": 0, "failed": 0,
+                "tokens": 0, "cost_usd": 0.0, "latency_ms": 0,
+            })
+            bucket["calls"] += 1
+            bucket["failed"] += 0 if success else 1
+            bucket["tokens"] += tokens
+            bucket["cost_usd"] += cost
+            bucket["latency_ms"] += latency
+
+            hour = int(str(ts)[11:13]) if ts else 0
+            if 0 <= hour < 24:
+                hourly[hour]["calls"] += 1
+                hourly[hour]["tokens"] += tokens
+
+        latencies.sort()
+        def pct(p: float) -> int:
+            if not latencies:
+                return 0
+            idx = min(len(latencies) - 1, int(round((len(latencies) - 1) * p)))
+            return latencies[idx]
+
+        for bucket in by_source.values():
+            bucket["avg_ms"] = round(bucket["latency_ms"] / bucket["calls"]) if bucket["calls"] else 0
+            bucket["cost_usd"] = round(bucket["cost_usd"], 4)
+            bucket.pop("latency_ms", None)
+
+        totals["tokens"] = totals["prompt_tokens"] + totals["completion_tokens"]
+        totals["cost_usd"] = round(totals["cost_usd"], 4)
+        totals["success_rate"] = round(
+            (totals["calls"] - totals["failed"]) / totals["calls"] * 100, 1
+        ) if totals["calls"] else 100.0
+
+        return {
+            "hours": hours,
+            "totals": totals,
+            "latency": {
+                "avg_ms": round(sum(latencies) / len(latencies)) if latencies else 0,
+                "p50_ms": pct(0.50),
+                "p95_ms": pct(0.95),
+                "max_ms": latencies[-1] if latencies else 0,
+            },
+            "by_source": sorted(by_source.values(), key=lambda b: b["calls"], reverse=True),
+            "hourly": [hourly[h] for h in range(24)],
+            "recent_errors": errors,
+        }
 
     def clean_orphaned_history(self, user_id: str, group_id: str | None) -> int:
         """Remove assistant messages with tool_calls but no follow-up tool response.

@@ -142,7 +142,7 @@ class JudgeService:
         text = quick_chat(
             self.SYSTEM_PROMPT, prompt,
             max_tokens=self.MAX_TOKENS, temperature=0, timeout=self.TIMEOUT,
-            model=self.MODEL,
+            model=self.MODEL, source="judge",
         )
         if text is None:
             logger.info("AI judge skipped (API unavailable)")

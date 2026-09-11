@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import Any
 
 import markdown
 import requests
 from requests.adapters import HTTPAdapter, Retry
 
+import ai_metrics
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -23,6 +25,7 @@ def quick_chat(
     thinking: bool = False,
     timeout: int | None = None,
     model: str | None = None,
+    source: str = "quick",
 ) -> str | None:
     """Single-turn DeepSeek call for background jobs.
 
@@ -50,6 +53,7 @@ def quick_chat(
     if thinking:
         payload["reasoning_effort"] = Config.DEEPSEEK_REASONING_EFFORT
 
+    started = time.perf_counter()
     try:
         resp = requests.post(
             Config.DEEPSEEK_API,
@@ -61,13 +65,24 @@ def quick_chat(
             timeout=timeout or Config.REQUEST_TIMEOUT,
         )
         resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"].get("content") or ""
-        return content.strip()
-    except requests.RequestException:
+        data = resp.json()
+        ai_metrics.record(
+            source=source, kind="quick", model=payload["model"],
+            latency_ms=(time.perf_counter() - started) * 1000,
+            usage=data, success=True,
+        )
+        return (data["choices"][0]["message"].get("content") or "").strip()
+    except requests.RequestException as exc:
         logger.info("quick_chat: API unavailable")
+        ai_metrics.record(source=source, kind="quick", model=payload["model"],
+                          latency_ms=(time.perf_counter() - started) * 1000,
+                          success=False, error=f"{type(exc).__name__}: {exc}")
         return None
-    except (KeyError, IndexError, TypeError, ValueError):
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
         logger.exception("quick_chat: unexpected response shape")
+        ai_metrics.record(source=source, kind="quick", model=payload["model"],
+                          latency_ms=(time.perf_counter() - started) * 1000,
+                          success=False, error=f"{type(exc).__name__}: {exc}")
         return None
 
 
@@ -101,6 +116,21 @@ class AiServer:
         self.airesponse_tool_calls: list[dict[str, Any]] = []
         self.tool_results: list[dict[str, Any]] = []
         self.reasoning_content: str = ""
+
+        # Metrics attribution. `source` distinguishes the chat path from tool
+        # flows that reuse AiServer (tarot, @member, news translation...);
+        # callers may override both.
+        self.source: str = "chat"
+        self.group_id: str = ""
+
+    def _record(self, kind: str, started: float, data: dict[str, Any] | None = None,
+                success: bool = True, error: str = "") -> None:
+        ai_metrics.record(
+            source=self.source, kind=kind, model=self.model_type,
+            group_id=self.group_id,
+            latency_ms=(time.perf_counter() - started) * 1000,
+            usage=data, success=success, error=error,
+        )
 
     @staticmethod
     def _create_session() -> requests.Session:
@@ -156,6 +186,7 @@ class AiServer:
         }
 
         session = self._create_session()
+        started = time.perf_counter()
 
         try:
             logger.debug("DeepSeek request: %s", json.dumps(request_dict, ensure_ascii=False))
@@ -168,10 +199,12 @@ class AiServer:
             response.raise_for_status()
         except requests.exceptions.Timeout:
             logger.error("DeepSeek API request timed out after %ss", Config.REQUEST_TIMEOUT)
+            self._record("chat", started, success=False, error="Timeout")
             self.ai_text = "抱歉，AI思考时间有点长，请稍后再试~"
             return
-        except requests.exceptions.ConnectionError:
+        except requests.exceptions.ConnectionError as e:
             logger.exception("DeepSeek API connection error")
+            self._record("chat", started, success=False, error=f"ConnectionError: {e}")
             self.ai_text = "抱歉，网络连接出现了问题，请稍后再试~"
             return
         except requests.exceptions.HTTPError as e:
@@ -191,9 +224,11 @@ class AiServer:
                 self.ai_text = "抱歉，AI服务暂时不可用，请稍后再试~"
             else:
                 self.ai_text = f"抱歉，AI服务返回了异常状态({status_code})，请稍后再试~"
+            self._record("chat", started, success=False, error=f"HTTP {status_code}")
             return
-        except Exception:
+        except Exception as e:
             logger.exception("Unexpected error during DeepSeek API request")
+            self._record("chat", started, success=False, error=f"{type(e).__name__}: {e}")
             self.ai_text = "抱歉，处理请求时遇到了问题，请稍后再试~"
             return
 
@@ -201,6 +236,7 @@ class AiServer:
             response_data = response.json()
         except (json.JSONDecodeError, ValueError):
             logger.error("DeepSeek API returned non-JSON response: %s", response.text[:500])
+            self._record("chat", started, success=False, error="non-JSON response")
             self.ai_text = "抱歉，AI服务返回了异常数据，请稍后再试~"
             return
 
@@ -210,8 +246,11 @@ class AiServer:
             logger.error("Unexpected DeepSeek response structure: %s", json.dumps(response_data, ensure_ascii=False)[:500])
             if "error" in response_data:
                 logger.error("DeepSeek API error: %s", response_data["error"])
+            self._record("chat", started, success=False, error="unexpected response shape")
             self.ai_text = "抱歉，AI服务返回了意外的数据格式，请稍后再试~"
             return
+
+        self._record("chat", started, data=response_data, success=True)
 
         # Capture thinking chain for logging/frontend display
         self.reasoning_content = self.ai_message.get("reasoning_content", "") or ""
@@ -272,6 +311,7 @@ class AiServer:
         }
 
         session = self._create_session()
+        started = time.perf_counter()
 
         try:
             logger.debug("Follow-up request: %s", json.dumps(request_dict, ensure_ascii=False))
@@ -283,6 +323,7 @@ class AiServer:
             )
             response.raise_for_status()
             response_data = response.json()
+            self._record("followup", started, data=response_data, success=True)
             self.ai_message = response_data["choices"][0]["message"]
             self.reasoning_content = self.ai_message.get("reasoning_content", "") or ""
             raw_content = self.ai_message.get("content", "")
@@ -294,14 +335,17 @@ class AiServer:
                     error_body = e.response.text[:1000]
                 except Exception:
                     logger.debug("ai_server.follow_up_request 忽略了异常", exc_info=True)
-            logger.error("Follow-up HTTP %s: %s", e.response.status_code if e.response is not None else "?", error_body)
+            status = e.response.status_code if e.response is not None else "?"
+            logger.error("Follow-up HTTP %s: %s", status, error_body)
+            self._record("followup", started, success=False, error=f"HTTP {status}")
             self.ai_text = ""
-        except Exception:
+        except Exception as e:
             logger.exception("Follow-up AI request failed")
+            self._record("followup", started, success=False, error=f"{type(e).__name__}: {e}")
             self.ai_text = ""
 
     @staticmethod
-    def vision_analyze(image_url_or_path: str, prompt: str = "", response_format: str = "text", max_tokens: int = 300, temperature: float = 0) -> str | None:
+    def vision_analyze(image_url_or_path: str, prompt: str = "", response_format: str = "text", max_tokens: int = 300, temperature: float = 0, source: str = "vision") -> str | None:
         """Analyze an image via DeepSeek's vision model.
 
         Uses the same endpoint and token as the chat model
@@ -383,6 +427,7 @@ class AiServer:
         }
 
         session = AiServer._create_session()
+        started = time.perf_counter()
         try:
             resp = session.post(
                 Config.DEEPSEEK_API,
@@ -400,9 +445,20 @@ class AiServer:
                     err_body = "(unable to read)"
                 logger.error("Vision API HTTP %s: %s", resp.status_code, err_body)
             resp.raise_for_status()
-            result = resp.json()["choices"][0]["message"]["content"]
-        except Exception:
+            vision_data = resp.json()
+            ai_metrics.record(
+                source=source, kind="vision", model=payload["model"],
+                latency_ms=(time.perf_counter() - started) * 1000,
+                usage=vision_data, success=True,
+            )
+            result = vision_data["choices"][0]["message"]["content"]
+        except Exception as e:
             logger.exception("Vision API call failed")
+            ai_metrics.record(
+                source=source, kind="vision", model=Config.VISION_MODEL,
+                latency_ms=(time.perf_counter() - started) * 1000,
+                success=False, error=f"{type(e).__name__}: {e}",
+            )
             result = None
         finally:
             if local_path:
