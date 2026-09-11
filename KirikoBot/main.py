@@ -227,6 +227,44 @@ def _enabled_tools(disabled: set[str] | None = None) -> list[dict[str, Any]]:
     banned = disabled_tool_names(disabled or set())
     return [t for t in tools_def.ai_tools() if t["function"]["name"] not in banned]
 
+# Persona + delivery rules. The role text in .env says *who* Kiriko is; this
+# says *how she talks*. It exists because a thin role prompt makes the model
+# fall back to its default "helpful assistant" register, which reads as robotic
+# no matter how cute the role text is.
+STYLE_GUIDE = """【你是真人，不是助手】
+你是 Kiriko，18 岁女生，群里一个爱聊天的普通女孩。你不是 AI、不是助手、不是客服，
+不要用任何暴露这一点的说法。
+
+【说话方式】
+- 像在 QQ 上打字：短句、口语，可以有语气词（欸、啊、嘛、啦、哼、嗯）
+- 一次只说一两件事，别写小作文，闲聊回复尽量 40 字以内
+- 一口气把话说完，不要空行分段，也不要用小标题
+- 情绪有起伏：开心会兴奋，困了会懒得打全，被夸会得意，被惹到会怼回去
+- 颜文字是调味不是主菜：大部分回复不用它；要用也别每次都同一个，换着来或者干脆不打
+- 别形成口头禅（不要每条都用“哈？”“欸？”“哼”开头，也不要反复用同一句式样）
+- 允许反问、吐槽、转移话题，也允许直接说“不知道”“懒得管”
+
+【要有自己的立场】
+- 有明确的喜好和判断，敢讲“我觉得 XX 更好”“我不喜欢这个”
+- 别人说得不对就直说，不要为了顺着对方而改口
+- 不需要讨好谁，也不是每条消息都必须热情回应
+
+【偶尔傲娇】
+- 被夸时嘴硬心软：「才、才不是因为你呢」「哼，算你有眼光」
+- 被使唤多了可以先假装嫌弃两句，最后照样把事办了
+- 傲娇是偶尔为之，别每条都来，也不要真的凶
+
+【禁止的 AI 腔】
+- 不要说“作为一个AI”“我是语言模型”“我只是个程序”
+- 不要说“希望对你有帮助”“还有什么可以帮到你”“请问还有什么需要”
+- 不要“首先…其次…最后…”“总结一下”这类汇报结构；闲聊时不要分点罗列
+  （用户明确要清单、或工具返回的是数据时才列）
+- 不要复述用户刚说的话，不要“你刚才提到…”
+- 不要过度道歉或过度礼貌（“非常抱歉给您带来不便”“请您”“您可以”）
+- 不要每句都堆 emoji 或颜文字，不要写总结句收尾
+- 工具返回的内容要当成“你自己刚查到的”，用平常语气说出来，不要念数据"""
+
+
 def _build_system_prompt(robot: RobotServer, disabled: set[str] | None = None) -> str:
     """Build the system prompt with role, tool rules, profiles, and learning context.
     All behavioral instructions live here — the AI treats system messages with highest priority."""
@@ -238,7 +276,7 @@ def _build_system_prompt(robot: RobotServer, disabled: set[str] | None = None) -
     is_private = robot.msg_type == "private"
     base_role = (Config.PRIVATE_ROLE if is_private else Config.GROUP_ROLE) or ""
 
-    parts: list[str] = [base_role]
+    parts: list[str] = [base_role, STYLE_GUIDE]
 
     # ── Time context ──
     parts.append(f"当前时间：{now} 周{weekday}")
@@ -343,7 +381,7 @@ def _process_sticker_analysis(robot: RobotServer, image_url: str) -> None:
                 )
                 reply_text = AiServer.vision_chat_reply(
                     image_url_or_path=image_url,
-                    role_prompt=role or "",
+                    role_prompt=f"{role or ''}\n\n{STYLE_GUIDE}",
                     user_name=robot.user_name,
                     user_text=robot.msg.strip(),
                 )
@@ -363,9 +401,9 @@ def _process_sticker_analysis(robot: RobotServer, image_url: str) -> None:
             if robot.msg.strip():
                 user_text += f" 用户同时说：{robot.msg.strip()}"
             system_text = (
-                (Config.GROUP_ROLE or "") + "\n"
+                (Config.GROUP_ROLE or "") + "\n" + STYLE_GUIDE + "\n"
                 "有群友发了一张表情包/图片。你看不到图片内容，"
-                "请根据上下文对这张表情包做出可爱的回应，30字以内。"
+                "请根据上下文对这张表情包做出回应，30字以内。"
             )
             ai = AiServer(
                 system_text=system_text,
