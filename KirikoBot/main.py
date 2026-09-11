@@ -34,6 +34,7 @@ from prompt_builder import (
     STYLE_GUIDE,
     build_system_prompt as _build_system_prompt,
     build_user_message as _context,
+    describe_reply,
 )
 from database_manager import DatabaseManager
 from feature_gate import (
@@ -245,6 +246,24 @@ def _enabled_tools(disabled: set[str] | None = None) -> list[dict[str, Any]]:
     All tool selection now happens in the model via native function calling."""
     banned = disabled_tool_names(disabled or set())
     return [t for t in tools_def.ai_tools() if t["function"]["name"] not in banned]
+
+
+def _reply_note(robot: RobotServer) -> str:
+    """Describe the quoted message when the incoming one is a reply.
+
+    LLBot embeds the quoted content in the event, so this costs nothing extra.
+    """
+    reply = getattr(robot.incoming, "reply", None)
+    if reply is None:
+        return ""
+    if not reply.text and not reply.has_images:
+        return ""
+    try:
+        is_own = llbot.is_own_message(reply.message_seq, reply.text)
+    except Exception:
+        logger.debug("is_own_message failed", exc_info=True)
+        is_own = False
+    return describe_reply(reply, is_own)
 
 def _log_thinking(user_name: str, reasoning: str) -> None:
     """Log thinking chain to dedicated logger (visible in logs + frontend)."""
@@ -581,7 +600,14 @@ def main_logic(robot: RobotServer) -> None:
             if not msg_content and robot.incoming.has_images:
                 msg_content = "[图片消息]"
             if msg_content:
-                db.record_group_message(robot.group_id, robot.user_id, robot.user_name, msg_content, robot.user_role or "")
+                reply = getattr(robot.incoming, "reply", None)
+                db.record_group_message(
+                    robot.group_id, robot.user_id, robot.user_name, msg_content,
+                    robot.user_role or "",
+                    message_id=robot.incoming.message_id,
+                    message_seq=robot.incoming.message_seq,
+                    reply_to_seq=reply.message_seq if reply else None,
+                )
 
         # ── Feature gate: effective scope + disabled features ──
         scope_type, scope_id = feature_gate.scope_of(robot)
@@ -673,7 +699,7 @@ def main_logic(robot: RobotServer) -> None:
         _trigger_profile_update(robot, disabled)
 
         history = _load_history(robot.user_id, robot.group_id)
-        user_text = _context(robot)
+        user_text = _context(robot, _reply_note(robot))
         system_prompt = _build_system_prompt(
             robot, db, profile_service, learning_service, affection_service, disabled,
         )
