@@ -38,6 +38,9 @@ FEATURE_DEFS: list[dict[str, str]] = [
     {"key": "at_member",       "label": "@群友",        "category": "群功能",   "desc": "帮用户@群友"},
     {"key": "balance",         "label": "余额查询",     "category": "群功能",   "desc": "查询 AI 服务余额"},
     {"key": "feature_request", "label": "功能建议",     "category": "群功能",   "desc": "向开发者提交功能建议"},
+    {"key": "recall",          "label": "撤回消息",     "category": "群功能",   "desc": "撤回机器人自己刚发出的消息"},
+    {"key": "group_stats",     "label": "发言统计",     "category": "群功能",   "desc": "统计群内当天的发言情况"},
+    {"key": "context_read",    "label": "语境读取",     "category": "群功能",   "desc": "需要时读取群里的近期聊天记录来理解语境"},
 ]
 
 FEATURE_KEYS: list[str] = [f["key"] for f in FEATURE_DEFS]
@@ -68,6 +71,9 @@ TOOL_FEATURE: dict[str, str] = {
     "at_member": "at_member",
     "check_balance": "balance",
     "submit_feature": "feature_request",
+    "recall_message": "recall",
+    "group_stats": "group_stats",
+    "read_context": "context_read",
 }
 
 

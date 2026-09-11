@@ -235,6 +235,26 @@ class LLBotClient:
         # me" (LLBot's reply segment carries a seq/uid that isn't always the QQ
         # number) and as the basis for recalling our own messages.
         self._recent_sent: deque[dict[str, Any]] = deque(maxlen=200)
+        # Optional persistence hook, wired to the DB by main.py. Kept as a
+        # callback so this module stays free of database concerns.
+        self._recorder: Callable[[str, int, str], None] | None = None
+
+    def set_recorder(self, fn: Callable[[str, int, str], None] | None) -> None:
+        """Register a sink for sent messages: fn(group_id, message_id, text)."""
+        self._recorder = fn
+
+    def recall(self, message_id: Any) -> bool:
+        """Recall a message (OneBot delete_msg).
+
+        QQ only allows recalling your own message for about two minutes, and
+        needs group-admin rights to touch anyone else's — callers should check
+        the age before getting here.
+        """
+        try:
+            mid = int(message_id)
+        except (TypeError, ValueError):
+            return False
+        return self._post("delete_msg", {"message_id": mid})
 
     def _create_session(self, max_retries: int) -> requests.Session:
         s = requests.Session()
@@ -292,13 +312,20 @@ class LLBotClient:
         for seg in payload.get("message") or []:
             if isinstance(seg, dict) and seg.get("type") == "text":
                 text += str((seg.get("data") or {}).get("text") or "")
+        text = text.strip()
+        group_id = str(payload.get("group_id") or "")
         self._recent_sent.append({
             "message_id": message_id,
-            "group_id": str(payload.get("group_id") or ""),
+            "group_id": group_id,
             "user_id": str(payload.get("user_id") or ""),
-            "text": text.strip(),
+            "text": text,
             "ts": time.time(),
         })
+        if self._recorder and group_id:
+            try:
+                self._recorder(group_id, int(message_id), text)
+            except Exception:
+                logger.debug("sent-message recorder failed", exc_info=True)
 
     # Short replies like "好的"/"嗯" are not distinctive enough to identify a
     # quoted message by text — matching them would claim other people's

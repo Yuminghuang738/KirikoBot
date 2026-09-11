@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import sqlite3
 import threading
+import time
+from datetime import datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -13,7 +15,7 @@ VALID_TABLES = {
     "reminders", "learning_log", "feature_requests",
     "app_versions", "changelog", "stickers",
     "user_affection", "user_affection_log",
-    "feature_settings",
+    "feature_settings", "bot_messages",
 }
 
 
@@ -147,10 +149,14 @@ class DatabaseManager:
                 # context ("user B is replying to what you said") and recall.
                 # message_seq is the QQ seq that a reply segment references;
                 # message_id is LLBot's short id used by delete_msg/get_msg.
+                # ts_exact is a sub-second epoch stamp: `timestamp` only has
+                # second resolution, which is too coarse to interleave a bot
+                # reply with the member message it answers.
                 for col, col_type in [
                     ("message_id", "INTEGER"),
                     ("message_seq", "INTEGER"),
                     ("reply_to_seq", "INTEGER"),
+                    ("ts_exact", "REAL"),
                 ]:
                     try:
                         connect.execute(
@@ -158,6 +164,17 @@ class DatabaseManager:
                         )
                     except sqlite3.OperationalError:
                         pass  # Column already exists
+                connect.execute(
+                    """CREATE TABLE IF NOT EXISTS bot_messages(
+                        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                        group_id   TEXT NOT NULL,
+                        message_id INTEGER,
+                        text       TEXT DEFAULT '',
+                        recalled   INTEGER DEFAULT 0,
+                        ts_exact   REAL,
+                        created_at DATETIME DEFAULT (datetime('now', 'localtime'))
+                    )"""
+                )
                 connect.execute(
                     """CREATE TABLE IF NOT EXISTS user_profiles(
                         id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -414,10 +431,10 @@ class DatabaseManager:
         self.deposit(
             "group_messages",
             "(group_id, user_id, user_name, user_role, content, msg_type, "
-            "message_id, message_seq, reply_to_seq)",
-            "(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "message_id, message_seq, reply_to_seq, ts_exact)",
+            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (group_id, user_id, user_name, user_role, content, msg_type,
-             message_id, message_seq, reply_to_seq),
+             message_id, message_seq, reply_to_seq, time.time()),
         )
 
     def get_user_messages(
@@ -443,6 +460,252 @@ class DatabaseManager:
             "ORDER BY id DESC LIMIT ?",
             (limit,),
         )
+
+    # ── Bot's own messages (recall + "is this mine?") ────
+
+    # Sort key used to interleave two tables by real time. `timestamp` is only
+    # second-precision, so ts_exact (epoch float) is preferred, falling back to
+    # a converted julianday for rows written before the column existed.
+    _MEMBER_SORT = "IFNULL(ts_exact, (julianday(timestamp) - 2440587.5) * 86400.0)"
+    _BOT_SORT = "IFNULL(ts_exact, (julianday(created_at) - 2440587.5) * 86400.0)"
+
+    def record_bot_message(self, group_id: str, message_id: int | None,
+                           text: str = "") -> None:
+        if message_id is None:
+            return
+        self.execute_action(
+            "INSERT INTO bot_messages (group_id, message_id, text, ts_exact) "
+            "VALUES (?, ?, ?, ?)",
+            (group_id, message_id, text[:500], time.time()),
+        )
+
+    def get_last_bot_message(self, group_id: str, max_age_seconds: int = 110) -> dict[str, Any] | None:
+        """Most recent message the bot sent to this group, within the recall window.
+
+        QQ lets a normal member recall their own message for roughly two
+        minutes; older ids are useless, so they are filtered out here rather
+        than failing at the API.
+        """
+        try:
+            rows = self.fetch_data(
+                "SELECT message_id, text, created_at FROM bot_messages "
+                "WHERE group_id = ? AND recalled = 0 AND message_id IS NOT NULL "
+                "AND created_at >= datetime('now', 'localtime', ?) "
+                "ORDER BY id DESC LIMIT 1",
+                (group_id, f"-{int(max_age_seconds)} seconds"),
+            )
+        except sqlite3.Error:
+            logger.exception("get_last_bot_message failed")
+            return None
+        if not rows:
+            return None
+        return {"message_id": rows[0][0], "text": rows[0][1], "created_at": rows[0][2]}
+
+    def mark_bot_message_recalled(self, message_id: int) -> None:
+        self.execute_action(
+            "UPDATE bot_messages SET recalled = 1 WHERE message_id = ?", (message_id,)
+        )
+
+    # ── Group activity analysis ──────────────────────────
+
+    def get_daily_group_stats(self, group_id: str, day: str | None = None) -> dict[str, Any]:
+        """One day of activity for a group: totals, top speakers, hourly spread.
+
+        `day` is YYYY-MM-DD; defaults to today. Note `timestamp` is the time the
+        event was stored (localtime), which is what "today" means to the group.
+        """
+        day = day or datetime.now().strftime("%Y-%m-%d")
+
+        def scalar(sql: str, params: tuple = ()) -> int:
+            try:
+                return self.fetch_data(sql, params)[0][0] or 0
+            except (sqlite3.Error, IndexError, TypeError):
+                logger.exception("daily stats query failed")
+                return 0
+
+        base = "FROM group_messages WHERE group_id = ? AND date(timestamp) = ?"
+        args = (group_id, day)
+
+        try:
+            top_rows = self.fetch_data(
+                f"SELECT user_name, COUNT(*) c {base} GROUP BY user_id "
+                "ORDER BY c DESC LIMIT 10", args,
+            )
+        except sqlite3.Error:
+            logger.exception("daily stats top-speaker query failed")
+            top_rows = []
+
+        hourly = [0] * 24
+        try:
+            for hour, count in self.fetch_data(
+                f"SELECT CAST(strftime('%H', timestamp) AS INTEGER), COUNT(*) {base} "
+                "GROUP BY 1", args,
+            ):
+                if isinstance(hour, int) and 0 <= hour < 24:
+                    hourly[hour] = count
+        except sqlite3.Error:
+            logger.exception("daily stats hourly query failed")
+
+        return {
+            "date": day,
+            "total": scalar(f"SELECT COUNT(*) {base}", args),
+            "active_users": scalar(f"SELECT COUNT(DISTINCT user_id) {base}", args),
+            "images": scalar(f"SELECT COUNT(*) {base} AND content = '[图片消息]'", args),
+            "top": [{"user_name": r[0], "count": r[1]} for r in top_rows],
+            "hourly": hourly,
+        }
+
+    # Label used for the bot's own lines when merging transcripts. The bot's
+    # outgoing messages live in `bot_messages` (they are not echoed back by
+    # LLBot unless reportSelfMessage is on), so both tables are unioned.
+    BOT_DISPLAY_NAME = "Kiriko"
+
+    @staticmethod
+    def _clamp_int(value: Any, default: int, lo: int, hi: int) -> int:
+        """Coerce a caller-supplied number into range.
+
+        `value or default` would be wrong here: 0 is a legitimate (if useless)
+        input, and the model may also hand us a string.
+        """
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            n = default
+        return max(lo, min(n, hi))
+
+    def get_recent_group_context(
+        self, group_id: str, minutes: int = 30, limit: int = 40,
+        exclude_user: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Recent group transcript, oldest-first, for the AI's context tool.
+
+        Includes the bot's own lines so the model can see what it already said
+        and who was answering whom.
+        """
+        minutes = self._clamp_int(minutes, 30, 1, 24 * 60)
+        limit = self._clamp_int(limit, 40, 1, 200)
+        since = f"-{minutes} minutes"
+
+        member_sql = (
+            "SELECT user_name, content, timestamp, 0 AS is_bot, "
+            f"       {self._MEMBER_SORT} AS sort_key "
+            "FROM group_messages "
+            "WHERE group_id = ? AND timestamp >= datetime('now','localtime',?)"
+        )
+        params: list[Any] = [group_id, since]
+        if exclude_user:
+            member_sql += " AND user_id != ?"
+            params.append(exclude_user)
+
+        # Placeholders are positional, in the order they appear in the SQL.
+        params.append(self.BOT_DISPLAY_NAME)
+        params.extend([group_id, since])
+
+        sql = (
+            f"{member_sql} UNION ALL "
+            "SELECT ?, text, created_at, 1 AS is_bot, "
+            f"       {self._BOT_SORT} AS sort_key "
+            "FROM bot_messages "
+            "WHERE group_id = ? AND recalled = 0 "
+            "AND created_at >= datetime('now','localtime',?) "
+            "ORDER BY sort_key DESC LIMIT ?"
+        )
+        params.append(limit)
+
+        try:
+            rows = self.fetch_data(sql, tuple(params))
+        except sqlite3.Error:
+            logger.exception("recent context query failed")
+            return []
+        return [
+            {"user_name": r[0], "content": r[1], "timestamp": r[2], "is_bot": bool(r[3])}
+            for r in reversed(rows)
+        ]
+
+    def get_group_message_page(
+        self, group_id: str, day: str | None = None, keyword: str = "",
+        user_name: str = "", page: int = 1, size: int = 100,
+    ) -> dict[str, Any]:
+        """Paginated group transcript for the dashboard review page.
+
+        Members' messages and the bot's own lines are unioned so the review
+        shows the conversation as it actually happened.
+        """
+        page = self._clamp_int(page, 1, 1, 10_000)
+        size = self._clamp_int(size, 100, 1, 500)
+
+        member_where = ["group_id = ?"]
+        bot_where = ["group_id = ?"]
+        member_params: list[Any] = [group_id]
+        bot_params: list[Any] = [group_id]
+
+        if day:
+            member_where.append("date(timestamp) = ?")
+            member_params.append(day)
+            bot_where.append("date(created_at) = ?")
+            bot_params.append(day)
+        if keyword:
+            member_where.append("content LIKE ?")
+            member_params.append(f"%{keyword}%")
+            bot_where.append("text LIKE ?")
+            bot_params.append(f"%{keyword}%")
+        if user_name:
+            member_where.append("user_name = ?")
+            member_params.append(user_name)
+            # Bot rows carry no real sender, so they only match the bot label.
+            bot_where.append("? = ?")
+            bot_params.extend([user_name, self.BOT_DISPLAY_NAME])
+
+        # sort_key keeps messages that share a timestamp in insertion order —
+        # a plain ORDER BY timestamp is unstable for back-to-back messages.
+        union = (
+            "SELECT user_name, content, timestamp, message_seq, reply_to_seq, 0 AS is_bot, "
+            f"       {self._MEMBER_SORT} AS sort_key "
+            f"FROM group_messages WHERE {' AND '.join(member_where)} "
+            "UNION ALL "
+            "SELECT ?, text, created_at, NULL, NULL, 1 AS is_bot, "
+            f"       {self._BOT_SORT} AS sort_key "
+            f"FROM bot_messages WHERE {' AND '.join(bot_where)}"
+        )
+        # member placeholders come first, then the bot SELECT's label, then bot's own
+        params = member_params + [self.BOT_DISPLAY_NAME] + bot_params
+
+        try:
+            total = self.fetch_data(
+                f"SELECT COUNT(*) FROM ({union})", tuple(params)
+            )[0][0]
+            rows = self.fetch_data(
+                "SELECT user_name, content, timestamp, message_seq, reply_to_seq, is_bot "
+                f"FROM ({union}) ORDER BY sort_key DESC LIMIT ? OFFSET ?",
+                tuple(params) + (size, (page - 1) * size),
+            )
+        except (sqlite3.Error, IndexError, TypeError):
+            logger.exception("group message page query failed")
+            return {"items": [], "total": 0, "page": page, "pages": 0}
+
+        items = [
+            {"user_name": r[0], "content": r[1], "timestamp": r[2],
+             "message_seq": r[3], "reply_to_seq": r[4], "is_bot": bool(r[5])}
+            for r in reversed(rows)   # oldest-first within the page
+        ]
+        return {
+            "items": items,
+            "total": total,
+            "page": page,
+            "pages": max(1, (total + size - 1) // size),
+        }
+
+    def get_group_days(self, group_id: str, limit: int = 60) -> list[dict[str, Any]]:
+        """Days that have messages, newest first (for the review page picker)."""
+        try:
+            rows = self.fetch_data(
+                "SELECT date(timestamp) d, COUNT(*) FROM group_messages "
+                "WHERE group_id = ? GROUP BY d ORDER BY d DESC LIMIT ?",
+                (group_id, limit),
+            )
+        except sqlite3.Error:
+            return []
+        return [{"date": r[0], "count": r[1]} for r in rows if r[0]]
 
     def clean_orphaned_history(self, user_id: str, group_id: str | None) -> int:
         """Remove assistant messages with tool_calls but no follow-up tool response.

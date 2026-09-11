@@ -246,6 +246,49 @@ class AiTools:
             "description": "当用户询问好感度排行、好感排行榜、谁的好感度最高、好感度排名、谁最喜欢机器人时调用。返回当前群的好感度排行榜",
             "parameters": empty_params,
         }
+        function_recall_message = {
+            "name": "recall_message",
+            "description": (
+                "撤回你自己刚发出去的那条消息。当用户说「撤回」「收回刚才那句」「说错了」"
+                "「当我没说」时调用；你发现自己上一条回复明显不合适时也可以调用。"
+                "只能撤回你自己发出的、且在两分钟内的消息，超时会失败"
+            ),
+            "parameters": empty_params,
+        }
+        function_group_stats = {
+            "name": "group_stats",
+            "description": (
+                "统计本群某一天的发言情况：总条数、活跃人数、谁说得最多、什么时段最热闹。"
+                "当用户问「今天谁最能说」「今天群里聊了多少」「昨天的发言统计」时调用"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "day": {
+                        "type": "string",
+                        "description": "统计哪天：today（今天，默认）、yesterday（昨天）或 YYYY-MM-DD",
+                    },
+                },
+                "required": [],
+            },
+        }
+        function_read_context = {
+            "name": "read_context",
+            "description": (
+                "读取本群最近一段时间的聊天记录，用来搞清楚群里正在聊什么。"
+                "当你觉得当前这句话指代不明（「那这个呢」「那个怎么办」）、"
+                "像是在接着别人的话题说、或者用户提到你没参与过的讨论时才调用。"
+                "闲聊和能直接回答的问题不要调用"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "minutes": {"type": "integer", "description": "往前看多少分钟，默认 30"},
+                    "limit": {"type": "integer", "description": "最多读多少条，默认 40"},
+                },
+                "required": [],
+            },
+        }
 
         tool_tarot = {"type": "function", "function": function_tarot}
         tool_tarot_history = {"type": "function", "function": function_tarot_history}
@@ -270,6 +313,9 @@ class AiTools:
         tool_sticker_battle = {"type": "function", "function": function_sticker_battle}
         tool_check_affection = {"type": "function", "function": function_check_affection}
         tool_affection_leaderboard = {"type": "function", "function": function_affection_leaderboard}
+        tool_recall_message = {"type": "function", "function": function_recall_message}
+        tool_group_stats = {"type": "function", "function": function_group_stats}
+        tool_read_context = {"type": "function", "function": function_read_context}
 
         return [
             tool_tarot,
@@ -295,4 +341,7 @@ class AiTools:
             tool_sticker_battle,
             tool_check_affection,
             tool_affection_leaderboard,
+            tool_recall_message,
+            tool_group_stats,
+            tool_read_context,
         ]
