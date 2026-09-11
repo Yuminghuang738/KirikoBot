@@ -35,6 +35,7 @@ from extra_services import HitokotoService, BilibiliTrending
 from hot_news import HotNewsScraper
 from judge_service import JudgeService
 from llbot_client import LLBotClient, MessageBuilder
+from llbot_webui import llbot_bp
 from msg_package import MsgPackage
 from news_crawler import NewsCrawler
 from log_stream import sse_handler, setup_sse_logging
@@ -65,6 +66,11 @@ logger = logging.getLogger(__name__)
 
 # ── App ─────────────────────────────────────────────────
 app = Flask(__name__)
+# The dashboard shell is edited often; re-read templates from disk instead of
+# caching them for the process lifetime (Flask's production default).
+app.config["TEMPLATES_AUTO_RELOAD"] = True
+app.jinja_env.auto_reload = True
+app.register_blueprint(llbot_bp)
 
 # ── Sticker battle state (must be before services that reference it) ──
 _battle_state: dict[str, dict] = {}  # "user_id:group_id" → battle info
@@ -366,7 +372,7 @@ def _process_sticker_analysis(robot: RobotServer, image_url: str) -> None:
                 user_text=user_text,
                 history_list=[],
                 tools=[],
-                model_type="deepseek-v4-flash",
+                model_type=Config.DEEPSEEK_MODEL,
                 thinking_type="disabled",
             )
             ai.ai_request()
@@ -394,21 +400,30 @@ def _background_sticker_categorize(image_url: str) -> None:
 
     Runs after the end-to-end reply is already sent, so this does not
     block the user-facing response time.
+
+    Stickers are already categorized at collection time
+    (StickerCollector._auto_categorize); this only fills the gap for images
+    that were not collected, so an already-categorized sticker is skipped
+    instead of paying for a second vision call.
     """
     try:
-        vision_data = AiServer.vision_analyze_with_category(image_url)
-        if not vision_data:
-            return
+        match = None
         for s in db.get_stickers():
             fn = s.get("filename", "")
             if fn and (fn in image_url or image_url.endswith(fn)):
-                db.update_sticker_category(
-                    fn,
-                    vision_data.get("category", "未分类"),
-                    vision_data.get("description", ""),
-                    vision_data.get("emotion", ""),
-                )
+                match = s
                 break
+        if match and match.get("category") not in ("", "未分类"):
+            return
+        vision_data = AiServer.vision_analyze_with_category(image_url)
+        if not vision_data or not match:
+            return
+        db.update_sticker_category(
+            match["filename"],
+            vision_data.get("category", "未分类"),
+            vision_data.get("description", ""),
+            vision_data.get("emotion", ""),
+        )
     except Exception:
         pass
 
@@ -737,7 +752,7 @@ def main_logic(robot: RobotServer) -> None:
             logger.info("Group chat with %s (%d tools)", robot.user_name, len(active_tools))
 
         ai = AiServer(system_prompt, user_text, history, active_tools,
-                      model_type="deepseek-v4-pro", thinking_type="enabled")
+                      model_type=Config.DEEPSEEK_MODEL, thinking_type="enabled")
         ai.ai_request()
 
         # Log thinking chain
@@ -800,8 +815,32 @@ def main_logic(robot: RobotServer) -> None:
         except Exception: pass
 
 # ── HTTP routes ─────────────────────────────────────────
+_STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
+
+def _asset_version() -> str:
+    """Cache-buster derived from the dashboard asset mtimes."""
+    latest = 0.0
+    for rel in ("css/app.css", "js/app.js"):
+        try:
+            latest = max(latest, os.path.getmtime(os.path.join(_STATIC_DIR, rel)))
+        except OSError:
+            pass
+    return str(int(latest)) or "1"
+
+
+def _llbot_public_url() -> str:
+    """Where the browser loads the LLBot WebUI from (embedded WebQQ tab)."""
+    if Config.LLBOT_WEBUI_PUBLIC_URL:
+        return Config.LLBOT_WEBUI_PUBLIC_URL.rstrip("/")
+    host = (request.host or "").split(":")[0] or "localhost"
+    return f"{request.scheme}://{host}:3080"
+
+
 @app.route("/", methods=["GET"])
-def dashboard(): return render_template("dashboard.html")
+def dashboard():
+    return render_template("dashboard.html", asset_v=_asset_version(),
+                           llbot_public_url=_llbot_public_url())
 
 @app.route("/status")
 def status():
@@ -812,7 +851,7 @@ def status():
     except Exception:
         pass
     uptime_sec = int(time.time() - _start_time)
-    return jsonify({"ok": True, "model": "deepseek-v4-pro", "thinking": "enabled",
+    return jsonify({"ok": True, "model": Config.DEEPSEEK_MODEL, "thinking": "enabled",
                     "tools": len(tools_def.ai_tools()), "groups": len(_seeded_groups),
                     "uptime": uptime_sec,
                     "scheduler": scheduler._running, "stickers": sticker_count})
@@ -1638,6 +1677,40 @@ def _list_groups() -> list[dict]:
 def api_groups():
     groups = _list_groups()
     return jsonify({"groups": groups, "total": len(groups)})
+
+
+@app.route("/api/groups/<group_id>/purge-preview")
+def api_group_purge_preview(group_id: str):
+    """What deleting this group would remove — shown in the confirm dialog."""
+    return jsonify({"ok": True, "group_id": group_id,
+                    "counts": db.group_purge_preview(group_id)})
+
+
+@app.route("/api/groups/<group_id>", methods=["DELETE"])
+def api_group_delete(group_id: str):
+    """Remove a group: purge all of its data, optionally make the bot leave.
+
+    Body: {"leave": true} also calls OneBot set_group_leave so the bot exits
+    the QQ group. Leaving is not done implicitly — it cannot be undone from
+    here, the bot must be re-invited.
+    """
+    body = request.get_json(silent=True) or {}
+    leave = bool(body.get("leave"))
+    counts = db.purge_group(group_id)
+    left = False
+    leave_error = ""
+    if leave:
+        try:
+            left = bool(llbot.call("set_group_leave",
+                                   {"group_id": str(group_id), "is_dismiss": False}))
+            if not left:
+                leave_error = "LLBot 调用失败"
+        except Exception as exc:
+            leave_error = str(exc)
+            logger.exception("Failed to leave group %s", group_id)
+    logger.info("Group %s deleted (leave=%s, left=%s)", group_id, leave, left)
+    return jsonify({"ok": True, "group_id": group_id, "deleted": counts,
+                    "left": left, "leave_error": leave_error})
 
 # ── Feature settings (per-group / per-user toggles) ─────
 
