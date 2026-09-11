@@ -2,10 +2,42 @@
 from __future__ import annotations
 
 import logging
+import os
 
 import pytest
 
+from conftest import APP_DIR
 from webhook_auth import expected_signature, signature_ok
+
+PROJECT_DIR = os.path.dirname(APP_DIR)
+
+
+class TestAuthExemptions:
+    """The healthcheck must not sit behind the dashboard password.
+
+    Enabling dashboard auth made `curl -f /` return 401, which marked the
+    container unhealthy — the compose healthcheck and the auth exemption have
+    to stay in sync.
+    """
+
+    def test_healthz_is_exempt(self):
+        import dashboard_auth
+
+        assert "healthz" in dashboard_auth._WEBHOOK_ENDPOINTS
+
+    def test_webhook_is_exempt(self):
+        import dashboard_auth
+
+        assert "receive" in dashboard_auth._WEBHOOK_ENDPOINTS
+
+    def test_main_exposes_the_health_route(self):
+        src = open(os.path.join(APP_DIR, "main.py"), encoding="utf-8").read()
+        assert '@app.route("/healthz")' in src
+
+    def test_compose_healthcheck_hits_the_exempt_endpoint(self):
+        compose = open(os.path.join(PROJECT_DIR, "docker-compose.yml"), encoding="utf-8").read()
+        assert "/healthz" in compose
+        assert "http://localhost:5000/healthz" in compose
 
 
 class TestWebhookSignature:

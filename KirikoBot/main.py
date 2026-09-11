@@ -752,6 +752,12 @@ def main_logic(robot: RobotServer) -> None:
             logger.debug("main.main_logic 忽略了异常", exc_info=True)
 
 # ── HTTP routes ─────────────────────────────────────────
+@app.route("/healthz")
+def healthz():
+    """Unauthenticated liveness probe for the container healthcheck."""
+    return jsonify({"ok": True})
+
+
 _STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 
