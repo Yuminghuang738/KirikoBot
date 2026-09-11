@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -12,6 +13,29 @@ logger = logging.getLogger(__name__)
 
 
 # ── Data models ──────────────────────────────────────────
+
+def _as_int(value: Any) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+@dataclass
+class ReplyInfo:
+    """The message a user is quoting, taken from LLBot's `reply` segment.
+
+    LLBot embeds the quoted message inline (message_seq / sender_id /
+    sender_name / segments), so resolving "what is this a reply to" needs no
+    extra API call — the content is already in the event.
+    """
+    message_seq: int | None = None
+    sender_id: str = ""
+    sender_name: str = ""
+    text: str = ""
+    time: int | None = None
+    has_images: bool = False
+
 
 @dataclass
 class IncomingMessage:
@@ -28,6 +52,11 @@ class IncomingMessage:
     text: str = ""
     is_at_bot: bool = False
     message_id: int | None = None
+    # QQ-level sequence. LLBot sends BOTH: `message_id` is a short id usable
+    # with delete_msg/get_msg, while `message_seq` is what a `reply` segment
+    # references. Quote chains must be linked on message_seq.
+    message_seq: int | None = None
+    reply: ReplyInfo | None = None
 
     @classmethod
     def from_onebot(cls, data: dict[str, Any], bot_qq: str) -> IncomingMessage:
@@ -62,7 +91,42 @@ class IncomingMessage:
             text=text,
             is_at_bot=is_at,
             message_id=data.get("message_id"),
+            message_seq=_as_int(data.get("message_seq")),
+            reply=cls._extract_reply(message_raw),
         )
+
+    @staticmethod
+    def _extract_reply(segments: list[dict[str, Any]]) -> ReplyInfo | None:
+        """Pull the quoted message out of a `reply` segment, if present."""
+        for seg in segments:
+            if not isinstance(seg, dict) or seg.get("type") != "reply":
+                continue
+            data = seg.get("data") or {}
+            quoted = data.get("segments")
+            if not isinstance(quoted, list):
+                quoted = []
+
+            seq = data.get("message_seq", data.get("id"))
+            try:
+                seq = int(seq) if seq is not None else None
+            except (TypeError, ValueError):
+                seq = None
+
+            # sender_id is a QQ number in some LLBot paths and a UID in others;
+            # keep whatever we get and let the caller decide.
+            sender_id = data.get("sender_id", data.get("qq", ""))
+            return ReplyInfo(
+                message_seq=seq,
+                sender_id=str(sender_id or ""),
+                sender_name=str(data.get("sender_name") or ""),
+                text=IncomingMessage._extract_text(quoted) or str(data.get("text") or ""),
+                time=data.get("time"),
+                has_images=any(
+                    isinstance(s, dict) and s.get("type") in ("image", "face", "mface")
+                    for s in quoted
+                ),
+            )
+        return None
 
     @staticmethod
     def _extract_text(segments: list[dict[str, Any]]) -> str:
@@ -167,6 +231,10 @@ class LLBotClient:
         self.token = token
         self.timeout = timeout
         self._session = self._create_session(max_retries)
+        # Last few messages this bot sent. Needed to recognise "someone quoted
+        # me" (LLBot's reply segment carries a seq/uid that isn't always the QQ
+        # number) and as the basis for recalling our own messages.
+        self._recent_sent: deque[dict[str, Any]] = deque(maxlen=200)
 
     def _create_session(self, max_retries: int) -> requests.Session:
         s = requests.Session()
@@ -188,6 +256,7 @@ class LLBotClient:
         try:
             r = self._session.post(url, json=payload, timeout=self.timeout)
             r.raise_for_status()
+            self._remember_sent(endpoint, payload, r)
             logger.debug("LLBot %s OK", endpoint)
             return True
         except requests.exceptions.Timeout:
@@ -200,6 +269,63 @@ class LLBotClient:
                          (r.text[:200] if 'r' in dir() and r.text else ''))
         except Exception:
             logger.exception("LLBot %s unexpected error", endpoint)
+        return False
+
+    def _remember_sent(self, endpoint: str, payload: dict[str, Any], response: Any) -> None:
+        """Track the message_id of what we just sent.
+
+        `_post` used to discard the response body, so the bot had no idea which
+        messages were its own — which is what makes "someone quoted me" hard to
+        detect and recall impossible.
+        """
+        if "send" not in endpoint:
+            return
+        try:
+            data = response.json().get("data") or {}
+        except (ValueError, AttributeError):
+            return
+        message_id = data.get("message_id")
+        if message_id is None:
+            return
+
+        text = ""
+        for seg in payload.get("message") or []:
+            if isinstance(seg, dict) and seg.get("type") == "text":
+                text += str((seg.get("data") or {}).get("text") or "")
+        self._recent_sent.append({
+            "message_id": message_id,
+            "group_id": str(payload.get("group_id") or ""),
+            "user_id": str(payload.get("user_id") or ""),
+            "text": text.strip(),
+            "ts": time.time(),
+        })
+
+    # Short replies like "好的"/"嗯" are not distinctive enough to identify a
+    # quoted message by text — matching them would claim other people's
+    # messages as our own.
+    _MIN_TEXT_MATCH = 6
+
+    def is_own_message(self, message_seq: Any = None, text: str | None = None) -> bool:
+        """Whether a quoted message was sent by this bot.
+
+        Matches on message id first, then falls back to an exact text match —
+        LLBot reports the reply's sender as a UID in some code paths and a QQ
+        number in others, so neither signal is dependable on its own. A wrong
+        "not mine" is harmless (the quote is still described, just attributed
+        to a member); a wrong "mine" is not, hence the strictness.
+        """
+        try:
+            seq = int(message_seq) if message_seq is not None else None
+        except (TypeError, ValueError):
+            seq = None
+        needle = " ".join((text or "").split())
+
+        for item in self._recent_sent:
+            if seq is not None and item["message_id"] == seq:
+                return True
+            sent = " ".join(item["text"].split())
+            if len(needle) >= self._MIN_TEXT_MATCH and sent == needle:
+                return True
         return False
 
     # ── Message sending ──────────────────────────────────

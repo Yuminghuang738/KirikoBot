@@ -143,6 +143,21 @@ class DatabaseManager:
                         timestamp  DATETIME DEFAULT (datetime('now', 'localtime'))
                     )"""
                 )
+                # Migration: message id + quote linkage. Enables quote-aware
+                # context ("user B is replying to what you said") and recall.
+                # message_seq is the QQ seq that a reply segment references;
+                # message_id is LLBot's short id used by delete_msg/get_msg.
+                for col, col_type in [
+                    ("message_id", "INTEGER"),
+                    ("message_seq", "INTEGER"),
+                    ("reply_to_seq", "INTEGER"),
+                ]:
+                    try:
+                        connect.execute(
+                            f"ALTER TABLE group_messages ADD COLUMN {col} {col_type}"
+                        )
+                    except sqlite3.OperationalError:
+                        pass  # Column already exists
                 connect.execute(
                     """CREATE TABLE IF NOT EXISTS user_profiles(
                         id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -393,12 +408,16 @@ class DatabaseManager:
     def record_group_message(
         self, group_id: str, user_id: str, user_name: str,
         content: str, user_role: str = "", msg_type: str = "text",
+        message_id: int | None = None, message_seq: int | None = None,
+        reply_to_seq: int | None = None,
     ) -> None:
         self.deposit(
             "group_messages",
-            "(group_id, user_id, user_name, user_role, content, msg_type)",
-            "(?, ?, ?, ?, ?, ?)",
-            (group_id, user_id, user_name, user_role, content, msg_type),
+            "(group_id, user_id, user_name, user_role, content, msg_type, "
+            "message_id, message_seq, reply_to_seq)",
+            "(?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (group_id, user_id, user_name, user_role, content, msg_type,
+             message_id, message_seq, reply_to_seq),
         )
 
     def get_user_messages(
