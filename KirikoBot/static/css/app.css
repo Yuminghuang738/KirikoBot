@@ -1045,6 +1045,52 @@ tbody tr:hover td { background: var(--card-2); }
   font-size: .78rem; font-weight: 800; font-variant-numeric: tabular-nums;
 }
 
+/* ── Hourly distribution chart (group activity) ─────────── */
+.hour-chart {
+  display: flex; align-items: flex-end; gap: 3px;
+  height: 170px; padding-top: 8px;
+}
+.hour-chart .hc {
+  flex: 1; height: 100%; min-width: 0;
+  display: flex; flex-direction: column; justify-content: flex-end;
+  align-items: center; gap: 5px;
+}
+.hour-chart .hc i {
+  display: block; width: 100%; min-height: 2px;
+  border-radius: 5px 5px 2px 2px;
+  background: var(--grad); opacity: .85;
+  transition: opacity .2s ease, transform .2s ease;
+}
+.hour-chart .hc:hover i { opacity: 1; transform: scaleY(1.04); }
+.hour-chart .hc span { font-size: .6rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* ── Chat transcript (group review) ─────────────────────── */
+.msg-list { display: flex; flex-direction: column; }
+.msg-row {
+  display: flex; gap: 11px; padding: 7px 18px;
+  border-bottom: 1px solid var(--border);
+  transition: background-color .15s ease;
+}
+.msg-row:last-child { border-bottom: none; }
+.msg-row:hover { background: var(--card-2); }
+.msg-row.bot { background: var(--accent-soft); }
+.msg-row .m-time {
+  font-family: var(--mono); font-size: .67rem; color: var(--muted);
+  flex-shrink: 0; width: 74px; padding-top: 3px; font-variant-numeric: tabular-nums;
+}
+.msg-row .m-who {
+  flex-shrink: 0; width: 92px; padding-top: 1px;
+  font-size: .76rem; font-weight: 700; color: var(--blue);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.msg-row.bot .m-who { color: var(--accent-deep); }
+.msg-row .m-text { flex: 1; min-width: 0; font-size: .81rem; word-break: break-word; }
+.msg-row .m-quote {
+  font-size: .7rem; color: var(--muted);
+  border-left: 2px solid var(--border-strong);
+  padding-left: 7px; margin-bottom: 3px;
+}
+
 /* ── Responsive ─────────────────────────────────────────── */
 @media (max-width: 1280px) {
   .b-3, .b-4, .b-5 { grid-column: span 6; }

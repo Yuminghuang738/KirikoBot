@@ -136,6 +136,19 @@ def build_system_prompt(
         "不确定时宁可文字回复也不乱调工具。禁止编造任何功能结果。"
     )
 
+    # ── When to pull the wider group context ──
+    # Attaching a transcript to every message would multiply token cost, so the
+    # model decides. These are the cases where it genuinely cannot answer blind.
+    parts.append(
+        "【关于群聊语境】"
+        "你看不到群里其他人的自由聊天，只知道自己和当前用户的对话。"
+        "遇到下面几种情况，先用 read_context 看一眼群里最近在聊什么再回答："
+        "① 当前消息指代不明（“那这个呢”“那个怎么办”“所以呢”）；"
+        "② 像是接着别人的话说的，但你不知道前文；"
+        "③ 用户提到一个你完全没参与过的讨论或事件。"
+        "反之，能直接回答的闲聊、打招呼、明显在跟你一对一说话的，不要调用它，也不要每句都查。"
+    )
+
     # ── Group-specific rules ──
     if not is_private:
         parts.append("你是群聊机器人，只在群内回复，不要建议私聊。")

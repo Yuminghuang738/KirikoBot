@@ -23,6 +23,7 @@ from ai_tools import (
     ListRemindersTool, DeleteReminderTool,
     StickerBattleTool, BATTLE_DEFAULT_ROUNDS,
     AffectionTool, AffectionLeaderboardTool,
+    RecallMessageTool, GroupStatsTool, ReadContextTool,
 )
 from affection_service import AffectionService
 from balance_service import BalanceService
@@ -132,6 +133,13 @@ affection_service = AffectionService()
 judge_service = JudgeService(learning_service)
 affection_tool = AffectionTool(pkg, db)
 affection_leaderboard_tool = AffectionLeaderboardTool(pkg, db)
+recall_tool = RecallMessageTool(db, llbot)
+group_stats_tool = GroupStatsTool(db, pkg)
+read_context_tool = ReadContextTool(db, pkg)
+
+# Persist the bot's own outgoing messages so transcripts are complete and
+# "recall the last thing I said" works across restarts.
+llbot.set_recorder(db.record_bot_message)
 version_manager = VersionManager(db, llbot)
 version_manager.seed_initial_version()
 
@@ -189,6 +197,9 @@ ROUTES = {
     "sticker_battle": sticker_battle_tool.sticker_battle_call,
     "check_affection": affection_tool.check_affection_call,
     "affection_leaderboard": affection_leaderboard_tool.affection_leaderboard_call,
+    "recall_message": recall_tool.recall_message_call,
+    "group_stats": group_stats_tool.group_stats_call,
+    "read_context": read_context_tool.read_context_call,
 }
 
 # Self-contained tools format and send their own reply — no AI follow-up needed
@@ -1680,6 +1691,45 @@ def api_group_delete(group_id: str):
     logger.info("Group %s deleted (leave=%s, left=%s)", group_id, leave, left)
     return jsonify({"ok": True, "group_id": group_id, "deleted": counts,
                     "left": left, "leave_error": leave_error})
+
+
+# ── Group activity & transcript (dashboard) ─────────────
+
+@app.route("/api/groups/<group_id>/stats")
+def api_group_stats(group_id: str):
+    """One day of activity for a group. ?date=YYYY-MM-DD (default today)."""
+    day = request.args.get("date") or None
+    return jsonify({"ok": True, "group_id": group_id,
+                    "stats": db.get_daily_group_stats(group_id, day)})
+
+
+@app.route("/api/groups/<group_id>/days")
+def api_group_days(group_id: str):
+    """Days that have messages, for the review page's date picker."""
+    return jsonify({"ok": True, "days": db.get_group_days(group_id)})
+
+
+@app.route("/api/groups/<group_id>/messages")
+def api_group_messages(group_id: str):
+    """Paginated group transcript. Includes the bot's own lines."""
+    try:
+        page = int(request.args.get("page", 1))
+    except ValueError:
+        page = 1
+    try:
+        size = int(request.args.get("size", 100))
+    except ValueError:
+        size = 100
+    result = db.get_group_message_page(
+        group_id,
+        day=request.args.get("date") or None,
+        keyword=(request.args.get("q") or "").strip(),
+        user_name=(request.args.get("user") or "").strip(),
+        page=page,
+        size=size,
+    )
+    return jsonify({"ok": True, "group_id": group_id, **result})
+
 
 # ── Feature settings (per-group / per-user toggles) ─────
 
