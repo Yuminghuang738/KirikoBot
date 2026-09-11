@@ -92,7 +92,7 @@ class ProfileService:
         result = quick_chat(
             self.SYSTEM_PROMPT,
             f"用户 {user_name} 的聊天记录：\n{sample}",
-            max_tokens=500, temperature=0.3, timeout=30,
+            max_tokens=500, temperature=0.3, timeout=30, source="profile",
         )
         if result is None:
             logger.warning("Profile analysis API failed for %s", user_name)

@@ -33,7 +33,7 @@ def prune_old_data(db: Any, days: int | None = None) -> dict[str, int]:
     cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
 
     deleted: dict[str, int] = {}
-    for table in ("group_messages", "history", "user_affection_log"):
+    for table in ("group_messages", "history", "user_affection_log", "ai_calls"):
         try:
             before = db.fetch_data(f"SELECT COUNT(*) FROM {table}")[0][0]
             db.execute_action(f"DELETE FROM {table} WHERE timestamp < ?", (cutoff,))

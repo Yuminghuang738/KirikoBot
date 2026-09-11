@@ -55,8 +55,17 @@ class Config:
     REQUEST_TIMEOUT: Final[int] = 30
     MAX_RETRIES: Final[int] = 3
 
-    # ── Data retention & backups ──────────────────────
-    # Raw message tables grow forever otherwise. 0 disables pruning.
+    # ── AI usage metrics ──────────────────────────────
+    # Peak rates in USD per 1M tokens for deepseek-flash (off-peak is half).
+    # Defaults match https://api-docs.deepseek.com/quick_start/pricing — prices
+    # change, so override in .env rather than editing code.
+    AI_PRICE_CACHE_HIT: Final[float] = float(os.getenv("AI_PRICE_CACHE_HIT") or 0.006)
+    AI_PRICE_CACHE_MISS: Final[float] = float(os.getenv("AI_PRICE_CACHE_MISS") or 0.30)
+    AI_PRICE_OUTPUT: Final[float] = float(os.getenv("AI_PRICE_OUTPUT") or 1.20)
+    # Peak hours are 01:00-04:00 and 06:00-10:00 UTC, Mon-Fri.
+    AI_METRICS_ENABLED: Final[bool] = os.getenv("AI_METRICS_ENABLED", "1") == "1"
+
+    # ── Data retention & backups ──────────────────────    # Raw message tables grow forever otherwise. 0 disables pruning.
     # Aggregates (profiles, affection, tool counts) are never pruned.
     RETENTION_DAYS: Final[int] = int(os.getenv("RETENTION_DAYS") or 180)
     BACKUP_ENABLED: Final[bool] = os.getenv("BACKUP_ENABLED", "1") == "1"
