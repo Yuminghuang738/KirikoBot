@@ -241,7 +241,7 @@ async function overviewHTML(){
         <span class="ph-right"><button class="btn sm" onclick="loadPage('logs')">打开日志页 →</button></span>
       </div>
       <div class="panel-body"><div class="logs" id="overview-logs" style="max-height:280px">${
-        allLines.slice(-40).map(l=>'<div class="log-entry '+entryClass(l)+'">'+(l.display||('<span class="ts">'+l.time+'</span>'+l.msg))+'</div>').join('')||'<div class="empty">等待日志…</div>'
+        allLines.slice(-40).map(logLineHTML).join('')||'<div class="empty">等待日志…</div>'
       }</div></div>
     </div>
   </div>`;
@@ -288,8 +288,14 @@ function logsPageHTML(){
     <div class="panel-body"><div class="logs" id="logs-view" style="height:calc(100vh - 440px);min-height:260px"></div></div>
   </div>`;
 }
-function bindLogsIf(id){const lv=$(id);if(!lv)return;lv.innerHTML=allLines.slice(-50).map(l=>'<div class="log-entry '+entryClass(l)+'">'+(l.display||('<span class="ts">'+l.time+'</span>'+l.msg))+'</div>').join('');lv.dataset.count=String(allLines.length);const tb=lv.parentElement.parentElement;if(tb)$$('button[data-lvl]',tb).forEach(b=>b.addEventListener('click',()=>{$$('button[data-lvl]',tb).forEach(x=>x.classList.remove('on'));b.classList.add('on');activeLevel=b.dataset.lvl;renderLogs(lv)}))}
+function bindLogsIf(id){const lv=$(id);if(!lv)return;lv.innerHTML=allLines.slice(-50).map(logLineHTML).join('');lv.dataset.count=String(allLines.length);const tb=lv.parentElement.parentElement;if(tb)$$('button[data-lvl]',tb).forEach(b=>b.addEventListener('click',()=>{$$('button[data-lvl]',tb).forEach(x=>x.classList.remove('on'));b.classList.add('on');activeLevel=b.dataset.lvl;renderLogs(lv)}))}
 function entryClass(l){if(l.level==='ERROR')return'E';if(l.level==='WARNING')return'W';if(l.name==='think')return'T';return'I'}
+// `display` is pre-escaped server-side (see log_stream.SSELogHandler). The
+// fallback path must escape too — otherwise a QQ nickname becomes stored XSS.
+function logLineHTML(l){
+  const inner=l.display||('<span class="ts">'+esc(l.time)+'</span>'+esc(l.msg));
+  return '<div class="log-entry '+entryClass(l)+'">'+inner+'</div>';
+}
 function renderLogs(lv){
   if(!lv)lv=$('logs-view');if(!lv)return;
   const q=($('logFilter')||{value:''}).value.toLowerCase();
@@ -303,7 +309,7 @@ function renderLogs(lv){
     if(q&&!(l.time+' '+l.msg).toLowerCase().includes(q))return;
     const d=document.createElement('div');
     d.className='log-entry '+entryClass(l)+(unfiltered&&idx>=prev?' log-new':'');
-    d.innerHTML=l.display||('<span class="ts">'+l.time+'</span>'+l.msg);lv.appendChild(d);n++
+    d.innerHTML=l.display||('<span class="ts">'+esc(l.time)+'</span>'+esc(l.msg));lv.appendChild(d);n++
   });
   lv.dataset.count=String(allLines.length);
   if(!n)lv.innerHTML='<div class="empty">无匹配日志</div>';
@@ -607,13 +613,14 @@ async function featuresHTML(){
   </div>
   <div class="panel-body" style="max-height:50vh;overflow-y:auto" id="featList">`;
   d.features.forEach(x=>{
-    h+=`<div class="feature-item" data-fid="${x.id}" data-fstatus="${x.status}" data-fpriority="${x.priority}" data-fcategory="${x.category||'未分类'}">
+    const fcat=x.category||'未分类';
+    h+=`<div class="feature-item" data-fid="${x.id}" data-fstatus="${esc(x.status)}" data-fpriority="${esc(x.priority)}" data-fcategory="${esc(fcat)}">
       <div class="f-top">
-        <b style="color:var(--accent)">${x.summary||x.request.substr(0,20)}</b>
-        <span class="tag" style="background:${catColor[x.category]||'#8b949e'}22;color:${catColor[x.category]||'#8b949e'}">${x.category||'未分类'}</span>
-        <span class="tag" style="color:var(--yellow)">${prio[x.priority]||x.priority}</span>
-        <span class="tag ${x.status==='pending'?'warn':x.status==='done'?'ok':'err'}">${stat[x.status]||x.status}</span>
-        <span style="font-size:.68rem;color:var(--muted)">${x.user_name} · ${x.time}</span>
+        <b style="color:var(--accent)">${esc(x.summary||String(x.request||'').substr(0,20))}</b>
+        <span class="tag" style="background:${catColor[fcat]||'#8b949e'}22;color:${catColor[fcat]||'#8b949e'}">${esc(fcat)}</span>
+        <span class="tag" style="color:var(--yellow)">${esc(prio[x.priority]||x.priority)}</span>
+        <span class="tag ${x.status==='pending'?'warn':x.status==='done'?'ok':'err'}">${esc(stat[x.status]||x.status)}</span>
+        <span style="font-size:.68rem;color:var(--muted)">${esc(x.user_name)} · ${esc(x.time)}</span>
         <span class="f-actions">
           ${x.status!=='done'?`<button class="btn-done" title="标记完成" onclick="updateFeature(${x.id},'done')">✅</button>`:''}
           ${x.status!=='rejected'?`<button class="btn-reject" title="拒绝" onclick="updateFeature(${x.id},'rejected')">❌</button>`:''}
@@ -621,7 +628,7 @@ async function featuresHTML(){
           <button class="btn-del" title="删除" onclick="delFeature(${x.id})">🗑️</button>
         </span>
       </div>
-      <div class="f-request">${x.request}</div>
+      <div class="f-request">${esc(x.request)}</div>
     </div>`;
   });
   return h+`</div></div>`;
@@ -693,11 +700,11 @@ async function versionsHTML(){
   // Current version card
   if(current){
     h+=`<div class="panel"><div class="panel-header">🟢 当前版本：v${current.version}
-      <span style="font-size:.7rem;color:var(--muted);margin-left:8px">${current.release_date} · ${current.author}</span>
+      <span style="font-size:.7rem;color:var(--muted);margin-left:8px">${esc(current.release_date)} · ${esc(current.author)}</span>
       <span class="ph-right"><button class="btn primary" onclick="scrollToVersion(${current.id})">查看详情</button></span>
     </div>`;
     if(current.description){
-      h+=`<div class="panel-body"><div style="font-size:.78rem;color:var(--text);line-height:1.6">${current.description}</div></div>`;
+      h+=`<div class="panel-body"><div style="font-size:.78rem;color:var(--text);line-height:1.6">${esc(current.description)}</div></div>`;
     }
     // Recent changelogs for current version
     const logs=current.changelogs||[];
@@ -947,7 +954,7 @@ async function stickersHTML(){
       <select id="stickerCategoryFilter" onchange="filterStickers()">
         <option value="">全部 (${d.total})</option>`;
     (cats.categories||[]).forEach(c=>{
-      h+=`<option value="${c.name}">${c.name} (${c.count})</option>`;
+      h+=`<option value="${esc(c.name)}">${esc(c.name)} (${c.count})</option>`;
     });
     h+=`</select></div>`;
   }
@@ -1401,10 +1408,10 @@ async function adjustAffection(){
       body:JSON.stringify({user_id:uid,group_id:gid,delta,note}),
     }).then(r=>r.json());
     if(r.ok){
-      if(msg)msg.innerHTML=`<span style="color:var(--green)">✅ 已调整：${r.adjusted.affection_score}分 ${r.adjusted.emoji}${r.adjusted.relationship}</span>`;
+      if(msg)msg.innerHTML=`<span style="color:var(--green)">✅ 已调整：${esc(r.adjusted.affection_score)}分 ${esc(r.adjusted.emoji)}${esc(r.adjusted.relationship)}</span>`;
       loadAffectionBoard();
     }else{
-      if(msg)msg.innerHTML=`<span style="color:var(--red)">❌ ${r.error}</span>`;
+      if(msg)msg.innerHTML=`<span style="color:var(--red)">❌ ${esc(r.error)}</span>`;
     }
   }catch(e){
     if(msg)msg.innerHTML=`<span style="color:var(--red)">请求失败: ${e.message}</span>`;
@@ -1470,7 +1477,7 @@ function SettingsRenderScopeBar(){
     bar.innerHTML=`<div class="fld"><label>选择群聊</label>
       <select id="setGroupSelect">
         <option value="">— 请选择群 —</option>
-        ${SettingsGroups.map(g=>`<option value="${g.group_id}" ${g.group_id===SettingsScope.id?'selected':''}>${g.group_name}（${g.group_id}）${offCount[g.group_id]?` · 已关${offCount[g.group_id]}项`:''}</option>`).join('')}
+        ${SettingsGroups.map(g=>`<option value="${esc(g.group_id)}" ${g.group_id===SettingsScope.id?'selected':''}>${esc(g.group_name)}（${esc(g.group_id)}）${offCount[g.group_id]?` · 已关${offCount[g.group_id]}项`:''}</option>`).join('')}
       </select></div>
       <button class="btn accent" id="setResetBtn" onclick="SettingsReset()" ${SettingsScope.id?'':'disabled'}>♻️ 恢复默认（全部开启）</button>
       <span class="ph-sub" id="setScopeStatus"></span>`;

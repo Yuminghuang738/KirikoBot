@@ -20,6 +20,19 @@ class Config:
         ] if qq
     }
     ONEBOT_TOKEN: Final[str | None] = os.getenv("ONEBOT_TOKEN")
+    # Shared secret LLBot signs its http-post events with. LLBot (OB11HttpPost)
+    # sends `x-signature: sha1=<HMAC-SHA1(raw body)>` keyed by the token set on
+    # its http-post connection — NOT an Authorization header. Defaults to
+    # ONEBOT_TOKEN so a correctly configured deployment is protected with no
+    # extra setting; set WEBHOOK_TOKEN to use a distinct secret.
+    WEBHOOK_TOKEN: Final[str | None] = os.getenv("WEBHOOK_TOKEN") or os.getenv("ONEBOT_TOKEN")
+    # ── Dashboard access ──────────────────────────────
+    # The panel can delete data and drive the QQ account, so it is protected by
+    # HTTP Basic auth. Leave DASHBOARD_PASSWORD empty and one is generated on
+    # first start into KirikoBot/.dashboard_password (gitignored).
+    DASHBOARD_USER: Final[str] = os.getenv("DASHBOARD_USER") or "admin"
+    DASHBOARD_PASSWORD: Final[str | None] = os.getenv("DASHBOARD_PASSWORD")
+    DASHBOARD_AUTH_ENABLED: Final[bool] = os.getenv("DASHBOARD_AUTH", "1") == "1"
     DEEPSEEK_API: Final[str] = os.getenv("DEEPSEEK_API") or "https://api.deepseek.com/chat/completions"
     DEEPSEEK_TOKEN: Final[str | None] = os.getenv("DEEPSEEK_TOKEN")
     # ── Model ─────────────────────────────────────────
@@ -41,6 +54,19 @@ class Config:
 
     REQUEST_TIMEOUT: Final[int] = 30
     MAX_RETRIES: Final[int] = 3
+
+    # ── Data retention & backups ──────────────────────
+    # Raw message tables grow forever otherwise. 0 disables pruning.
+    # Aggregates (profiles, affection, tool counts) are never pruned.
+    RETENTION_DAYS: Final[int] = int(os.getenv("RETENTION_DAYS") or 180)
+    BACKUP_ENABLED: Final[bool] = os.getenv("BACKUP_ENABLED", "1") == "1"
+    BACKUP_KEEP: Final[int] = int(os.getenv("BACKUP_KEEP") or 14)
+    # Defaults inside the app directory: in Docker the app is /app and that is
+    # the only path guaranteed to be writable *and* persisted by the compose
+    # mount. Point BACKUP_DIR elsewhere only if you also mount it.
+    BACKUP_DIR: Final[str] = os.getenv("BACKUP_DIR") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "backups"
+    )
 
     # ── LLBot WebUI bridge ────────────────────────────
     # The LLBot WebUI (React SPA) listens on :3080 and guards every /api/*

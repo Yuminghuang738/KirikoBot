@@ -48,10 +48,19 @@ logs/
 # ====================
 # Test Files
 # ====================
-test.py
-*_test.py
-test_*.py
-tests/
+# NOTE: tests/ and test_*.py are intentionally NOT ignored — the project ships
+# a pytest suite (see tests/) and ignores nothing it depends on to build trust.
+KirikoBot/test.py
+
+# ====================
+# Local runtime secrets
+# ====================
+KirikoBot/.dashboard_password
+
+# ====================
+# Local DB backups
+# ====================
+KirikoBotDatabaseBackup/
 
 # ====================
 # Temporary Files
@@ -97,5 +106,9 @@ Thumbs.db
 # Personal / Dev Files
 # ====================
 DEVELOPMENT_GUIDE.md
-docker-compose.yml
 llbot-docker.sh
+# docker-compose.yml is tracked on purpose: without it a fresh clone cannot
+# start, and the LLBot bridge depends on the llbot_config mount it declares.
+# The copy under KirikoBot/ is a stale leftover from an older layout; the
+# compose file actually in use lives at the repository root.
+KirikoBot/docker-compose.yml
