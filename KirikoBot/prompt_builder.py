@@ -54,16 +54,48 @@ STYLE_GUIDE = """【你是真人，不是助手】
 - 工具返回的内容要当成“你自己刚查到的”，用平常语气说出来，不要念数据"""
 
 
-def build_user_message(robot: Any) -> str:
-    """Build the user-role message — just the current interaction."""
+_REPLY_TEXT_LIMIT = 160
+
+
+def describe_reply(reply: Any, is_own: bool) -> str:
+    """Describe what the current message is quoting, in one compact line.
+
+    This is the fix for the most common "答非所问" case: user B replies to a
+    message the bot sent to user A, and the bot — which never saw the quote —
+    answers as if B had raised a brand new topic.
+    """
+    if reply is None:
+        return ""
+    text = " ".join(str(reply.text or "").split())
+    if len(text) > _REPLY_TEXT_LIMIT:
+        text = text[:_REPLY_TEXT_LIMIT] + "…"
+    if not text:
+        text = "[图片/表情]" if getattr(reply, "has_images", False) else "[空消息]"
+
+    if is_own:
+        return (
+            f"【引用回复】这条消息引用的是**你自己（Kiriko）之前说过的话**：「{text}」。"
+            "对方是在接着你这句往下说，顺着这个语境回应即可，不要当成新话题。"
+        )
+    who = getattr(reply, "sender_name", "") or "群里的某个人"
+    return f"【引用回复】这条消息引用的是 {who} 说过的话：「{text}」。"
+
+
+def build_user_message(robot: Any, reply_note: str = "") -> str:
+    """Build the user-role message — just the current interaction.
+
+    The quote note is prepended (rather than put in the system prompt) so it
+    sits right next to the message it explains.
+    """
     msg = robot.msg.strip()
     if not msg:
         # Fallback so image-only / empty messages never reach the AI as blank text
         msg = "[图片消息]" if robot.incoming.has_images else "[空消息]"
+    prefix = f"{reply_note}\n" if reply_note else ""
     if robot.msg_type == "group":
-        return (f"群「{robot.group_name or ''}」中 "
+        return (f"{prefix}群「{robot.group_name or ''}」中 "
                 f"用户 {robot.user_name} 说：{msg}")
-    return f"用户 {robot.user_name} 说：{msg}"
+    return f"{prefix}用户 {robot.user_name} 说：{msg}"
 
 
 def build_system_prompt(
