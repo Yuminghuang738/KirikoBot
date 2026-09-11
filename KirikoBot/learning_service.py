@@ -6,6 +6,7 @@ from typing import Any
 
 import requests
 
+from ai_server import quick_chat
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -103,29 +104,12 @@ class LearningService:
             "用一句话总结（20-50字），格式：'[类型] 具体教训'。只输出教训文本。"
         )
 
-        try:
-            r = requests.post(
-                Config.DEEPSEEK_API,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {Config.DEEPSEEK_TOKEN}",
-                },
-                json={
-                    "messages": [
-                        {"role": "system", "content": "你是一个AI行为评估器，根据用户反馈总结AI表现教训。输出简洁的一句话。"},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "model": Config.DEEPSEEK_MODEL,
-                    "max_tokens": 100,
-                    "temperature": 0,
-                    # One-line verdict — no chain-of-thought needed.
-                    "thinking": {"type": "disabled"},
-                },
-                timeout=15,
-            )
-            r.raise_for_status()
-            note = r.json()["choices"][0]["message"]["content"].strip()
-        except Exception:
+        note = quick_chat(
+            "你是一个AI行为评估器，根据用户反馈总结AI表现教训。输出简洁的一句话。",
+            prompt,
+            max_tokens=100, temperature=0, timeout=15,
+        )
+        if note is None:
             logger.info("Learning evaluation skipped (API unavailable)")
             return None
 

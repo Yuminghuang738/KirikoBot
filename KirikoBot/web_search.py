@@ -88,6 +88,7 @@ class WebSearch:
                 if len(results) >= self.MAX_SEARCH_RESULTS:
                     break
             except Exception:
+                logger.debug("web_search._search 忽略了异常", exc_info=True)
                 continue
 
         logger.info("Search '%s' → %d results", query[:40], len(results))

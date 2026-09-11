@@ -63,7 +63,7 @@ class StickerCollector:
                 if h:
                     hashes.add(h)
             except Exception:
-                pass
+                logger.debug("sticker_collector._build_index 忽略了异常", exc_info=True)
         logger.debug("Sticker index built: %d hashes", len(hashes))
         return hashes
 
@@ -82,7 +82,7 @@ class StickerCollector:
                 if ph and ph not in phashes:
                     phashes[ph] = fname
             except Exception:
-                pass
+                logger.debug("sticker_collector._build_phash_index 忽略了异常", exc_info=True)
         logger.debug("pHash index built: %d unique hashes", len(phashes))
         return phashes
 
@@ -168,6 +168,7 @@ class StickerCollector:
                     )
                     return True
             except Exception:
+                logger.debug("sticker_collector._is_visual_duplicate 忽略了异常", exc_info=True)
                 continue
 
         return False
@@ -194,7 +195,7 @@ class StickerCollector:
                     "phash": ph,
                 })
             except Exception:
-                pass
+                logger.debug("sticker_collector.find_duplicates 忽略了异常", exc_info=True)
 
         if not all_files:
             return []
@@ -221,6 +222,7 @@ class StickerCollector:
             try:
                 hi = imagehash.hex_to_hash(phi)
             except Exception:
+                logger.debug("sticker_collector.find_duplicates 忽略了异常", exc_info=True)
                 continue
             for j in range(i + 1, len(all_files)):
                 phj = all_files[j]["phash"]
@@ -229,6 +231,7 @@ class StickerCollector:
                 try:
                     hj = imagehash.hex_to_hash(phj)
                 except Exception:
+                    logger.debug("sticker_collector.find_duplicates 忽略了异常", exc_info=True)
                     continue
                 if hi - hj <= PHASH_THRESHOLD:
                     union(all_files[i]["filename"], all_files[j]["filename"])
@@ -351,14 +354,14 @@ class StickerCollector:
                         file_hash = self._md5_file(fpath) or ""
                         self._db.insert_sticker(fname, file_hash, file_size, group_id, user_id)
                     except Exception:
-                        pass
+                        logger.debug("sticker_collector.collect 忽略了异常", exc_info=True)
                 # Auto-categorize asynchronously using vision API
                 if self._executor and self._db:
                     try:
                         url_for_vision = image_url or os.path.join(STICKER_DIR, fname)
                         self._executor.submit(self._auto_categorize, fname, url_for_vision)
                     except Exception:
-                        pass
+                        logger.debug("sticker_collector.collect 忽略了异常", exc_info=True)
 
         return (saved, saved_filenames)
 
@@ -376,7 +379,7 @@ class StickerCollector:
                     logger.info("Skipping large: %s (%d)", url[:60], cl)
                     return None
             except Exception:
-                pass
+                logger.debug("sticker_collector._download 忽略了异常", exc_info=True)
 
             r = requests.get(url, timeout=15, allow_redirects=True, stream=True)
             r.raise_for_status()

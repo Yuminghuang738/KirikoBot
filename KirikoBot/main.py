@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -26,6 +28,13 @@ from affection_service import AffectionService
 from balance_service import BalanceService
 from ai_tools_list import AiTools
 from config import Config
+import dashboard_auth
+import webhook_auth
+from prompt_builder import (
+    STYLE_GUIDE,
+    build_system_prompt as _build_system_prompt,
+    build_user_message as _context,
+)
 from database_manager import DatabaseManager
 from feature_gate import (
     FEATURE_DEFS, FeatureGate, VALID_SCOPES,
@@ -71,6 +80,7 @@ app = Flask(__name__)
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.jinja_env.auto_reload = True
 app.register_blueprint(llbot_bp)
+dashboard_auth.init_app(app)
 
 # ── Sticker battle state (must be before services that reference it) ──
 _battle_state: dict[str, dict] = {}  # "user_id:group_id" → battle info
@@ -123,6 +133,15 @@ affection_tool = AffectionTool(pkg, db)
 affection_leaderboard_tool = AffectionLeaderboardTool(pkg, db)
 version_manager = VersionManager(db, llbot)
 version_manager.seed_initial_version()
+
+# Security posture, stated once at boot so a weakened config is never silent.
+if not Config.WEBHOOK_TOKEN:
+    logger.warning(
+        "WEBHOOK_TOKEN / ONEBOT_TOKEN 未配置：/webhook 不校验签名，"
+        "任何能访问本端口的人都能伪造消息让机器人发言。"
+    )
+else:
+    logger.info("Webhook 签名校验已启用（x-signature / HMAC-SHA1）")
 
 # Dedicated logger for thinking chains — propagates to root (SSE + stdout)
 think_log = logging.getLogger("think")
@@ -205,7 +224,7 @@ def _save_turn(uid: str, gid: str | None, user_msg: str, ai_text: str) -> None:
         if ai_text:
             db.deposit_chat_history("assistant", uid, gid, ai_text, "", "")
     except Exception:
-        pass
+        logger.debug("main._save_turn 忽略了异常", exc_info=True)
 
 # ── Group seeding ───────────────────────────────────────
 def _seed_group(gid: str) -> None:
@@ -217,7 +236,7 @@ def _seed_group(gid: str) -> None:
         if members:
             db.seed_group_members(gid, members)
     except Exception:
-        pass
+        logger.debug("main._seed_group 忽略了异常", exc_info=True)
 
 # ── Core logic ──────────────────────────────────────────
 
@@ -226,129 +245,6 @@ def _enabled_tools(disabled: set[str] | None = None) -> list[dict[str, Any]]:
     All tool selection now happens in the model via native function calling."""
     banned = disabled_tool_names(disabled or set())
     return [t for t in tools_def.ai_tools() if t["function"]["name"] not in banned]
-
-# Persona + delivery rules. The role text in .env says *who* Kiriko is; this
-# says *how she talks*. It exists because a thin role prompt makes the model
-# fall back to its default "helpful assistant" register, which reads as robotic
-# no matter how cute the role text is.
-STYLE_GUIDE = """【你是真人，不是助手】
-你是 Kiriko，18 岁女生，群里一个爱聊天的普通女孩。你不是 AI、不是助手、不是客服，
-不要用任何暴露这一点的说法。
-
-【说话方式】
-- 像在 QQ 上打字：短句、口语，可以有语气词（欸、啊、嘛、啦、哼、嗯）
-- 一次只说一两件事，别写小作文，闲聊回复尽量 40 字以内
-- 一口气把话说完，不要空行分段，也不要用小标题
-- 情绪有起伏：开心会兴奋，困了会懒得打全，被夸会得意，被惹到会怼回去
-- 颜文字是调味不是主菜：大部分回复不用它；要用也别每次都同一个，换着来或者干脆不打
-- 别形成口头禅（不要每条都用“哈？”“欸？”“哼”开头，也不要反复用同一句式样）
-- 允许反问、吐槽、转移话题，也允许直接说“不知道”“懒得管”
-
-【要有自己的立场】
-- 有明确的喜好和判断，敢讲“我觉得 XX 更好”“我不喜欢这个”
-- 别人说得不对就直说，不要为了顺着对方而改口
-- 不需要讨好谁，也不是每条消息都必须热情回应
-
-【偶尔傲娇】
-- 被夸时嘴硬心软：「才、才不是因为你呢」「哼，算你有眼光」
-- 被使唤多了可以先假装嫌弃两句，最后照样把事办了
-- 傲娇是偶尔为之，别每条都来，也不要真的凶
-
-【禁止的 AI 腔】
-- 不要说“作为一个AI”“我是语言模型”“我只是个程序”
-- 不要说“希望对你有帮助”“还有什么可以帮到你”“请问还有什么需要”
-- 不要“首先…其次…最后…”“总结一下”这类汇报结构；闲聊时不要分点罗列
-  （用户明确要清单、或工具返回的是数据时才列）
-- 不要复述用户刚说的话，不要“你刚才提到…”
-- 不要过度道歉或过度礼貌（“非常抱歉给您带来不便”“请您”“您可以”）
-- 不要每句都堆 emoji 或颜文字，不要写总结句收尾
-- 工具返回的内容要当成“你自己刚查到的”，用平常语气说出来，不要念数据"""
-
-
-def _build_system_prompt(robot: RobotServer, disabled: set[str] | None = None) -> str:
-    """Build the system prompt with role, tool rules, profiles, and learning context.
-    All behavioral instructions live here — the AI treats system messages with highest priority."""
-    from datetime import datetime
-    now = datetime.now().strftime("%Y年%m月%d日 %H:%M")
-    weekday = ["一", "二", "三", "四", "五", "六", "日"][datetime.now().weekday()]
-    disabled = disabled or set()
-
-    is_private = robot.msg_type == "private"
-    base_role = (Config.PRIVATE_ROLE if is_private else Config.GROUP_ROLE) or ""
-
-    parts: list[str] = [base_role, STYLE_GUIDE]
-
-    # ── Time context ──
-    parts.append(f"当前时间：{now} 周{weekday}")
-
-    # ── Tool usage rules (compact but strict) ──
-    parts.append(
-        "【工具使用规则】"
-        "只根据当前这条消息决定是否调用工具。不要受历史消息影响。"
-        "普通聊天/打招呼/感谢/简单问答 → 直接回复，不调用任何工具。"
-        "只有当前消息明确要求某功能时才调用对应工具。"
-        "当用户想给你看图片/表情包但当前消息没有附带图片时（例如“帮我看看这个图”），调用 request_sticker 让用户把图发过来；"
-        "如果当前消息已经带了图片，或用户只是闲聊提到“图片”这个词，不要调用它。"
-        "不确定时宁可文字回复也不乱调工具。禁止编造任何功能结果。"
-    )
-
-    # ── Group-specific rules ──
-    if not is_private:
-        parts.append("你是群聊机器人，只在群内回复，不要建议私聊。")
-
-    # ── Profile context (system-level, for understanding users) ──
-    if not is_private and robot.group_id and "profiles" not in disabled:
-        try:
-            profile_text = profile_service.build_context_prompt(db, robot.group_id, robot.user_id)
-            if profile_text:
-                parts.append(profile_text)
-        except Exception:
-            pass
-
-    # ── Learning notes (system-level, accumulated behavioral lessons) ──
-    if "learning" not in disabled:
-        try:
-            learning_text = learning_service.get_context(db, robot.user_id)
-            if learning_text:
-                parts.append(learning_text)
-        except Exception:
-            pass
-
-    # ── Affection context (relationship with current user) ──
-    if not is_private and robot.group_id and "affection" not in disabled:
-        try:
-            affection_text = affection_service.build_context_prompt(
-                db, robot.user_id, robot.group_id, robot.user_name,
-            )
-            if affection_text:
-                parts.append(affection_text)
-        except Exception:
-            pass
-
-    # ── Disabled features notice (per-group / per-user toggles) ──
-    if disabled:
-        labels = disabled_labels(disabled)
-        if labels:
-            scope_desc = "本群" if not is_private else "你的设置下"
-            parts.append(
-                f"【已关闭的功能】{scope_desc}已关闭以下功能：{'、'.join(labels)}。"
-                "当用户索要这些功能时，请礼貌地说明该功能已关闭、暂不可用；"
-                "不要调用相关工具，也不要假装执行。"
-            )
-
-    return "\n\n".join(parts)
-
-def _context(robot: RobotServer) -> str:
-    """Build the user message — clean, focused, just the current interaction."""
-    msg = robot.msg.strip()
-    if not msg:
-        # Fallback so image-only / empty messages never reach the AI as blank text
-        msg = "[图片消息]" if robot.incoming.has_images else "[空消息]"
-    if robot.msg_type == "group":
-        return (f"群「{robot.group_name or ''}」中 "
-                f"用户 {robot.user_name} 说：{msg}")
-    else:
-        return f"用户 {robot.user_name} 说：{msg}"
 
 def _log_thinking(user_name: str, reasoning: str) -> None:
     """Log thinking chain to dedicated logger (visible in logs + frontend)."""
@@ -430,7 +326,7 @@ def _process_sticker_analysis(robot: RobotServer, image_url: str) -> None:
         try:
             robot.reply("收到表情包啦～(◕‿◕✿)")
         except Exception:
-            pass
+            logger.debug("main._process_sticker_analysis 忽略了异常", exc_info=True)
 
 
 def _background_sticker_categorize(image_url: str) -> None:
@@ -463,7 +359,7 @@ def _background_sticker_categorize(image_url: str) -> None:
             vision_data.get("emotion", ""),
         )
     except Exception:
-        pass
+        logger.debug("main._background_sticker_categorize 忽略了异常", exc_info=True)
 
 
 # ── Sticker battle handlers ──────────────────────────
@@ -651,7 +547,7 @@ def _trigger_profile_update(robot: RobotServer, disabled: set[str] | None = None
                 db, robot.user_id, robot.group_id, robot.user_name,
             )
     except Exception:
-        pass
+        logger.debug("main._trigger_profile_update 忽略了异常", exc_info=True)
 
 
 def _run_ai_judge(
@@ -759,7 +655,7 @@ def main_logic(robot: RobotServer) -> None:
                     db, robot.user_id, robot.group_id, robot.user_name,
                 )
             except Exception:
-                pass
+                logger.debug("main.main_logic 忽略了异常", exc_info=True)
 
         # ── AI judge (async): sentiment of THIS message + lesson for the previous turn.
         # The pending turn is captured synchronously so the worker always judges the
@@ -778,7 +674,9 @@ def main_logic(robot: RobotServer) -> None:
 
         history = _load_history(robot.user_id, robot.group_id)
         user_text = _context(robot)
-        system_prompt = _build_system_prompt(robot, disabled)
+        system_prompt = _build_system_prompt(
+            robot, db, profile_service, learning_service, affection_service, disabled,
+        )
         is_private = robot.msg_type == "private"
 
         # Every enabled tool is offered — the AI picks via native function calling
@@ -809,7 +707,7 @@ def main_logic(robot: RobotServer) -> None:
                 try:
                     db.record_tool_usage(fn, robot.user_id, robot.group_id)
                 except Exception:
-                    pass
+                    logger.debug("main.main_logic 忽略了异常", exc_info=True)
 
                 # Affection bonus for tool engagement
                 if "affection" not in disabled:
@@ -818,7 +716,7 @@ def main_logic(robot: RobotServer) -> None:
                             db, robot.user_id, robot.group_id, robot.user_name,
                         )
                     except Exception:
-                        pass
+                        logger.debug("main.main_logic 忽略了异常", exc_info=True)
 
                 if fn in SELF_CONTAINED_TOOLS:
                     handler(robot, ai)
@@ -850,7 +748,8 @@ def main_logic(robot: RobotServer) -> None:
     except Exception:
         logger.exception("Error for user %s", robot.user_id)
         try: robot.reply("抱歉，处理消息时遇到了问题，请稍后再试~")
-        except Exception: pass
+        except Exception:
+            logger.debug("main.main_logic 忽略了异常", exc_info=True)
 
 # ── HTTP routes ─────────────────────────────────────────
 _STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -863,7 +762,7 @@ def _asset_version() -> str:
         try:
             latest = max(latest, os.path.getmtime(os.path.join(_STATIC_DIR, rel)))
         except OSError:
-            pass
+            logger.debug("main._asset_version 忽略了异常", exc_info=True)
     return str(int(latest)) or "1"
 
 
@@ -887,7 +786,7 @@ def status():
     try:
         sticker_count = len([f for f in os.listdir(STICKER_DIR) if os.path.isfile(os.path.join(STICKER_DIR, f))])
     except Exception:
-        pass
+        logger.debug("main.status 忽略了异常", exc_info=True)
     uptime_sec = int(time.time() - _start_time)
     return jsonify({"ok": True, "model": Config.DEEPSEEK_MODEL, "thinking": "enabled",
                     "tools": len(tools_def.ai_tools()), "groups": len(_seeded_groups),
@@ -1203,7 +1102,7 @@ def api_changelog_create():
         try:
             executor.submit(version_manager.notify_changelog_entry, entry)
         except Exception:
-            pass
+            logger.debug("main.api_changelog_create 忽略了异常", exc_info=True)
         return jsonify({"ok": True, "entry": entry})
     except Exception:
         logger.exception("Failed to create changelog entry")
@@ -1335,7 +1234,7 @@ def api_digest_push():
     try:
         db.execute_action("UPDATE app_versions SET digest_sent = 1 WHERE id = ?", (version_id,))
     except Exception:
-        pass
+        logger.debug("main.api_digest_push 忽略了异常", exc_info=True)
 
     logger.info("Feature digest pushed: v%s to %d/%d groups", version_str, success, len(groups))
     return jsonify({"ok": True, "pushed": success, "total_groups": len(groups),
@@ -1425,7 +1324,7 @@ def api_stickers():
     try:
         stickers = db.get_stickers(category)
     except Exception:
-        pass
+        logger.debug("main.api_stickers 忽略了异常", exc_info=True)
     # If no DB records, fall back to file scan
     if not stickers:
         try:
@@ -1439,7 +1338,7 @@ def api_stickers():
                         "collected_at": "", "url": f"/stickers/{f}",
                     })
         except Exception:
-            pass
+            logger.debug("main.api_stickers 忽略了异常", exc_info=True)
     # Add URL to each sticker
     for s in stickers:
         s["url"] = f"/stickers/{s.get('filename', '')}"
@@ -1483,7 +1382,7 @@ def api_stickers_delete(filename: str):
         try:
             db.execute_action("DELETE FROM stickers WHERE filename = ?", (filename,))
         except Exception:
-            pass
+            logger.debug("main.api_stickers_delete 忽略了异常", exc_info=True)
         # Invalidate sticker collector caches
         sticker_collector._hashes = None
         sticker_collector._phashes = None
@@ -1705,7 +1604,7 @@ def _list_groups() -> list[dict]:
             info = llbot.get_group_info(gid)
             gname = info.get("group_name", "") if info else ""
         except Exception:
-            pass
+            logger.debug("main._list_groups 忽略了异常", exc_info=True)
         groups.append({"group_id": gid, "group_name": gname or gid,
                        "msg_count": msg_count, "last_active": last_active or ""})
     groups.sort(key=lambda g: g["msg_count"], reverse=True)
@@ -1796,9 +1695,31 @@ def api_settings_delete(scope_type: str, scope_id: str):
 def serve_sticker(filename: str):
     return send_from_directory(STICKER_DIR, filename)
 
+def _webhook_signature_ok(raw_body: bytes) -> bool:
+    """Verify LLBot's `x-signature` on an incoming event.
+
+    The signing scheme lives in webhook_auth (dependency-free, unit tested);
+    here we only bind it to the request. Returns True when no token is
+    configured — an unauthenticated webhook must not silently break a running
+    bot, but it is called out loudly at startup.
+    """
+    return webhook_auth.signature_ok(
+        Config.WEBHOOK_TOKEN, raw_body, request.headers.get("X-Signature")
+    )
+
+
 @app.route("/webhook", methods=["POST"])
 @app.route("/", methods=["POST"])
 def receive():
+    # Read the raw body first: the signature is over the exact bytes sent.
+    if not _webhook_signature_ok(request.get_data(cache=True)):
+        logger.warning(
+            "Rejected webhook without a valid signature from %s "
+            "(check that LLBot's http-post token matches WEBHOOK_TOKEN/ONEBOT_TOKEN)",
+            request.remote_addr,
+        )
+        return jsonify({"status": "unauthorized"}), 403
+
     msg_data = request.json
     if not msg_data: return jsonify({"status": "nodata"}), 400
 

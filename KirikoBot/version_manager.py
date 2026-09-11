@@ -380,7 +380,7 @@ class VersionManager:
             if rows:
                 version = rows[0][0]
         except Exception:
-            pass
+            logger.debug("version_manager.notify_changelog_entry 忽略了异常", exc_info=True)
 
         message = self._build_changelog_message(entry, version or "?")
 

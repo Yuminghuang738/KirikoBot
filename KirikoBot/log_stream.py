@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import logging
 import queue
 import threading
@@ -28,15 +29,21 @@ class SSELogHandler(logging.Handler):
                 "name": record.name,             # logger name ("think", "main", etc.)
                 "msg": record.getMessage(),      # actual log message
             }
+            # `display` is injected into the dashboard with innerHTML, and log
+            # messages routinely carry user-controlled text (QQ nicknames,
+            # message bodies, model output). Escape it or a nickname like
+            # `<img src=x onerror=...>` becomes stored XSS in the admin panel.
+            msg = html.escape(entry["msg"], quote=False)
+            ts = html.escape(entry["time"], quote=False)
             # Precomputed display line: time + level tag + name tag + msg
             if record.name == "think":
-                entry["display"] = f'<span class="ts">{entry["time"]}</span><b class="think-tag">🧠思维链</b> {entry["msg"]}'
+                entry["display"] = f'<span class="ts">{ts}</span><b class="think-tag">🧠思维链</b> {msg}'
             elif record.levelname == "ERROR":
-                entry["display"] = f'<span class="ts">{entry["time"]}</span><b class="err-tag">ERR</b> {entry["msg"]}'
+                entry["display"] = f'<span class="ts">{ts}</span><b class="err-tag">ERR</b> {msg}'
             elif record.levelname == "WARNING":
-                entry["display"] = f'<span class="ts">{entry["time"]}</span><b class="warn-tag">WARN</b> {entry["msg"]}'
+                entry["display"] = f'<span class="ts">{ts}</span><b class="warn-tag">WARN</b> {msg}'
             else:
-                entry["display"] = f'<span class="ts">{entry["time"]}</span>{entry["msg"]}'
+                entry["display"] = f'<span class="ts">{ts}</span>{msg}'
             # Non-blocking put; drop oldest if full
             while True:
                 try:

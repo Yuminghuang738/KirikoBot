@@ -8,6 +8,8 @@ import time
 from datetime import datetime, timedelta
 from typing import Any
 
+import maintenance_service
+
 logger = logging.getLogger(__name__)
 
 
@@ -56,6 +58,8 @@ class BotScheduler:
             try:
                 self._check_reminders()
                 self._check_greetings()
+                # Retention + DB backup, self-guarded to run once per day
+                maintenance_service.run_daily(self.db, self.db.db_file)
             except Exception:
                 logger.exception("Scheduler loop error")
             time.sleep(self.CHECK_INTERVAL)
@@ -162,7 +166,7 @@ class BotScheduler:
         try:
             gaming_items = self.news_crawler.fetch_gaming_news()
         except Exception:
-            pass
+            logger.debug("scheduler._morning_greeting 忽略了异常", exc_info=True)
 
         for gid in groups:
             lines = ["☀️ 早上好！新的一天开始啦～ (◕‿◕✿)", ""]
@@ -261,6 +265,7 @@ def parse_reminder_time(text: str) -> tuple[str | None, str | None, int]:
             try:
                 remind_time, content = time_fn(match)
             except Exception:
+                logger.debug("scheduler.parse_reminder_time 忽略了异常", exc_info=True)
                 continue
             if remind_time <= now:
                 remind_time += timedelta(days=1)
@@ -296,6 +301,7 @@ def parse_reminder_time(text: str) -> tuple[str | None, str | None, int]:
             try:
                 remind_time, content = time_fn(match)
             except Exception:
+                logger.debug("scheduler.parse_reminder_time 忽略了异常", exc_info=True)
                 continue
             if remind_time <= now:
                 remind_time += timedelta(days=1)
