@@ -1,13 +1,13 @@
 # 🤖 KirikoBot — 基于 LLBot + DeepSeek 的 QQ 聊天机器人
 
-一个运行在 **LLBot / OneBot** 框架上的 QQ 机器人，集成 **DeepSeek V4** 大模型，提供智能对话、工具调用、定时任务、版本管理等丰富功能。机器人采用可爱女孩风格（Kiriko），支持颜文字。
+一个运行在 **LLBot / OneBot** 框架上的 QQ 机器人，集成 **DeepSeek V4.1 Flash** 大模型，提供智能对话、工具调用、定时任务、版本管理等丰富功能。机器人采用可爱女孩风格（Kiriko），支持颜文字。
 
 ---
 
 ## ✨ 主要功能
 
 ### 💬 AI 对话
-- 接入 DeepSeek V4 API，支持 Thinking 思维链
+- 接入 DeepSeek V4.1 Flash API（模型名 `deepseek-flash`），支持 Thinking 思维链
 - 群聊 @机器人 或私聊触发，16 轮对话记忆
 - 用户画像分析 + 自学习反馈系统
 
@@ -74,10 +74,19 @@ ONEBOT_API       = "http://llbot:3000"
 ONEBOT_TOKEN     = "llbot_kiriko_token"
 DEEPSEEK_API     = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_TOKEN   = "你的DeepSeek API Key"
+DEEPSEEK_MODEL   = "deepseek-flash"     # DeepSeek V4.1 Flash
+DEEPSEEK_REASONING_EFFORT = "low"       # 思考强度 low/high/max
 GROUP_ROLE       = "你是聊天小助手Kiriko...（群聊人设）"
 PRIVATE_ROLE     = "你是聊天小助手Kiriko...（私聊人设）"
 TAROT_ROLE       = "你是牌面解读助手Kiriko..."
+
+# 管理面板内嵌 LLBot（可选，留空则用默认值）
+LLBOT_WEBUI_URL        = "http://llbot:3080"        # 后端访问地址（容器内网）
+LLBOT_WEBUI_PUBLIC_URL = ""                          # 浏览器访问地址，留空自动推导
 ```
+
+> 面板的「连接状态 / WebQQ」页面通过 `llbot_config/webui_token.txt` 自动登录 LLBot WebUI，
+> 无需再手工填密码。`docker-compose.yml` 已把该目录只读挂载进机器人容器。
 
 ### 3. 安装 LLBot Docker 框架
 
@@ -127,6 +136,7 @@ KirikoBot/
 ├── political_news.py      # 时政新闻（BBC/VOA）
 ├── sticker_collector.py   # 表情包收集
 ├── web_search.py          # 联网搜索
+├── llbot_webui.py         # LLBot WebUI 同源反代（自动注入密码）
 ├── .env.example           # 环境变量模板
 ├── VERSION                # 当前版本号
 ├── requirements.txt       # Python 依赖
@@ -134,9 +144,50 @@ KirikoBot/
 ├── docker-compose.yml     # Docker Compose 配置
 ├── stickers/              # 机器人表情包素材
 ├── carside_picture/       # 汽车侧面图素材
+├── static/
+│   ├── css/app.css        # 面板设计系统（日夜主题）
+│   └── js/app.js          # 面板前端逻辑
 └── templates/
-    └── dashboard.html     # Web 管理面板
+    └── dashboard.html     # Web 管理面板外壳
 ```
+
+---
+
+## 🖥 管理面板
+
+打开 `http://localhost:5000`，共 16 个页面，支持日间 / 夜间主题，纯本地资源、无外部 CDN 依赖。
+
+| 分组 | 页面 |
+|------|------|
+| 概览 | 总览、实时日志 |
+| 对话与用户 | 对话记录、群消息、用户画像、好感度、自学习 |
+| 内容与工具 | 提醒、塔罗、表情包、功能清单 |
+| 系统 | 版本日志、群管理、群设置 |
+
+**表情包自动分类**：新表情包收集时会自动调用视觉模型识别分类（可爱 / 搞笑 / 动物 / 动漫 …）
+并记录描述与情绪，无需手动批量分类。分类在后台线程执行，不影响回复速度。
+
+**删除群聊**：「群管理」页每个群都有删除按钮，会**永久清除该群全部数据**
+（群消息、对话记录、用户画像、好感度、工具调用、提醒、功能需求、学习笔记、功能开关），
+弹窗会先列出各项条数并要求输入群号确认；勾选「同时让机器人退出该 QQ 群」还会调用
+OneBot `set_group_leave` 让机器人退群（退群后需重新邀请）。
+表情包图库是全局共享的，不会被删除。
+| LLBot 连接 | 连接状态、WebQQ |
+
+**LLBot 整合方式**：面板不重造轮子 —— LLBot 自己的 React WebUI 功能很全，
+所以这里做的是「原生面板 + 原版兜底」：
+
+- **连接状态**：原生重做。登录状态、好友/群数量、消息收发、内存与 CPU、
+  设备版本、快速登录账号列表、**LLBot 实时日志**（SSE 转发）。
+- **WebQQ**：`iframe` 直接内嵌 LLBot 原版 WebUI，收发消息、群成员、通知等全部功能保持原样。
+
+认证是自动的：LLBot WebUI 的每个 `/api/*` 都要求请求头
+`x-webui-token: sha256(密码)`，密码明文存放在 `llbot_config/webui_token.txt`。
+后端的 `/llbot-api/*` 同源反代会自己读取并哈希该密码注入请求，
+**密码不会下发到浏览器**，因此不需要在面板里二次登录。
+
+> 若提示「未找到 LLBot WebUI 密码」，确认 `docker-compose.yml` 中
+> `my-robot` 服务保留了 `./llbot_config:/app/llbot_config:ro` 挂载。
 
 ---
 

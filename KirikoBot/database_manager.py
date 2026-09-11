@@ -742,3 +742,121 @@ class DatabaseManager:
         except Exception:
             logger.exception("Failed to clean orphan stickers")
             return 0
+
+    # ── Group purge ─────────────────────────────────────
+    # Tables with a real group_id column: everything here is scoped to one
+    # group and can be deleted outright.
+    _GROUP_SCOPED: tuple[tuple[str, str], ...] = (
+        ("group_messages", "群消息"),
+        ("history", "对话记录"),
+        ("reminders", "提醒"),
+        ("tool_usage", "工具调用"),
+        ("user_profiles", "用户画像"),
+        ("user_affection", "好感度"),
+        ("user_affection_log", "好感度流水"),
+        ("feature_requests", "功能需求"),
+    )
+
+    def _group_user_ids(self, group_id: str) -> list[str]:
+        """Distinct users that ever spoke in this group."""
+        try:
+            return [r[0] for r in self.fetch_data(
+                "SELECT DISTINCT user_id FROM group_messages WHERE group_id = ?",
+                (str(group_id),),
+            )]
+        except sqlite3.Error:
+            return []
+
+    def group_purge_preview(self, group_id: str) -> dict[str, int]:
+        """Row counts purge_group() would delete, for the confirm dialog.
+
+        `users` / `learning_log` / `user_settings` are per-user artifacts that
+        are NOT group-scoped in the schema (a user can be in several groups),
+        so they are reported separately and clearly.
+        """
+        gid = str(group_id)
+        counts: dict[str, int] = {}
+        for table, label in self._GROUP_SCOPED:
+            try:
+                counts[table] = self.fetch_data(
+                    f"SELECT COUNT(*) FROM {table} WHERE group_id = ?", (gid,)
+                )[0][0]
+            except (sqlite3.Error, IndexError):
+                counts[table] = 0
+        try:
+            counts["group_settings"] = self.fetch_data(
+                "SELECT COUNT(*) FROM feature_settings WHERE scope_type='group' AND scope_id = ?",
+                (gid,),
+            )[0][0]
+        except (sqlite3.Error, IndexError):
+            counts["group_settings"] = 0
+
+        users = self._group_user_ids(gid)
+        counts["users"] = len(users)
+        counts["learning_log"] = 0
+        counts["user_settings"] = 0
+        if users:
+            marks = ",".join("?" * len(users))
+            try:
+                counts["learning_log"] = self.fetch_data(
+                    f"SELECT COUNT(*) FROM learning_log WHERE user_id IN ({marks})",
+                    tuple(users),
+                )[0][0]
+            except (sqlite3.Error, IndexError):
+                pass
+            try:
+                counts["user_settings"] = self.fetch_data(
+                    f"SELECT COUNT(*) FROM feature_settings "
+                    f"WHERE scope_type='user' AND scope_id IN ({marks})",
+                    tuple(users),
+                )[0][0]
+            except (sqlite3.Error, IndexError):
+                pass
+        return counts
+
+    def purge_group(self, group_id: str) -> dict[str, int]:
+        """Delete everything belonging to a group.
+
+        Covers all group-scoped tables plus the per-user artifacts of members
+        seen in this group (profiles/affection are group-scoped already;
+        learning notes and per-user toggles are not). Sticker files are a
+        global gallery and are intentionally left alone.
+        """
+        gid = str(group_id)
+        deleted: dict[str, int] = {}
+        users = self._group_user_ids(gid)
+
+        for table, label in self._GROUP_SCOPED:
+            try:
+                n = self.fetch_data(
+                    f"SELECT COUNT(*) FROM {table} WHERE group_id = ?", (gid,)
+                )[0][0]
+                self.execute_action(f"DELETE FROM {table} WHERE group_id = ?", (gid,))
+                deleted[table] = n
+            except (sqlite3.Error, IndexError):
+                logger.exception("purge_group: failed to clear %s", table)
+
+        try:
+            self.execute_action(
+                "DELETE FROM feature_settings WHERE scope_type='group' AND scope_id = ?",
+                (gid,),
+            )
+        except sqlite3.Error:
+            logger.exception("purge_group: failed to clear group feature settings")
+
+        if users:
+            marks = ",".join("?" * len(users))
+            for sql, params, key in (
+                (f"DELETE FROM learning_log WHERE user_id IN ({marks})", tuple(users), "learning_log"),
+                (f"DELETE FROM feature_settings WHERE scope_type='user' AND scope_id IN ({marks})",
+                 tuple(users), "user_settings"),
+            ):
+                try:
+                    self.execute_action(sql, params)
+                    deleted[key] = len(users)
+                except sqlite3.Error:
+                    logger.exception("purge_group: failed to clear %s", key)
+
+        self._member_cache.pop(gid, None)
+        logger.info("Purged group %s: %s", gid, deleted)
+        return deleted

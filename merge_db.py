@@ -13,7 +13,7 @@ import sys
 from typing import Any
 
 LINUX_DB = "/home/bosak/Documents/ClaudeCode_Projects/KirikoBot/KirikoBot/robot.db"
-WINDOWS_DB = "/home/bosak/Documents/ClaudeCode_Projects/KirikoBot/KirikoBot_windows/KirikoBot/KirikoBot/robot.db"
+WINDOWS_DB = "/home/bosak/Documents/ClaudeCode_Projects/KirikoBot/KirikoBot_windows/KirikoBot/robot.db"
 
 
 def _row_exists(cur: sqlite3.Cursor, table: str, where: str, params: tuple) -> bool:

@@ -115,9 +115,11 @@ class LearningService:
                         {"role": "system", "content": "你是一个AI行为评估器，根据用户反馈总结AI表现教训。输出简洁的一句话。"},
                         {"role": "user", "content": prompt},
                     ],
-                    "model": "deepseek-v4-flash",
+                    "model": Config.DEEPSEEK_MODEL,
                     "max_tokens": 100,
                     "temperature": 0,
+                    # One-line verdict — no chain-of-thought needed.
+                    "thinking": {"type": "disabled"},
                 },
                 timeout=15,
             )
