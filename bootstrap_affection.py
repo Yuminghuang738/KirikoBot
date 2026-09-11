@@ -10,12 +10,18 @@ Scoring values match the reduced-scale constants in affection_service.py.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import sys
 from datetime import datetime
 from typing import Any
 
-DB_PATH = "/home/bosak/Documents/ClaudeCode_Projects/KirikoBot/KirikoBot/robot.db"
+# Resolve paths relative to this file instead of a hard-coded absolute path —
+# the project has moved directories before and that silently broke these
+# scripts. Override with KIRIKO_DB / KIRIKO_ENV when needed.
+_PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.getenv("KIRIKO_DB") or os.path.join(_PROJECT_DIR, "KirikoBot", "robot.db")
+ENV_PATH = os.getenv("KIRIKO_ENV") or os.path.join(_PROJECT_DIR, "KirikoBot", ".env")
 
 # ── Keyword patterns (reduced scale, matching affection_service.py) ──
 POSITIVE_PATTERNS: list[tuple[str, float]] = [
@@ -181,8 +187,7 @@ def main() -> None:
     # Get users who have actually interacted with the bot (from history table)
     # Exclude bot accounts (ROBOT_QQ + known bots like QQ 小冰)
     from dotenv import load_dotenv
-    import os
-    load_dotenv("/home/bosak/Documents/ClaudeCode_Projects/KirikoBot/KirikoBot/.env")
+    load_dotenv(ENV_PATH)
     bot_qq = os.getenv("ROBOT_QQ", "")
     extra_bot_qq = os.getenv("EXTRA_BOT_QQ", "2854196306")  # QQ 小冰
     bot_qqs = {q for q in [bot_qq, extra_bot_qq] if q}

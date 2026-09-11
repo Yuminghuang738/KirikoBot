@@ -62,7 +62,7 @@ class Tarot:
                 args = json.loads(tool_calls[0]["function"].get("arguments", "{}"))
                 target_name = args.get("target_name", "")
             except (json.JSONDecodeError, TypeError):
-                pass
+                logger.debug("ai_tools.tarot_call 忽略了异常", exc_info=True)
 
         # Determine who the card is for
         is_for_self = not target_name or target_name == robot.user_name
@@ -304,7 +304,7 @@ class StickerTool:
             if stickers:
                 return random.choice(stickers)["filename"]
         except Exception:
-            pass
+            logger.debug("ai_tools._pick_by_category 忽略了异常", exc_info=True)
         return None
 
     def sticker_call(self, robot: Any, ai: Any) -> None:
@@ -315,7 +315,7 @@ class StickerTool:
             try:
                 args = json.loads(tool_calls[0]["function"].get("arguments", "{}"))
             except (json.JSONDecodeError, TypeError):
-                pass
+                logger.debug("ai_tools.sticker_call 忽略了异常", exc_info=True)
         category = (args.get("category") or "").strip()
 
         chosen: str | None = None
@@ -416,7 +416,7 @@ class DiceTool:
                 args = json.loads(tool_calls[0]["function"].get("arguments", "{}"))
                 sides = max(2, int(args.get("sides", 6)))
             except (json.JSONDecodeError, TypeError, ValueError):
-                pass
+                logger.debug("ai_tools.dice_call 忽略了异常", exc_info=True)
 
         result = random.randint(1, sides)
         if sides == 6:
@@ -1051,7 +1051,7 @@ class MusicTool:
                     robot.llbot.send_private_msg(robot.user_id, record_builder.build())
                 logger.info("Audio voice message also sent for %s - %s", name, artist)
         except Exception:
-            pass  # Audio download is best-effort, card is the primary delivery
+            logger.debug("ai_tools.music_search_call 忽略了异常", exc_info=True)
 
         _set_tool_meta(ai, tool_calls)
         ai.user_text = f"播放歌曲: {name} - {artist}"
@@ -1181,7 +1181,7 @@ class AffectionTool:
                 args = json.loads(tool_calls[0]["function"].get("arguments", "{}"))
                 target_name = (args.get("target_name") or "").strip()
             except (json.JSONDecodeError, TypeError):
-                pass
+                logger.debug("ai_tools.check_affection_call 忽略了异常", exc_info=True)
 
         # Determine target user
         if not target_name or target_name in ("我", "自己", "我的"):

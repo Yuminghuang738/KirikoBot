@@ -14,6 +14,63 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 
+def quick_chat(
+    system_text: str,
+    user_text: str,
+    *,
+    max_tokens: int = 500,
+    temperature: float = 0.0,
+    thinking: bool = False,
+    timeout: int | None = None,
+    model: str | None = None,
+) -> str | None:
+    """Single-turn DeepSeek call for background jobs.
+
+    The judge, learning, profile and news services each used to hand-roll their
+    own request. That is exactly how the `thinking` parameter ended up missing
+    in three of them (silently defaulting to the expensive `high` effort), and
+    every new global setting had to be added in four places. They all route
+    through here now; tools/history are not involved.
+
+    Returns the assistant text, or None when the call fails.
+    """
+    messages: list[dict[str, Any]] = []
+    if system_text:
+        messages.append({"role": "system", "content": system_text})
+    messages.append({"role": "user", "content": user_text})
+
+    payload: dict[str, Any] = {
+        "messages": messages,
+        "model": model or Config.DEEPSEEK_MODEL,
+        "thinking": {"type": "enabled" if thinking else "disabled"},
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "stream": False,
+    }
+    if thinking:
+        payload["reasoning_effort"] = Config.DEEPSEEK_REASONING_EFFORT
+
+    try:
+        resp = requests.post(
+            Config.DEEPSEEK_API,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {Config.DEEPSEEK_TOKEN}",
+            },
+            json=payload,
+            timeout=timeout or Config.REQUEST_TIMEOUT,
+        )
+        resp.raise_for_status()
+        content = resp.json()["choices"][0]["message"].get("content") or ""
+        return content.strip()
+    except requests.RequestException:
+        logger.info("quick_chat: API unavailable")
+        return None
+    except (KeyError, IndexError, TypeError, ValueError):
+        logger.exception("quick_chat: unexpected response shape")
+        return None
+
+
 class AiServer:
     def __init__(
         self,
@@ -125,7 +182,7 @@ class AiServer:
                 try:
                     logger.error("DeepSeek error body: %s", e.response.text[:500])
                 except Exception:
-                    pass
+                    logger.debug("ai_server.ai_request 忽略了异常", exc_info=True)
             if status_code == 401:
                 self.ai_text = "抱歉，AI服务配置有问题，请联系管理员~"
             elif status_code == 429:
@@ -236,7 +293,7 @@ class AiServer:
                 try:
                     error_body = e.response.text[:1000]
                 except Exception:
-                    pass
+                    logger.debug("ai_server.follow_up_request 忽略了异常", exc_info=True)
             logger.error("Follow-up HTTP %s: %s", e.response.status_code if e.response is not None else "?", error_body)
             self.ai_text = ""
         except Exception:
@@ -277,7 +334,7 @@ class AiServer:
                         f.write(chunk)
                 image_url_or_path = local_path
             except Exception:
-                pass  # Download failed, try passing URL directly
+                logger.debug("ai_server.vision_analyze 忽略了异常", exc_info=True)
 
         # Strip file:// prefix if present (defense-in-depth)
         if image_url_or_path.startswith("file://"):
@@ -302,7 +359,7 @@ class AiServer:
                     try:
                         _os.unlink(local_path)
                     except Exception:
-                        pass
+                        logger.debug("ai_server.vision_analyze 忽略了异常", exc_info=True)
                 logger.exception("Unable to read image for vision analysis")
                 return None
 
@@ -352,7 +409,7 @@ class AiServer:
                 try:
                     _os.unlink(local_path)
                 except Exception:
-                    pass
+                    logger.debug("ai_server.vision_analyze 忽略了异常", exc_info=True)
 
         return result
 

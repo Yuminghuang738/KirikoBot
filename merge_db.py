@@ -8,12 +8,17 @@ Run:  python3 merge_db.py --dry-run    # preview only
 from __future__ import annotations
 
 import argparse
+import os
 import sqlite3
 import sys
 from typing import Any
 
-LINUX_DB = "/home/bosak/Documents/ClaudeCode_Projects/KirikoBot/KirikoBot/robot.db"
-WINDOWS_DB = "/home/bosak/Documents/ClaudeCode_Projects/KirikoBot/KirikoBot_windows/KirikoBot/robot.db"
+# Defaults are resolved relative to this file (the project has moved before,
+# which silently broke this script). Both are overridable via CLI flags,
+# so `--src` / `--dst` is the reliable way to use it.
+_PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+LINUX_DB = os.path.join(_PROJECT_DIR, "KirikoBot", "robot.db")
+WINDOWS_DB = os.path.join(_PROJECT_DIR, "..", "KirikoBot_windows", "KirikoBot", "robot.db")
 
 
 def _row_exists(cur: sqlite3.Cursor, table: str, where: str, params: tuple) -> bool:
@@ -237,13 +242,21 @@ def _merge_changelog(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Merge Windows robot.db into Linux robot.db")
     parser.add_argument("--dry-run", action="store_true", help="Preview only, no writes")
+    parser.add_argument("--src", default=WINDOWS_DB, help=f"Source DB (default: {WINDOWS_DB})")
+    parser.add_argument("--dst", default=LINUX_DB, help=f"Target DB (default: {LINUX_DB})")
     args = parser.parse_args()
 
-    src = sqlite3.connect(WINDOWS_DB)
-    dst = sqlite3.connect(LINUX_DB)
+    for label, path in (("source", args.src), ("target", args.dst)):
+        if not os.path.isfile(path):
+            print(f"✗ {label} database not found: {path}")
+            print("  Pass --src / --dst explicitly if it lives elsewhere.")
+            sys.exit(1)
 
-    print(f"Source (Windows): {WINDOWS_DB}")
-    print(f"Target (Linux):   {LINUX_DB}")
+    src = sqlite3.connect(args.src)
+    dst = sqlite3.connect(args.dst)
+
+    print(f"Source (Windows): {args.src}")
+    print(f"Target (Linux):   {args.dst}")
     print(f"Mode: {'DRY-RUN (no writes)' if args.dry_run else 'LIVE MERGE'}")
     print()
 
