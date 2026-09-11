@@ -65,7 +65,9 @@ services:
       - PYTHONUNBUFFERED=1
       - PYTHONDONTWRITEBYTECODE=1
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/"]
+      # /healthz is exempt from dashboard auth. "/" now returns 401 without
+      # credentials, which would mark the container unhealthy.
+      test: ["CMD", "curl", "-fsS", "http://localhost:5000/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -28,8 +28,11 @@ from config import Config
 
 logger = logging.getLogger(__name__)
 
-# Endpoint name of the OneBot webhook (both "/" and "/webhook" map to it).
-_WEBHOOK_ENDPOINTS = {"receive", "static"}
+# Endpoint names exempt from dashboard auth:
+#   receive  — the OneBot webhook (carries its own HMAC signature)
+#   static   — Flask's static file endpoint
+#   healthz  — container healthcheck; must stay reachable without credentials
+_WEBHOOK_ENDPOINTS = {"receive", "static", "healthz"}
 _PASSWORD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".dashboard_password")
 
 
