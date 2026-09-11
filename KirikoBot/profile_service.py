@@ -149,18 +149,18 @@ class ProfileService:
         if not profiles:
             return ""
 
-        lines = ["【群友画像】"]
+        lines = ["【你对群里这些人的印象】（只是印象，聊天时自然带出来，别照着念）"]
         for p in profiles:
             pf = p["profile"]
             if not pf:
                 continue
             # Highlight current speaker
-            tag = " ← 当前发言" if p["user_id"] == current_user_id else ""
+            tag = " ← 正在跟你说话的就是 TA" if p["user_id"] == current_user_id else ""
+            interests = "、".join(pf.get("interests", []) or []) or "不太清楚"
             lines.append(
-                f"- {p['user_name']}: {pf.get('personality', '?')}"
-                f" | 兴趣:{','.join(pf.get('interests', ['?']))}"
-                f" | {pf.get('speaking_style', '?')}{tag}"
+                f"- {p['user_name']}：{pf.get('personality', '?')}；"
+                f"平时爱聊{interests}；说话{pf.get('speaking_style', '?')}{tag}"
             )
             if pf.get("note"):
-                lines.append(f"  备注: {pf['note']}")
+                lines.append(f"  （{pf['note']}）")
         return "\n".join(lines[:20])  # limit to 20 profiles

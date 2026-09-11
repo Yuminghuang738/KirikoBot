@@ -244,7 +244,7 @@ class AiServer:
             self.ai_text = ""
 
     @staticmethod
-    def vision_analyze(image_url_or_path: str, prompt: str = "", response_format: str = "text", max_tokens: int = 300) -> str | None:
+    def vision_analyze(image_url_or_path: str, prompt: str = "", response_format: str = "text", max_tokens: int = 300, temperature: float = 0) -> str | None:
         """Analyze an image via DeepSeek's vision model.
 
         Uses the same endpoint and token as the chat model
@@ -319,7 +319,7 @@ class AiServer:
                 ]},
             ],
             "max_tokens": max_tokens,
-            "temperature": 0,
+            "temperature": temperature,
             # Image understanding / sticker tagging needs no chain-of-thought;
             # leaving it on would silently run at the default `high` effort.
             "thinking": {"type": "disabled"},
@@ -426,7 +426,10 @@ class AiServer:
             "不需要描述图片内容。"
         )
         instruction = "\n".join(parts)
-        return AiServer.vision_analyze(image_url_or_path, prompt=instruction, max_tokens=500)
+        # Creative reply → sample warm; the default 0 makes image replies flat
+        # and formulaic, which is the main source of "AI 味" on this path.
+        return AiServer.vision_analyze(image_url_or_path, prompt=instruction,
+                                       max_tokens=500, temperature=0.85)
 
     @staticmethod
     def vision_sticker_battle(

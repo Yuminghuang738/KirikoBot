@@ -155,4 +155,5 @@ class LearningService:
         if not notes:
             return ""
 
-        return "【学习笔记】过往互动中总结的改进点：\n" + "\n".join(f"  - {n}" for n in notes)
+        return ("【你之前踩过的坑】（心里记住就行，别说“根据我的学习笔记”这类话）\n"
+                + "\n".join(f"  · {n}" for n in notes))
