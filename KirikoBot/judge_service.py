@@ -34,7 +34,7 @@ class JudgeService:
     - the previous turn's lesson (replaces learning_service.evaluate_and_learn)
     Fire-and-forget only: never on the critical path, silent on any failure."""
 
-    MODEL = "deepseek-v4-flash"
+    MODEL = Config.DEEPSEEK_MODEL
     TIMEOUT = 15
     MAX_TOKENS = 220
     MAX_DELTA = 2.0        # hard clamp for the combined per-message delta

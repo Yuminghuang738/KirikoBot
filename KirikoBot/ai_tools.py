@@ -85,7 +85,7 @@ class Tarot:
             robot.llbot.send_private_msg(robot.user_id, builder.build())
 
         # AI interpretation
-        ai.model_type = "deepseek-v4-flash"
+        ai.model_type = Config.DEEPSEEK_MODEL
         ai.thinking_type = "disabled"
         ai.system_text = Config.TAROT_ROLE or ""
         ai.user_text = (
@@ -208,7 +208,7 @@ class WebSearchTool:
         # Feed search results to AI for synthesis
         from datetime import datetime
         current_date = datetime.now().strftime("%Y年%m月%d日")
-        ai.model_type = "deepseek-v4-pro"
+        ai.model_type = Config.DEEPSEEK_MODEL
         ai.thinking_type = "enabled"
         ai.system_text = (
             "你是Kiriko，请根据以下搜索结果回答用户问题。"
@@ -547,7 +547,7 @@ class AtMemberTool:
             return
 
         # Generate the message via AI
-        ai.model_type = "deepseek-v4-flash"
+        ai.model_type = Config.DEEPSEEK_MODEL
         ai.thinking_type = "disabled"
         ai.system_text = (
             f"你是Kiriko。你要主动@群友{display_name}说一句话。"
@@ -809,7 +809,7 @@ class PoliticalNewsTool:
             user_text=raw_text,
             history_list=[],
             tools=[],
-            model_type="deepseek-v4-flash",
+            model_type=Config.DEEPSEEK_MODEL,
             thinking_type="disabled",
         )
         translator.ai_request()
@@ -886,7 +886,7 @@ class FeatureRequestTool:
             user_text=f"功能请求：{request_text}",
             history_list=[],
             tools=[],
-            model_type="deepseek-v4-flash",
+            model_type=Config.DEEPSEEK_MODEL,
             thinking_type="disabled",
         )
         summarizer.ai_request()

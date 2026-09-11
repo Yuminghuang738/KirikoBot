@@ -21,8 +21,9 @@ class AiServer:
         user_text: str,
         history_list: list[dict[str, Any]] | None = None,
         tools: list[dict[str, Any]] | None = None,
-        model_type: str = "deepseek-v4-flash",
+        model_type: str = Config.DEEPSEEK_MODEL,
         thinking_type: str = "disabled",
+        reasoning_effort: str = Config.DEEPSEEK_REASONING_EFFORT,
     ) -> None:
         if history_list is None:
             history_list = []
@@ -33,6 +34,7 @@ class AiServer:
         self.user_text = user_text
         self.model_type = model_type
         self.thinking_type = thinking_type
+        self.reasoning_effort = reasoning_effort
         self.history_list = history_list
         self.tools = tools
 
@@ -86,6 +88,9 @@ class AiServer:
             "logprobs": False,
             "top_logprobs": None,
         }
+        if self.thinking_type == "enabled":
+            # Only meaningful with thinking on; the API rejects/defaults otherwise.
+            request_dict["reasoning_effort"] = self.reasoning_effort
 
         headers = {
             "Content-Type": "application/json",
@@ -200,6 +205,8 @@ class AiServer:
             "top_p": 0.9,
             "stream": False,
         }
+        if self.thinking_type == "enabled":
+            request_dict["reasoning_effort"] = self.reasoning_effort
 
         headers = {
             "Content-Type": "application/json",
@@ -313,6 +320,9 @@ class AiServer:
             ],
             "max_tokens": max_tokens,
             "temperature": 0,
+            # Image understanding / sticker tagging needs no chain-of-thought;
+            # leaving it on would silently run at the default `high` effort.
+            "thinking": {"type": "disabled"},
         }
 
         session = AiServer._create_session()

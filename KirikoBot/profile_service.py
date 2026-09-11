@@ -100,7 +100,7 @@ class ProfileService:
                         {"role": "system", "content": self.SYSTEM_PROMPT},
                         {"role": "user", "content": f"用户 {user_name} 的聊天记录：\n{sample}"},
                     ],
-                    "model": "deepseek-v4-flash",
+                    "model": Config.DEEPSEEK_MODEL,
                     "thinking": {"type": "disabled"},
                     "max_tokens": 500,
                     "temperature": 0.3,
