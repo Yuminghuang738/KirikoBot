@@ -1511,13 +1511,20 @@ class FeatureListTool:
 # ══════════════════════════════════════════════════════════
 
 class ExplainSelfTool:
-    """FOLLOW_UP tool: replay the PREVIOUS reply's tool chain and thinking.
+    """DEBUG tool: dump the PREVIOUS reply's raw record straight into the chat.
 
     The current turn is not saved until after the reply is sent, so the newest
     assistant row in `history` is exactly the message the user is asking about.
+
+    This is a *debugging* aid, so it deliberately bypasses the model: feeding
+    the chain back through the AI made it re-tell its own thoughts in its own
+    words, which is a lossy second pass over the very text we are trying to
+    inspect. Instead the reasoning is reproduced verbatim — newlines kept, no
+    summarising, no rewording — and sent directly, with no follow-up turn.
     """
 
-    MAX_REASONING = 1200
+    MAX_TOTAL = 8000      # matches the history.reasoning storage cap
+    CHUNK = 1200          # keep each QQ text segment comfortably small
 
     def __init__(self, database_manager: Any, msg_package: Any) -> None:
         self.db = database_manager
@@ -1534,47 +1541,102 @@ class ExplainSelfTool:
             last = None
 
         if not last:
-            ai.tool_result_text = (
-                "你还没有回复过这个人，没有可查阅的记录。如实说明即可，不要编造。"
-            )
+            self._send(robot, "【执行回放】还没有上一轮的记录，无从查阅。")
+            ai.tool_result_text = "已直接告知用户没有上一轮记录。本轮不要再回复任何内容。"
             ai.user_text = ai.tool_result_text
             return
 
-        lines = ["你上一次回复的真实记录（用户要求查阅，可以如实展示）："]
-        reply = " ".join((last["content"] or "").split())
-        if reply:
-            lines.append(f"上次回复的内容：{reply[:200]}")
+        self._send(robot, self._render(last))
+        # Self-contained: main_logic sends no follow-up, so the model never
+        # gets a chance to paraphrase what we just dumped.
+        ai.tool_result_text = (
+            "已把上一轮的原始记录直接发到对话里（原文照录）。"
+            "本轮不要再说任何话，也不要复述其中的内容。"
+        )
+        ai.user_text = ai.tool_result_text
+
+    def _render(self, last: dict[str, Any]) -> str:
+        lines = ["【上一轮原始记录 · 调试输出】"]
+        if last.get("timestamp"):
+            lines.append(f"时间：{last['timestamp']}")
+
+        reasoning = (last.get("reasoning") or "").strip()
+        lines.append("")
+        lines.append("── 思维链原文 ──")
+        lines.append(reasoning or "（这一轮没有思维链：思考模式可能被关掉了）")
 
         chain: list[dict[str, Any]] = []
-        if last["tool_calls"]:
+        if last.get("tool_calls"):
             try:
                 chain = json.loads(last["tool_calls"])
             except (json.JSONDecodeError, TypeError):
                 chain = []
+        lines.append("")
+        lines.append("── 工具调用 ──")
         if chain:
-            parts = []
-            for c in chain:
+            for i, c in enumerate(chain, 1):
                 name = c.get("name", "?")
                 args = (c.get("arguments") or "").strip()
-                parts.append(f"{name}({args})" if args and args != "{}" else name)
-            lines.append("上次调用过的工具：" + "、".join(parts))
+                lines.append(f"{i}. {name}({args})")
         else:
-            lines.append("上次没有调用工具，是直接回答的。")
+            lines.append("（无，直接回答的）")
 
-        reasoning = " ".join((last["reasoning"] or "").split())
-        if reasoning:
-            if len(reasoning) > self.MAX_REASONING:
-                reasoning = reasoning[:self.MAX_REASONING] + "…"
-            lines.append(f"上次的思维链：{reasoning}")
-        else:
-            lines.append("上次没有留下思维链记录。")
+        reply = (last.get("content") or "").strip()
+        lines.append("")
+        lines.append("── 最终回复 ──")
+        lines.append(reply or "（空）")
 
-        lines.append(
-            "用第一人称把这些讲给对方听，像在回忆自己刚才的想法，"
-            "不要提「记录」「数据库」这类词。思维链可以照实说，但不要逐字复读整段。"
-        )
-        ai.tool_result_text = "\n".join(lines)
-        ai.user_text = ai.tool_result_text
+        text = "\n".join(lines)
+        if len(text) > self.MAX_TOTAL:
+            text = text[:self.MAX_TOTAL] + "\n…（超出 8000 字，已截断）"
+        return text
+
+    def _split(self, text: str) -> list[str]:
+        """Chunk on line boundaries so raw reasoning stays readable.
+
+        A thinking chain is often one enormous unbroken paragraph, so lines
+        longer than CHUNK are hard-wrapped too — otherwise the whole point of
+        chunking (QQ rejects oversized text segments) is lost.
+        """
+        chunks: list[str] = []
+        current = ""
+        for line in text.split("\n"):
+            while len(line) > self.CHUNK:
+                if current:
+                    chunks.append(current)
+                    current = ""
+                chunks.append(line[:self.CHUNK])
+                line = line[self.CHUNK:]
+            candidate = line if not current else current + "\n" + line
+            if len(candidate) > self.CHUNK:
+                chunks.append(current)
+                current = line
+            else:
+                current = candidate
+        if current:
+            chunks.append(current)
+        return chunks or [text]
+
+    def _send(self, robot: Any, text: str) -> None:
+        from llbot_client import MessageBuilder
+
+        chunks = self._split(text)
+        total = len(chunks)
+        for idx, chunk in enumerate(chunks, 1):
+            body = f"({idx}/{total})\n{chunk}" if total > 1 else chunk
+            builder = MessageBuilder()
+            # Quote the request once so the dump is anchored in a busy group.
+            if idx == 1 and robot.incoming.message_id:
+                builder.reply(robot.incoming.message_id)
+            builder.text(body)
+            try:
+                if robot.msg_type == "group":
+                    robot.llbot.send_group_msg(robot.group_id or "", builder.build())
+                else:
+                    robot.llbot.send_private_msg(robot.user_id, builder.build())
+            except Exception:
+                logger.exception("explain_self send failed")
+                return
 
 
 # ══════════════════════════════════════════════════════════

@@ -222,6 +222,9 @@ SELF_CONTAINED_TOOLS = {
     "tarot", "sticker", "web_search", "at_member",
     "political_news", "gaming_news", "bilibili_trending",
     "hitokoto", "tarot_history", "music_search", "sticker_battle",
+    # explain_self sends the raw debug dump itself; a follow-up turn would only
+    # add the model's paraphrase on top of the text we want verbatim.
+    "explain_self",
 }
 
 # ── History (only recent context, filtered for clarity) ──
