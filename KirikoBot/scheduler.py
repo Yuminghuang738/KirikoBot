@@ -17,10 +17,12 @@ class BotScheduler:
     """Background scheduler for reminders + morning greetings."""
 
     CHECK_INTERVAL = 5  # seconds between checks (supports second-precision reminders)
+    AMP_CRAWL_INTERVAL_DAYS = 7
 
     def __init__(
         self, db: Any, llbot: Any, political_news: Any, news_crawler: Any,
         hitokoto_service: Any = None, feature_gate: Any = None,
+        amp_crawler: Any = None,
     ) -> None:
         self.db = db
         self.llbot = llbot
@@ -28,6 +30,7 @@ class BotScheduler:
         self.news_crawler = news_crawler
         self.hitokoto_service = hitokoto_service
         self.feature_gate = feature_gate
+        self.amp_crawler = amp_crawler
         self._running = False
         self._thread: threading.Thread | None = None
         self._last_morning: str = ""
@@ -59,6 +62,7 @@ class BotScheduler:
                 self._check_reminders()
                 self._check_greetings()
                 self._check_subscriptions()
+                self._check_amp_crawl()
                 # Retention + DB backup, self-guarded to run once per day
                 maintenance_service.run_daily(self.db, self.db.db_file)
             except Exception:
@@ -251,6 +255,53 @@ class BotScheduler:
         scheduled = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
         return max(0, int((now - scheduled).total_seconds() // 60))
 
+    def _check_amp_crawl(self) -> None:
+        """Grow the amp-head library from Wikipedia, at most weekly.
+
+        Runs in its own thread: the crawl is throttled and can take a while,
+        and the scheduler tick must not block on it.
+        """
+        if not self.amp_crawler:
+            return
+        try:
+            if self.db.get_state("amp_crawl_running") == "1":
+                return
+        except Exception:
+            return
+        last = ""
+        try:
+            last = self.db.get_state("amp_crawl_last") or ""
+        except Exception:
+            logger.debug("scheduler._check_amp_crawl 忽略了异常", exc_info=True)
+        if last:
+            try:
+                elapsed = (datetime.now() - datetime.strptime(
+                    last, "%Y-%m-%d %H:%M:%S")).total_seconds()
+                if elapsed < self.AMP_CRAWL_INTERVAL_DAYS * 86400:
+                    return
+            except ValueError:
+                logger.info("Unparseable amp_crawl_last=%r, crawling", last)
+        threading.Thread(target=self._crawl_amp_heads, daemon=True,
+                         name="amp-crawl").start()
+
+    def _crawl_amp_heads(self) -> None:
+        try:
+            self.db.set_state("amp_crawl_running", "1")
+        except Exception:
+            return
+        try:
+            summary = self.amp_crawler.crawl()
+            self.db.set_state("amp_crawl_last",
+                              datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            logger.info("Amp head crawl finished: %s", summary)
+        except Exception:
+            logger.exception("Amp head crawl failed")
+        finally:
+            try:
+                self.db.set_state("amp_crawl_running", "0")
+            except Exception:
+                logger.debug("amp_crawl_running reset failed", exc_info=True)
+
     def _push_topic(self, group_id: str, topic: str) -> None:
         try:
             if topic == "daily_roll_call":
@@ -365,6 +416,8 @@ class BotScheduler:
 
         if head.get("tone"):
             lines.extend(["", "🎵 音色特点：", f"  {head['tone']}"])
+        # Crawled rows often have no price (Wikipedia rarely states one) — the
+        # line is dropped rather than filled with a guess.
         if head.get("price"):
             lines.extend(["", f"💰 市场价格：{head['price']}"])
         if head.get("tip"):
@@ -372,7 +425,15 @@ class BotScheduler:
         if head.get("famous"):
             lines.extend(["", f"🎼 知名使用者：{head['famous']}"])
 
-        lines.extend(["", "（价格随成色与行情浮动，仅供参考）"])
+        lines.append("")
+        if head.get("source") == "wikipedia":
+            url = head.get("source_url") or ""
+            lines.append("📖 来源：英文维基百科（自动抓取整理）")
+            if url:
+                lines.append(url)
+            lines.append("（资料为自动抽取，可能不完整；有疑问以来源为准）")
+        elif head.get("price"):
+            lines.append("（价格随成色与行情浮动，仅供参考）")
         return "\n".join(lines)
 
     def _build_roll_call(self, group_id: str) -> str:
