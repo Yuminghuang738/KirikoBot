@@ -58,6 +58,7 @@ class BotScheduler:
             try:
                 self._check_reminders()
                 self._check_greetings()
+                self._check_subscriptions()
                 # Retention + DB backup, self-guarded to run once per day
                 maintenance_service.run_daily(self.db, self.db.db_file)
             except Exception:
@@ -210,6 +211,152 @@ class BotScheduler:
             self.llbot.send_group_msg(gid, builder.build())
             logger.info("Morning greeting sent to %s", gid)
 
+
+    # ── Per-group push subscriptions ────────────────────
+
+    # A push whose scheduled time has passed by more than this is skipped
+    # (and marked fired) — otherwise a bot restarted at night would blast
+    # the morning briefing to every group.
+    MAX_LATE_MINUTES = 120
+
+    def _check_subscriptions(self) -> None:
+        now = datetime.now()
+        today = now.strftime("%Y-%m-%d")
+        hm = now.strftime("%H:%M")
+
+        for sub in self.db.due_subscriptions(hm, today):
+            gid, topic = sub["group_id"], sub["topic"]
+
+            # Always mark fired first: a failure must not retry on every tick.
+            self.db.mark_subscription_fired(gid, topic, today)
+
+            if self.feature_gate and not self.feature_gate.is_enabled("group", gid, "subscription"):
+                continue
+
+            late = self._minutes_late(sub["push_time"], now)
+            if late > self.MAX_LATE_MINUTES:
+                logger.info("Skipping stale %s push for %s (%d min late)", topic, gid, late)
+                continue
+
+            threading.Thread(
+                target=self._push_topic, args=(gid, topic), daemon=True,
+            ).start()
+
+    @staticmethod
+    def _minutes_late(push_time: str, now: datetime) -> int:
+        try:
+            hh, mm = (int(x) for x in push_time.split(":")[:2])
+        except (ValueError, AttributeError):
+            return 0
+        scheduled = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        return max(0, int((now - scheduled).total_seconds() // 60))
+
+    def _push_topic(self, group_id: str, topic: str) -> None:
+        try:
+            if topic == "daily_roll_call":
+                text = self._build_roll_call(group_id)
+            elif topic == "morning_news":
+                text = self._build_morning_lines()
+            elif topic == "gaming_news":
+                items = self.news_crawler.fetch_gaming_news()
+                text = self._format_titles("🎮 游戏速递", items, 5)
+            elif topic == "hitokoto":
+                text = self._build_hitokoto()
+            else:
+                logger.warning("Unknown subscription topic: %s", topic)
+                return
+
+            if not text:
+                return
+            from llbot_client import MessageBuilder
+            # Builders return a plain string, except the roll call which needs
+            # @ segments and returns a pre-built message list.
+            message = text if isinstance(text, list) else MessageBuilder().text(text).build()
+            self.llbot.send_group_msg(group_id, message)
+            logger.info("Subscription push '%s' sent to %s", topic, group_id)
+        except Exception:
+            logger.exception("Subscription push '%s' failed for %s", topic, group_id)
+
+    def _build_morning_lines(self) -> str:
+        """The morning briefing on its own (used by the subscription push)."""
+        news_items: list[dict[str, str]] = []
+        try:
+            news_items = self.political_news.translate_news(
+                self.political_news.fetch_for_greeting()
+            )
+        except Exception:
+            logger.exception("Morning political news fetch failed")
+
+        gaming_items: list[dict[str, str]] = []
+        try:
+            gaming_items = self.news_crawler.fetch_gaming_news()
+        except Exception:
+            logger.debug("scheduler._build_morning_lines 忽略了异常", exc_info=True)
+
+        lines = ["☀️ 早上好！新的一天开始啦～ (◕‿◕✿)", ""]
+        if news_items:
+            lines.append(self._format_titles("📰 今日时政要闻", news_items, 5))
+            lines.append("")
+        if gaming_items:
+            lines.append(self._format_titles("🎮 游戏速递", gaming_items, 3))
+            lines.append("")
+        quote = self._build_hitokoto()
+        if quote:
+            lines.append(quote)
+            lines.append("")
+        lines.append("祝大家今天元气满满！💪✨")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_titles(title: str, items: list[dict[str, str]], limit: int) -> str:
+        lines = [f"{title}："]
+        for i, n in enumerate(items[:limit], 1):
+            src = f" [{n['source']}]" if n.get("source") else ""
+            lines.append(f"  {i}. {n.get('title', '')}{src}")
+        return "\n".join(lines)
+
+    def _build_hitokoto(self) -> str:
+        if not self.hitokoto_service:
+            return ""
+        try:
+            quote = self.hitokoto_service.get_quote()
+        except Exception:
+            logger.exception("Hitokoto fetch failed")
+            return ""
+        if not quote or not quote.get("text"):
+            return ""
+        credit = " ".join(
+            p for p in (quote.get("source"), quote.get("author")) if p
+        )
+        return f"💬 每日一言：\n  {quote['text']}" + (f"\n  —— {credit}" if credit else "")
+
+    def _build_roll_call(self, group_id: str) -> str:
+        """Daily roll call: @ the members who spoke most today."""
+        try:
+            stats = self.db.get_daily_group_stats(group_id)
+        except Exception:
+            logger.exception("Roll call stats failed")
+            return ""
+
+        total = stats.get("total", 0)
+        if not total:
+            return "📣 今天群里好安静呀，一个人都没说话……明天记得来聊天哦 (｡•́︿•̀｡)"
+
+        top = stats.get("top", [])[:3]
+        from llbot_client import MessageBuilder
+        builder = MessageBuilder()
+        builder.text(f"📣 今日发言榜（共 {total} 条 · {stats['active_users']} 人参与）\n\n")
+        for i, item in enumerate(top, 1):
+            medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, "•")
+            builder.text(f"{medal} ")
+            if item.get("user_id"):
+                builder.at(str(item["user_id"]))
+                builder.text(" ")
+            builder.text(f"— {item['count']} 条\n")
+        builder.text("\n今天最活跃的就是你们啦～其他人也要多冒泡哦 (◕‿◕✿)")
+        # Returns a segment list (it contains @ mentions), which _push_topic
+        # sends as-is.
+        return builder.build()
 
 # ── Time parsing for reminders ─────────────────────────
 

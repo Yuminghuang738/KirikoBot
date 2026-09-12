@@ -15,8 +15,17 @@ VALID_TABLES = {
     "reminders", "learning_log", "feature_requests",
     "app_versions", "changelog", "stickers",
     "user_affection", "user_affection_log",
-    "feature_settings", "bot_messages", "ai_calls",
+    "feature_settings", "bot_messages", "ai_calls", "group_subscriptions", "profile_history",
 }
+
+
+def _thread_title(messages: list[dict[str, Any]]) -> str:
+    """A short label for a thread — first non-empty member line."""
+    for m in messages:
+        text = (m.get("content") or "").strip()
+        if text and not m.get("is_bot"):
+            return text[:24] + ("…" if len(text) > 24 else "")
+    return "(机器人发言)"
 
 
 class DatabaseManager:
@@ -165,6 +174,26 @@ class DatabaseManager:
                     except sqlite3.OperationalError:
                         pass  # Column already exists
                 connect.execute(
+                    """CREATE TABLE IF NOT EXISTS profile_history(
+                        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id      TEXT NOT NULL,
+                        group_id     TEXT NOT NULL,
+                        profile_json TEXT NOT NULL,
+                        message_count INTEGER DEFAULT 0,
+                        recorded_at  DATETIME DEFAULT (datetime('now', 'localtime'))
+                    )"""
+                )
+                connect.execute(
+                    """CREATE TABLE IF NOT EXISTS group_subscriptions(
+                        group_id        TEXT NOT NULL,
+                        topic           TEXT NOT NULL,
+                        push_time       TEXT DEFAULT '07:00',
+                        enabled         INTEGER DEFAULT 1,
+                        last_fired_date TEXT DEFAULT '',
+                        PRIMARY KEY (group_id, topic)
+                    )"""
+                )
+                connect.execute(
                     """CREATE TABLE IF NOT EXISTS ai_calls(
                         id                INTEGER PRIMARY KEY AUTOINCREMENT,
                         timestamp         DATETIME DEFAULT (datetime('now', 'localtime')),
@@ -239,6 +268,18 @@ class DatabaseManager:
                         timestamp  DATETIME DEFAULT (datetime('now', 'localtime'))
                     )"""
                 )
+                # Migration: keep enough of each invocation to replay the chain
+                # ("which tool with what args, and what came back"), so the bot
+                # can explain what it just did when asked.
+                for col, col_type in [
+                    ("arguments", "TEXT DEFAULT ''"),
+                    ("result", "TEXT DEFAULT ''"),
+                    ("reasoning", "TEXT DEFAULT ''"),
+                ]:
+                    try:
+                        connect.execute(f"ALTER TABLE tool_usage ADD COLUMN {col} {col_type}")
+                    except sqlite3.OperationalError:
+                        pass  # Column already exists
                 connect.execute(
                     """CREATE TABLE IF NOT EXISTS learning_log(
                         id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -551,7 +592,7 @@ class DatabaseManager:
 
         try:
             top_rows = self.fetch_data(
-                f"SELECT user_name, COUNT(*) c {base} GROUP BY user_id "
+                f"SELECT user_name, COUNT(*) c, user_id {base} GROUP BY user_id "
                 "ORDER BY c DESC LIMIT 10", args,
             )
         except sqlite3.Error:
@@ -574,7 +615,7 @@ class DatabaseManager:
             "total": scalar(f"SELECT COUNT(*) {base}", args),
             "active_users": scalar(f"SELECT COUNT(DISTINCT user_id) {base}", args),
             "images": scalar(f"SELECT COUNT(*) {base} AND content = '[图片消息]'", args),
-            "top": [{"user_name": r[0], "count": r[1]} for r in top_rows],
+            "top": [{"user_name": r[0], "count": r[1], "user_id": r[2]} for r in top_rows],
             "hourly": hourly,
         }
 
@@ -729,6 +770,164 @@ class DatabaseManager:
         except sqlite3.Error:
             return []
         return [{"date": r[0], "count": r[1]} for r in rows if r[0]]
+
+    # ── Group push subscriptions ─────────────────────────
+
+    SUBSCRIPTION_TOPICS = ("morning_news", "gaming_news", "hitokoto", "daily_roll_call")
+
+    def get_subscriptions(self, group_id: str | None = None) -> list[dict[str, Any]]:
+        """Per-group push subscriptions, optionally for one group."""
+        try:
+            if group_id:
+                rows = self.fetch_data(
+                    "SELECT group_id, topic, push_time, enabled, last_fired_date "
+                    "FROM group_subscriptions WHERE group_id = ? ORDER BY topic",
+                    (group_id,),
+                )
+            else:
+                rows = self.fetch_data(
+                    "SELECT group_id, topic, push_time, enabled, last_fired_date "
+                    "FROM group_subscriptions ORDER BY group_id, topic"
+                )
+        except sqlite3.Error:
+            logger.exception("subscription query failed")
+            return []
+        return [
+            {"group_id": r[0], "topic": r[1], "push_time": r[2],
+             "enabled": bool(r[3]), "last_fired_date": r[4]}
+            for r in rows
+        ]
+
+    def set_subscription(self, group_id: str, topic: str,
+                         push_time: str | None = None,
+                         enabled: bool | None = None) -> None:
+        """Create or update one subscription (unspecified fields are kept)."""
+        if topic not in self.SUBSCRIPTION_TOPICS:
+            raise ValueError(f"unknown topic: {topic}")
+        self.execute_action(
+            "INSERT INTO group_subscriptions (group_id, topic, push_time, enabled) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(group_id, topic) DO UPDATE SET "
+            "push_time = COALESCE(?, push_time), "
+            "enabled   = COALESCE(?, enabled)",
+            (group_id, topic, push_time or "07:00", 1 if (enabled is None or enabled) else 0,
+             push_time, None if enabled is None else (1 if enabled else 0)),
+        )
+
+    def delete_subscription(self, group_id: str, topic: str) -> None:
+        self.execute_action(
+            "DELETE FROM group_subscriptions WHERE group_id = ? AND topic = ?",
+            (group_id, topic),
+        )
+
+    def due_subscriptions(self, now_hm: str, today: str) -> list[dict[str, Any]]:
+        """Enabled subscriptions whose time has passed and haven't fired today."""
+        try:
+            rows = self.fetch_data(
+                "SELECT group_id, topic, push_time FROM group_subscriptions "
+                "WHERE enabled = 1 AND push_time <= ? AND last_fired_date != ?",
+                (now_hm, today),
+            )
+        except sqlite3.Error:
+            logger.exception("due subscription query failed")
+            return []
+        return [{"group_id": r[0], "topic": r[1], "push_time": r[2]} for r in rows]
+
+    def mark_subscription_fired(self, group_id: str, topic: str, today: str) -> None:
+        self.execute_action(
+            "UPDATE group_subscriptions SET last_fired_date = ? "
+            "WHERE group_id = ? AND topic = ?",
+            (today, group_id, topic),
+        )
+
+    def get_profile_history(self, user_id: str, group_id: str,
+                            limit: int = 3) -> list[dict[str, Any]]:
+        """Earlier profile snapshots, newest first."""
+        limit = self._clamp_int(limit, 3, 1, 10)
+        try:
+            rows = self.fetch_data(
+                "SELECT profile_json, message_count, recorded_at FROM profile_history "
+                "WHERE user_id = ? AND group_id = ? ORDER BY id DESC LIMIT ?",
+                (user_id, group_id, limit),
+            )
+        except sqlite3.Error:
+            return []
+        import json as _json
+        out = []
+        for pj, cnt, ts in rows:
+            try:
+                parsed = _json.loads(pj)
+            except (ValueError, TypeError):
+                continue
+            out.append({"profile": parsed, "message_count": cnt, "recorded_at": ts})
+        return out
+
+    # ── Topic threading ──────────────────────────────────
+
+    def get_group_threads(self, group_id: str, day: str | None = None,
+                          max_gap_minutes: int = 10,
+                          limit: int = 300) -> list[dict[str, Any]]:
+        """Group a transcript into topic threads.
+
+        A group chat runs several conversations at once, so a flat timeline is
+        hard to read (and hard for the model to reason about). Messages are
+        clustered by: does this reply to something already in the current
+        thread, or did the conversation pause long enough to be a new topic.
+        """
+        max_gap = self._clamp_int(max_gap_minutes, 10, 1, 240)
+        limit = self._clamp_int(limit, 300, 10, 1000)
+
+        where = ["group_id = ?"]
+        params: list[Any] = [group_id]
+        if day:
+            where.append("date(timestamp) = ?")
+            params.append(day)
+        clause = " AND ".join(where)
+
+        try:
+            rows = self.fetch_data(
+                "SELECT user_name, content, timestamp, message_seq, reply_to_seq, "
+                "       IFNULL(ts_exact, (julianday(timestamp) - 2440587.5) * 86400.0) AS sk, "
+                "       0 AS is_bot FROM group_messages "
+                f"WHERE {clause} ORDER BY sk ASC LIMIT ?",
+                tuple(params) + (limit,),
+            )
+        except sqlite3.Error:
+            logger.exception("thread query failed")
+            return []
+
+        threads: list[dict[str, Any]] = []
+        current: dict[str, Any] | None = None
+        prev_sk: float | None = None
+
+        for user_name, content, ts, seq, reply_seq, sk, is_bot in rows:
+            replies_into_current = (
+                current is not None and reply_seq is not None
+                and str(reply_seq) in current["seqs"]
+            )
+            gap_too_big = prev_sk is not None and (sk - prev_sk) > max_gap * 60
+
+            if current is None or (gap_too_big and not replies_into_current):
+                current = {"index": len(threads) + 1, "start": ts, "end": ts,
+                           "messages": [], "seqs": set(), "participants": set()}
+                threads.append(current)
+
+            current["messages"].append({
+                "user_name": user_name, "content": content, "timestamp": ts,
+                "message_seq": seq, "reply_to_seq": reply_seq, "is_bot": bool(is_bot),
+            })
+            if seq is not None:
+                current["seqs"].add(str(seq))
+            current["participants"].add(user_name)
+            current["end"] = ts
+            prev_sk = sk
+
+        for t in threads:
+            t["participants"] = sorted(p for p in t["participants"] if p)
+            t["seqs"] = len(t["seqs"])
+            t["size"] = len(t["messages"])
+            t["title"] = _thread_title(t["messages"])
+        return threads
 
     # ── AI usage metrics ─────────────────────────────────
 
@@ -1082,6 +1281,22 @@ class DatabaseManager:
         # Use the latest user_name from group_messages if available
         latest = self.get_latest_user_name(user_id, group_id)
         effective_name = latest or user_name
+        # Long-term memory: keep what we believed before, so the bot can say
+        # "you mentioned X before" instead of only knowing the latest snapshot.
+        try:
+            previous = self.fetch_data(
+                "SELECT profile_json FROM user_profiles WHERE user_id = ? AND group_id = ?",
+                (user_id, group_id),
+            )
+            if previous and previous[0][0] and previous[0][0] != profile_json:
+                self.execute_action(
+                    "INSERT INTO profile_history (user_id, group_id, profile_json, message_count) "
+                    "VALUES (?, ?, ?, ?)",
+                    (user_id, group_id, previous[0][0], message_count),
+                )
+        except sqlite3.Error:
+            logger.debug("profile history snapshot failed", exc_info=True)
+
         self.execute_action(
             "INSERT INTO user_profiles (user_id, group_id, user_name, profile_json, message_count, last_updated) "
             "VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime')) "
@@ -1120,11 +1335,62 @@ class DatabaseManager:
 
     # ── Tool usage tracking ────────────────────────────
 
-    def record_tool_usage(self, tool_name: str, user_id: str, group_id: str | None) -> None:
+    def record_tool_usage(self, tool_name: str, user_id: str, group_id: str | None,
+                          arguments: str = "", result: str = "",
+                          reasoning: str = "") -> None:
         self.deposit(
-            "tool_usage", "(tool_name, user_id, group_id)", "(?, ?, ?)",
-            (tool_name, user_id, group_id),
+            "tool_usage",
+            "(tool_name, user_id, group_id, arguments, result, reasoning)",
+            "(?, ?, ?, ?, ?, ?)",
+            (tool_name, user_id, group_id, arguments[:500], result[:500],
+             reasoning[:2000]),
         )
+
+    def get_recent_tool_chain(self, group_id: str | None, user_id: str,
+                              limit: int = 5) -> list[dict[str, Any]]:
+        """The most recent tool invocations for a user, oldest-first.
+
+        Backs the "what did you just do / what were you thinking" tool.
+        """
+        limit = self._clamp_int(limit, 5, 1, 20)
+        try:
+            rows = self.fetch_data(
+                "SELECT tool_name, arguments, result, reasoning, timestamp "
+                "FROM tool_usage WHERE user_id = ? AND IFNULL(group_id,'') = ? "
+                "ORDER BY id DESC LIMIT ?",
+                (user_id, group_id or "", limit),
+            )
+        except sqlite3.Error:
+            logger.exception("tool chain query failed")
+            return []
+        return [
+            {"tool_name": r[0], "arguments": r[1], "result": r[2],
+             "reasoning": r[3], "timestamp": r[4]}
+            for r in reversed(rows)
+        ]
+
+    def get_feature_requests(self, status: str = "", limit: int = 20) -> list[dict[str, Any]]:
+        """Feature requests, newest first (optionally filtered by status)."""
+        limit = self._clamp_int(limit, 20, 1, 100)
+        sql = ("SELECT id, summary_or_request, category, priority, status, timestamp "
+               "FROM (SELECT id, COALESCE(NULLIF(ai_summary,''), request_text) AS summary_or_request, "
+               "             category, priority, status, timestamp FROM feature_requests)")
+        params: tuple[Any, ...] = ()
+        if status:
+            sql += " WHERE status = ?"
+            params = (status,)
+        sql += " ORDER BY id DESC LIMIT ?"
+        params += (limit,)
+        try:
+            rows = self.fetch_data(sql, params)
+        except sqlite3.Error:
+            logger.exception("feature request query failed")
+            return []
+        return [
+            {"id": r[0], "summary": r[1], "category": r[2],
+             "priority": r[3], "status": r[4], "timestamp": r[5]}
+            for r in rows
+        ]
 
     def get_tool_stats(self) -> list[tuple[Any, ...]]:
         return self.fetch_data(
