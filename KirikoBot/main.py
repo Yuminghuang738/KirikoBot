@@ -245,11 +245,19 @@ def _load_history(uid: str, gid: str | None) -> list[dict[str, Any]]:
                 history.append({"role": "assistant", "content": "[已调用工具处理]"})
     return history[-MAX_HISTORY:]
 
-def _save_turn(uid: str, gid: str | None, user_msg: str, ai_text: str) -> None:
+def _save_turn(uid: str, gid: str | None, user_msg: str, ai_text: str,
+               reasoning: str = "", tool_chain: str = "") -> None:
+    """Persist one conversation turn.
+
+    The assistant row carries this turn's thinking chain and tool chain, so
+    the user can later ask "what were you thinking" about this reply (and the
+    dashboard's conversation log can show the chain).
+    """
     try:
         db.deposit_chat_history("user", uid, gid, user_msg, "", "")
         if ai_text:
-            db.deposit_chat_history("assistant", uid, gid, ai_text, "", "")
+            db.deposit_chat_history("assistant", uid, gid, ai_text,
+                                    tool_chain, "", reasoning)
     except Exception:
         logger.debug("main._save_turn 忽略了异常", exc_info=True)
 
@@ -272,6 +280,21 @@ def _enabled_tools(disabled: set[str] | None = None) -> list[dict[str, Any]]:
     All tool selection now happens in the model via native function calling."""
     banned = disabled_tool_names(disabled or set())
     return [t for t in tools_def.ai_tools() if t["function"]["name"] not in banned]
+
+
+def _tool_chain_json(tool_calls: Any) -> str:
+    """Compact, dashboard-friendly record of this turn's tool calls."""
+    if not tool_calls:
+        return ""
+    items = tool_calls if isinstance(tool_calls, list) else [tool_calls]
+    chain = []
+    for tc in items:
+        fn = tc.get("function", {}) if isinstance(tc, dict) else {}
+        chain.append({"name": fn.get("name", ""), "arguments": fn.get("arguments", "")})
+    try:
+        return json.dumps(chain, ensure_ascii=False)[:2000]
+    except (TypeError, ValueError):
+        return ""
 
 
 def _reply_note(robot: RobotServer) -> str:
@@ -748,6 +771,7 @@ def main_logic(robot: RobotServer) -> None:
         _log_thinking(robot.user_name, ai.reasoning_content)
 
         tool_calls = ai.ai_message.get("tool_calls") if ai.ai_message else None
+        final_text = ""
         if tool_calls:
             tc_list = tool_calls if isinstance(tool_calls, list) else [tool_calls]
             follow_up_tcs: list[dict[str, Any]] = []
@@ -791,12 +815,18 @@ def main_logic(robot: RobotServer) -> None:
             if follow_up_tcs:
                 ai.follow_up_request(follow_up_tcs)
                 _log_thinking(robot.user_name, ai.reasoning_content)
-                if ai.ai_text:
-                    robot.reply(ai.ai_text)
+                final_text = ai.ai_text or ""
         elif ai.ai_text:
-            robot.reply(ai.ai_text)
+            final_text = ai.ai_text
 
-        _save_turn(robot.user_id, robot.group_id, robot.msg, ai.ai_text)
+        # Persist BEFORE sending. Delivery can block (slow or failing send),
+        # and a user who immediately asks "what were you thinking" must not
+        # race an unwritten record.
+        _save_turn(robot.user_id, robot.group_id, robot.msg, final_text,
+                   reasoning=ai.reasoning_content or "",
+                   tool_chain=_tool_chain_json(tool_calls))
+        if final_text:
+            robot.reply(final_text)
 
         # Record turn for learning (evaluated on next user message)
         if "learning" not in disabled:

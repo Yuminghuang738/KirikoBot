@@ -1091,6 +1091,30 @@ tbody tr:hover td { background: var(--card-2); }
   padding-left: 7px; margin-bottom: 3px;
 }
 
+/* ── Per-turn tool chain / thinking (conversation log) ──── */
+.chain { margin-top: 7px; }
+.chain summary {
+  cursor: pointer; font-size: .72rem; color: var(--blue);
+  list-style: none; user-select: none; padding: 2px 0;
+}
+.chain summary::-webkit-details-marker { display: none; }
+.chain summary:hover { text-decoration: underline; }
+.chain-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 5px 0 5px 4px; font-size: .72rem;
+}
+.chain-row code {
+  font-family: var(--mono); font-size: .68rem; color: var(--text-2);
+  background: var(--card-2); border: 1px solid var(--border);
+  padding: 1px 6px; border-radius: 5px; word-break: break-all;
+}
+.chain-think {
+  font-size: .73rem; color: var(--text-2); line-height: 1.6;
+  background: var(--card-2); border-left: 2px solid var(--purple);
+  border-radius: 0 8px 8px 0; padding: 8px 12px; margin-top: 4px;
+  white-space: pre-wrap; word-break: break-word;
+}
+
 /* ── Topic threads (review page) ────────────────────────── */
 .thread { border-bottom: 1px solid var(--border); }
 .thread:last-child { border-bottom: none; }
