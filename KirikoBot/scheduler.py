@@ -262,6 +262,8 @@ class BotScheduler:
                 text = self._format_titles("🎮 游戏速递", items, 5)
             elif topic == "hitokoto":
                 text = self._build_hitokoto()
+            elif topic == "amp_head":
+                text = self._build_amp_head()
             else:
                 logger.warning("Unknown subscription topic: %s", topic)
                 return
@@ -329,6 +331,49 @@ class BotScheduler:
             p for p in (quote.get("source"), quote.get("author")) if p
         )
         return f"💬 每日一言：\n  {quote['text']}" + (f"\n  —— {credit}" if credit else "")
+
+    def _build_amp_head(self) -> str:
+        """Daily guitar amp-head recommendation.
+
+        The facts come from the curated `amp_heads` table rather than from the
+        model: years, tube complements and street prices are exactly the kind
+        of detail an AI will invent convincingly. No API call, no token cost.
+        """
+        try:
+            head = self.db.get_amp_head_of_the_day()
+        except Exception:
+            logger.exception("Amp head lookup failed")
+            return ""
+        if not head:
+            return ""
+
+        title = f"{head['brand']} {head['model']}".strip()
+        lines = [f"🎸 今日箱头 · {title}", ""]
+
+        born = " · ".join(
+            x for x in (f"{head['year']} 年" if head.get("year") else "",
+                        head.get("origin") or "") if x
+        )
+        if born:
+            lines.append(f"📅 诞生：{born}")
+
+        specs = " · ".join(
+            x for x in (head.get("power"), head.get("kind"), head.get("tubes")) if x
+        )
+        if specs:
+            lines.append(f"🔊 配置：{specs}")
+
+        if head.get("tone"):
+            lines.extend(["", "🎵 音色特点：", f"  {head['tone']}"])
+        if head.get("price"):
+            lines.extend(["", f"💰 市场价格：{head['price']}"])
+        if head.get("tip"):
+            lines.extend(["", "⭐ 使用推荐：", f"  {head['tip']}"])
+        if head.get("famous"):
+            lines.extend(["", f"🎼 知名使用者：{head['famous']}"])
+
+        lines.extend(["", "（价格随成色与行情浮动，仅供参考）"])
+        return "\n".join(lines)
 
     def _build_roll_call(self, group_id: str) -> str:
         """Daily roll call: @ the members who spoke most today."""

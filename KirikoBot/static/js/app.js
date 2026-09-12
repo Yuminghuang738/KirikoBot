@@ -2212,12 +2212,18 @@ const PUSH_TOPICS={
   gaming_news:'🎮 游戏速递',
   hitokoto:'💬 每日一言',
   daily_roll_call:'📣 今日发言榜',
+  amp_head:'🎸 今日箱头',
 };
 const PUSH_HINT={
   morning_news:'时政要闻 + 游戏资讯 + 每日一言',
   gaming_news:'只推游戏圈热点',
   hitokoto:'一句随机的语录',
   daily_roll_call:'@ 出当天发言最多的三个人',
+  amp_head:'每天介绍一款吉他音箱头：年代、音色、市价、选购建议',
+};
+// Topics that were requested at a specific hour start there instead of 07:00.
+const PUSH_DEFAULT_TIME={
+  amp_head:'08:00',
 };
 
 async function pushHTML(){
@@ -2249,13 +2255,13 @@ async function loadPush(){
   subs.forEach(s=>{byTopic[s.topic]=s});
 
   const rows=Object.keys(PUSH_TOPICS).map(t=>{
-    const cur=byTopic[t]||{enabled:false,push_time:'07:00'};
+    const cur=byTopic[t]||{enabled:false,push_time:PUSH_DEFAULT_TIME[t]||'07:00'};
     return `<div class="set-row">
       <div class="sr-info">
         <div class="sr-label">${esc(PUSH_TOPICS[t])}</div>
         <div class="sr-desc">${esc(PUSH_HINT[t]||'')}</div>
       </div>
-      <input type="time" value="${esc(cur.push_time||'07:00')}" data-push-time="${esc(t)}"
+      <input type="time" value="${esc(cur.push_time||PUSH_DEFAULT_TIME[t]||'07:00')}" data-push-time="${esc(t)}"
              style="width:120px" onchange="savePush('${esc(t)}',this.value,null)">
       <label class="switch"><input type="checkbox" data-push-on="${esc(t)}" ${cur.enabled?'checked':''}
              onchange="savePush('${esc(t)}',null,this.checked)"><span class="slider"></span></label>
