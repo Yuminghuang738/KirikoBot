@@ -16,7 +16,7 @@ VALID_TABLES = {
     "app_versions", "changelog", "stickers",
     "user_affection", "user_affection_log",
     "feature_settings", "bot_messages", "ai_calls", "group_subscriptions", "profile_history",
-    "amp_heads",
+    "amp_heads", "app_state",
 }
 
 
@@ -151,22 +151,41 @@ class DatabaseManager:
                 )
                 connect.execute(
                     """CREATE TABLE IF NOT EXISTS amp_heads(
-                        id     INTEGER PRIMARY KEY AUTOINCREMENT,
-                        brand  TEXT NOT NULL,
-                        model  TEXT NOT NULL,
-                        year   TEXT DEFAULT '',
-                        origin TEXT DEFAULT '',
-                        kind   TEXT DEFAULT '',
-                        power  TEXT DEFAULT '',
-                        tubes  TEXT DEFAULT '',
-                        tone   TEXT DEFAULT '',
-                        price  TEXT DEFAULT '',
-                        famous TEXT DEFAULT '',
-                        tip    TEXT DEFAULT '',
+                        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                        brand      TEXT NOT NULL,
+                        model      TEXT NOT NULL,
+                        year       TEXT DEFAULT '',
+                        origin     TEXT DEFAULT '',
+                        kind       TEXT DEFAULT '',
+                        power      TEXT DEFAULT '',
+                        tubes      TEXT DEFAULT '',
+                        tone       TEXT DEFAULT '',
+                        price      TEXT DEFAULT '',
+                        famous     TEXT DEFAULT '',
+                        tip        TEXT DEFAULT '',
+                        source     TEXT DEFAULT 'manual',
+                        source_url TEXT DEFAULT '',
+                        fetched_at TEXT DEFAULT '',
                         UNIQUE(brand, model)
                     )"""
                 )
+                # Older databases predate the provenance columns.
+                existing = {
+                    r[1] for r in connect.execute("PRAGMA table_info(amp_heads)")
+                }
+                for col in ("source", "source_url", "fetched_at"):
+                    if col not in existing:
+                        default = "'manual'" if col == "source" else "''"
+                        connect.execute(
+                            f"ALTER TABLE amp_heads ADD COLUMN {col} TEXT DEFAULT {default}"
+                        )
                 self.seed_amp_heads(connect)
+                connect.execute(
+                    """CREATE TABLE IF NOT EXISTS app_state(
+                        key   TEXT PRIMARY KEY,
+                        value TEXT DEFAULT ''
+                    )"""
+                )
                 connect.execute(
                     """CREATE TABLE IF NOT EXISTS group_messages(
                         id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1477,13 +1496,42 @@ class DatabaseManager:
             "tarot_cards": stickers,
         }
 
-    # ── Daily amp head (箱头推荐) ───────────────────────────
+    # ── Generic key/value state ────────────────────────────
+    def get_state(self, key: str, default: str = "") -> str:
+        try:
+            rows = self.fetch_data("SELECT value FROM app_state WHERE key = ?", (key,))
+        except sqlite3.Error:
+            return default
+        return rows[0][0] if rows else default
+
+    def set_state(self, key: str, value: str) -> None:
+        try:
+            self.execute_action(
+                "INSERT INTO app_state (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+        except sqlite3.Error:
+            logger.exception("app_state write failed for %s", key)
+
+    # ── Amp heads (箱头库) ─────────────────────────────────    # `source` records where a row came from: 'manual' (the curated file) or
+    # 'wikipedia' (crawled). It matters because the two have very different
+    # reliability, and the push says which one you are looking at.
+    AMP_HEAD_FIELDS = (
+        "brand", "model", "year", "origin", "kind", "power", "tubes",
+        "tone", "price", "famous", "tip", "source", "source_url", "fetched_at",
+    )
+
     def seed_amp_heads(self, connect: sqlite3.Connection | None = None) -> int:
         """Load the curated amp-head list, idempotently.
 
         Keyed on (brand, model), so restarting after editing
         ``amp_heads_data.py`` *updates* the row rather than duplicating it.
         That is the intended way to fix a wrong year or a stale price.
+
+        The curated file always wins: a hand-written row overwrites anything a
+        crawl produced for the same amp, and is re-marked as 'manual' so the
+        push stops attributing it to Wikipedia.
         """
         try:
             from amp_heads_data import AMP_HEADS, COLUMNS
@@ -1496,8 +1544,9 @@ class DatabaseManager:
             f"{c}=excluded.{c}" for c in COLUMNS if c not in ("brand", "model")
         )
         sql = (
-            f"INSERT INTO amp_heads ({', '.join(COLUMNS)}) VALUES ({placeholders}) "
-            f"ON CONFLICT(brand, model) DO UPDATE SET {updates}"
+            f"INSERT INTO amp_heads ({', '.join(COLUMNS)}, source) "
+            f"VALUES ({placeholders}, 'manual') "
+            f"ON CONFLICT(brand, model) DO UPDATE SET {updates}, source='manual'"
         )
         own = connect is None
         if own:
@@ -1511,11 +1560,74 @@ class DatabaseManager:
             logger.exception("amp_heads seeding failed")
             return 0
 
-    def count_amp_heads(self) -> int:
+    def count_amp_heads(self, source: str = "") -> int:
+        sql = "SELECT COUNT(*) FROM amp_heads"
+        params: tuple[Any, ...] = ()
+        if source:
+            sql += " WHERE source = ?"
+            params = (source,)
         try:
-            return int(self.fetch_data("SELECT COUNT(*) FROM amp_heads")[0][0])
+            return int(self.fetch_data(sql, params)[0][0])
         except (sqlite3.Error, IndexError, TypeError, ValueError):
             return 0
+
+    def amp_head_exists(self, brand: str, model: str) -> bool:
+        try:
+            rows = self.fetch_data(
+                "SELECT 1 FROM amp_heads WHERE brand = ? AND model = ? LIMIT 1",
+                (brand, model),
+            )
+        except sqlite3.Error:
+            return False
+        return bool(rows)
+
+    def add_amp_head(self, data: dict[str, Any], source: str,
+                     source_url: str = "") -> bool:
+        """Insert one row (crawl path). Returns False if it already exists.
+
+        Deliberately does *not* update on conflict: a crawl must never clobber
+        a curated row or overwrite a previous crawl's better text.
+        """
+        cols = [c for c in self.AMP_HEAD_FIELDS if c not in ("source", "source_url",
+                                                             "fetched_at")]
+        values = [str(data.get(c) or "").strip() for c in cols]
+        if not values[0] or not values[1]:
+            return False
+        if self.amp_head_exists(values[0], values[1]):
+            return False
+        cols += ["source", "source_url", "fetched_at"]
+        values += [source, source_url, datetime.now().strftime("%Y-%m-%d %H:%M:%S")]
+        placeholders = ", ".join("?" for _ in cols)
+        try:
+            self.execute_action(
+                f"INSERT INTO amp_heads ({', '.join(cols)}) VALUES ({placeholders})",
+                tuple(values),
+            )
+        except sqlite3.Error:
+            logger.exception("amp_head insert failed")
+            return False
+        return True
+
+    def get_amp_heads(self, limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
+        """The whole library for the dashboard, newest/manual first."""
+        limit = self._clamp_int(limit, 200, 1, 500)
+        offset = self._clamp_int(offset, 0, 0, 100000)
+        fields = ", ".join(["id"] + list(self.AMP_HEAD_FIELDS))
+        try:
+            rows = self.fetch_data(
+                f"SELECT {fields} FROM amp_heads "
+                "ORDER BY CASE source WHEN 'manual' THEN 0 ELSE 1 END, brand, model "
+                "LIMIT ? OFFSET ?",
+                (limit, offset),
+            )
+        except sqlite3.Error:
+            logger.exception("amp_heads query failed")
+            return []
+        keys = ["id"] + list(self.AMP_HEAD_FIELDS)
+        return [dict(zip(keys, r)) for r in rows]
+
+    def delete_amp_head(self, head_id: int) -> None:
+        self.execute_action("DELETE FROM amp_heads WHERE id = ?", (head_id,))
 
     def get_amp_head_of_the_day(self) -> dict[str, Any] | None:
         """Today's amp head, rotating through the whole library once per cycle.
@@ -1527,12 +1639,9 @@ class DatabaseManager:
         keeping: every group gets the same amp on the same day, so people can
         actually talk about it.
         """
-        try:
-            from amp_heads_data import COLUMNS
-        except ImportError:
-            return None
+        fields = ", ".join(self.AMP_HEAD_FIELDS)
         sql = (
-            f"SELECT {', '.join(COLUMNS)} FROM amp_heads ORDER BY id LIMIT 1 OFFSET ("
+            f"SELECT {fields} FROM amp_heads ORDER BY id LIMIT 1 OFFSET ("
             "  CAST(strftime('%j','now','localtime') AS INTEGER) "
             "  % MAX((SELECT COUNT(*) FROM amp_heads), 1))"
         )
@@ -1543,7 +1652,7 @@ class DatabaseManager:
             return None
         if not rows:
             return None
-        return dict(zip(COLUMNS, rows[0]))
+        return dict(zip(self.AMP_HEAD_FIELDS, rows[0]))
 
     def get_all_history(self, limit: int = 50) -> list[dict[str, Any]]:
         rows = self.fetch_data(

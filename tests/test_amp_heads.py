@@ -66,10 +66,13 @@ class TestSeeding:
 class TestHeadOfTheDay:
     def test_returns_a_full_record(self, db):
         from amp_heads_data import COLUMNS
+        from database_manager import DatabaseManager
 
         head = db.get_amp_head_of_the_day()
         assert head is not None
-        assert set(head) == set(COLUMNS)
+        # The curated columns plus provenance (source / source_url / fetched_at).
+        assert set(COLUMNS) <= set(head)
+        assert set(head) == set(DatabaseManager.AMP_HEAD_FIELDS)
         assert head["brand"] and head["model"]
 
     def test_same_day_is_stable_within_a_day(self, db):
