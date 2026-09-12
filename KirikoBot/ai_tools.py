@@ -1448,3 +1448,214 @@ class ReadContextTool:
 
         ai.tool_result_text = "\n".join(lines)
         ai.user_text = ai.tool_result_text
+
+
+# ══════════════════════════════════════════════════════════
+#  Feature list (群友提交的功能需求)
+# ══════════════════════════════════════════════════════════
+
+class FeatureListTool:
+    """FOLLOW_UP tool: what has been requested, and where it stands."""
+
+    STATUS_LABEL = {"pending": "待处理", "done": "已完成", "rejected": "已拒绝"}
+
+    def __init__(self, database_manager: Any, msg_package: Any) -> None:
+        self.db = database_manager
+        self.msg_package = msg_package
+
+    def feature_list_call(self, robot: Any, ai: Any) -> None:
+        tool_calls = ai.ai_message.get("tool_calls")
+        _set_tool_meta(ai, tool_calls)
+
+        args: dict[str, Any] = {}
+        if tool_calls:
+            try:
+                args = json.loads(tool_calls[0]["function"].get("arguments", "{}"))
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+
+        status = str(args.get("status") or "pending").strip().lower()
+        if status in ("all", "全部", ""):
+            status = ""
+
+        try:
+            items = self.db.get_feature_requests(status=status, limit=15)
+        except Exception:
+            logger.exception("feature_list failed")
+            ai.tool_result_text = "查询功能清单失败了。"
+            ai.user_text = ai.tool_result_text
+            return
+
+        if not items:
+            label = self.STATUS_LABEL.get(status, "该状态")
+            ai.tool_result_text = (
+                f"目前没有「{label}」的功能需求。"
+                "用自然的语气告诉对方就好，不要编造需求。"
+            )
+            ai.user_text = ai.tool_result_text
+            return
+
+        lines = ["功能需求清单（真实数据，可据此回答）："]
+        for it in items:
+            tag = self.STATUS_LABEL.get(it["status"], it["status"])
+            lines.append(f"- [{tag}] {it['summary']}（{it['timestamp']} 提交）")
+        lines.append("用 Kiriko 的语气概括给用户听，不要逐条照念。")
+
+        ai.tool_result_text = "\n".join(lines)
+        ai.user_text = ai.tool_result_text
+
+
+# ══════════════════════════════════════════════════════════
+#  Explain self (调用链 + 思维链)
+# ══════════════════════════════════════════════════════════
+
+class ExplainSelfTool:
+    """FOLLOW_UP tool: replay the last turn's tool chain and reasoning."""
+
+    MAX_REASONING = 400
+
+    def __init__(self, database_manager: Any, msg_package: Any) -> None:
+        self.db = database_manager
+        self.msg_package = msg_package
+
+    def explain_self_call(self, robot: Any, ai: Any) -> None:
+        _set_tool_meta(ai, ai.ai_message.get("tool_calls"))
+
+        chain = []
+        try:
+            chain = self.db.get_recent_tool_chain(
+                robot.group_id if robot.msg_type == "group" else None,
+                robot.user_id, limit=5,
+            )
+        except Exception:
+            logger.exception("explain_self chain lookup failed")
+
+        # The reasoning captured on THIS request belongs to the turn being
+        # explained (it is what produced the current tool call).
+        reasoning = (getattr(ai, "reasoning_content", "") or "").strip()
+
+        if not chain and not reasoning:
+            ai.tool_result_text = (
+                "你上一轮没有调用任何工具，也没有留下可复述的思考。"
+                "自然地说明一下就好，不要编造调用记录。"
+            )
+            ai.user_text = ai.tool_result_text
+            return
+
+        lines = ["你上一轮的执行情况（真实记录）："]
+        if chain:
+            lines.append("调用过的工具：")
+            for c in chain:
+                args = (c["arguments"] or "").strip()
+                result = " ".join((c["result"] or "").split())[:120]
+                lines.append(f"- {c['tool_name']}（参数 {args or '无'}）→ {result or '无返回'}")
+        else:
+            lines.append("上一轮没有调用工具。")
+
+        if reasoning:
+            excerpt = " ".join(reasoning.split())
+            if len(excerpt) > self.MAX_REASONING:
+                excerpt = excerpt[:self.MAX_REASONING] + "…"
+            lines.append(f"当时的思考（节选）：{excerpt}")
+
+        lines.append(
+            "用第一人称口语化地说明你刚才做了什么，不要输出工具名清单，"
+            "也不要说「根据记录」这类话。"
+        )
+        ai.tool_result_text = "\n".join(lines)
+        ai.user_text = ai.tool_result_text
+
+
+# ══════════════════════════════════════════════════════════
+#  Similar sticker (感知哈希找最像的一张)
+# ══════════════════════════════════════════════════════════
+
+class SimilarStickerTool:
+    """FOLLOW_UP tool: send the library sticker closest to the user's image.
+
+    Reuses the perceptual-hash index the collector already maintains for
+    de-duplication, so this costs nothing extra to build.
+    """
+
+    def __init__(self, collector: Any, msg_package: Any) -> None:
+        self.collector = collector
+        self.msg_package = msg_package
+
+    def similar_sticker_call(self, robot: Any, ai: Any) -> None:
+        import os
+
+        import imagehash
+        import requests as _requests
+
+        from sticker_collector import PHASH_THRESHOLD, STICKER_DIR, StickerCollector
+
+        _set_tool_meta(ai, ai.ai_message.get("tool_calls"))
+
+        urls = robot.incoming.image_urls
+        if not urls:
+            ai.tool_result_text = (
+                "这条消息里没有图片，没法找相似表情。"
+                "如实告诉对方需要先发一张图即可。"
+            )
+            ai.user_text = ai.tool_result_text
+            return
+
+        target = None
+        try:
+            resp = _requests.get(urls[0], timeout=10)
+            resp.raise_for_status()
+            target = StickerCollector._phash_data(resp.content)
+        except Exception:
+            logger.debug("similar sticker: hash failed", exc_info=True)
+
+        if not target:
+            ai.tool_result_text = "没能识别这张图（可能不是常见格式），换一张试试。"
+            ai.user_text = ai.tool_result_text
+            return
+
+        try:
+            target_hash = imagehash.hex_to_hash(target)
+        except Exception:
+            ai.tool_result_text = "这张图算不出相似度，换一张试试。"
+            ai.user_text = ai.tool_result_text
+            return
+
+        best_file, best_dist = None, 999
+        for phash_hex, filename in (self.collector.phashes or {}).items():
+            try:
+                dist = target_hash - imagehash.hex_to_hash(phash_hex)
+            except Exception:
+                continue
+            if dist < best_dist:
+                best_file, best_dist = filename, dist
+
+        if not best_file or best_dist > PHASH_THRESHOLD:
+            ai.tool_result_text = (
+                "表情库里没有找到足够相似的表情（这是真实结果）。"
+                "用自然的语气说没找到就行，不要编造。"
+            )
+            ai.user_text = ai.tool_result_text
+            return
+
+        path = os.path.join(STICKER_DIR, best_file)
+        if not os.path.exists(path):
+            ai.tool_result_text = "找到了相似表情但文件不见了，如实说明即可。"
+            ai.user_text = ai.tool_result_text
+            return
+
+        try:
+            from llbot_client import MessageBuilder
+            builder = MessageBuilder().image(path)
+            if robot.msg_type == "group":
+                robot.llbot.send_group_msg(robot.group_id or "", builder.build())
+            else:
+                robot.llbot.send_private_msg(robot.user_id, builder.build())
+            logger.info("Similar sticker sent: %s (distance %d)", best_file, best_dist)
+            ai.tool_result_text = (
+                f"已经发出表情库里最像的一张（差异值 {best_dist}，越小越像）。"
+                "用一句话配一下就行，不要再重复发图。"
+            )
+        except Exception:
+            logger.exception("similar sticker send failed")
+            ai.tool_result_text = "发送相似表情失败了，如实说明即可。"
+        ai.user_text = ai.tool_result_text
