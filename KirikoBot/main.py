@@ -35,7 +35,7 @@ import ai_metrics
 import dashboard_auth
 import webhook_auth
 from prompt_builder import (
-    STYLE_GUIDE,
+    build_role_prompt,
     build_system_prompt as _build_system_prompt,
     build_user_message as _context,
     describe_reply,
@@ -345,7 +345,7 @@ def _process_sticker_analysis(robot: RobotServer, image_url: str) -> None:
                 )
                 reply_text = AiServer.vision_chat_reply(
                     image_url_or_path=image_url,
-                    role_prompt=f"{role or ''}\n\n{STYLE_GUIDE}",
+                    role_prompt=build_role_prompt(role),
                     user_name=robot.user_name,
                     user_text=robot.msg.strip(),
                 )
@@ -365,7 +365,7 @@ def _process_sticker_analysis(robot: RobotServer, image_url: str) -> None:
             if robot.msg.strip():
                 user_text += f" 用户同时说：{robot.msg.strip()}"
             system_text = (
-                (Config.GROUP_ROLE or "") + "\n" + STYLE_GUIDE + "\n"
+                build_role_prompt(Config.GROUP_ROLE) + "\n"
                 "有群友发了一张表情包/图片。你看不到图片内容，"
                 "请根据上下文对这张表情包做出回应，30字以内。"
             )
