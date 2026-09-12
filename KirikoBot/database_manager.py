@@ -126,6 +126,12 @@ class DatabaseManager:
                         timestamp DATETIME DEFAULT (datetime('now', 'localtime'))
                     )"""
                 )
+                # Migration: keep the turn's thinking chain so a user can ask
+                # "what were you thinking" about the PREVIOUS reply.
+                try:
+                    connect.execute("ALTER TABLE history ADD COLUMN reasoning TEXT DEFAULT ''")
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
                 connect.execute(
                     """CREATE TABLE IF NOT EXISTS tarot_history(
                         id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -457,12 +463,37 @@ class DatabaseManager:
     def deposit_chat_history(
         self, role: str, user_id: str, group_id: str | None,
         content: str, tool_calls: str, tool_call_id: str,
+        reasoning: str = "",
     ) -> None:
         self.deposit(
-            "history", "(role, user_id, group_id, content, tool_calls, tool_call_id)",
-            "(?, ?, ?, ?, ?, ?)",
-            (role, user_id, group_id, content, tool_calls, tool_call_id),
+            "history",
+            "(role, user_id, group_id, content, tool_calls, tool_call_id, reasoning)",
+            "(?, ?, ?, ?, ?, ?, ?)",
+            (role, user_id, group_id, content, tool_calls, tool_call_id,
+             reasoning[:8000]),
         )
+
+    def get_last_bot_turn(self, user_id: str, group_id: str | None) -> dict[str, Any] | None:
+        """The bot's most recent finished reply, with its thinking chain.
+
+        Used by explain_self: when the user asks about "the previous message",
+        the current turn has not been saved yet, so the newest assistant row
+        *is* the previous reply.
+        """
+        try:
+            rows = self.fetch_data(
+                "SELECT content, tool_calls, reasoning, timestamp FROM history "
+                "WHERE role = 'assistant' AND user_id = ? AND IFNULL(group_id,'') = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (user_id, group_id or ""),
+            )
+        except sqlite3.Error:
+            logger.exception("last bot turn query failed")
+            return None
+        if not rows:
+            return None
+        return {"content": rows[0][0], "tool_calls": rows[0][1] or "",
+                "reasoning": rows[0][2] or "", "timestamp": rows[0][3]}
 
     def deposit_tarot_history(self, user_id: str, card_name: str) -> None:
         self.deposit("tarot_history", "(user_id, card_name)", "(?, ?)", (user_id, card_name))
@@ -1428,12 +1459,14 @@ class DatabaseManager:
 
     def get_all_history(self, limit: int = 50) -> list[dict[str, Any]]:
         rows = self.fetch_data(
-            "SELECT user_id, group_id, role, substr(content,1,200), tool_calls, timestamp "
+            "SELECT user_id, group_id, role, substr(content,1,200), tool_calls, "
+            "       timestamp, reasoning "
             "FROM history ORDER BY id DESC LIMIT ?", (limit,)
         )
         return [
             {"user_id": r[0], "group_id": r[1], "role": r[2],
-             "content": r[3], "has_tools": bool(r[4]), "time": r[5]}
+             "content": r[3], "has_tools": bool(r[4]), "time": r[5],
+             "tool_calls": r[4] or "", "reasoning": r[6] or ""}
             for r in rows
         ]
 

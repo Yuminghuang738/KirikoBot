@@ -1510,9 +1510,13 @@ class FeatureListTool:
 # ══════════════════════════════════════════════════════════
 
 class ExplainSelfTool:
-    """FOLLOW_UP tool: replay the last turn's tool chain and reasoning."""
+    """FOLLOW_UP tool: replay the PREVIOUS reply's tool chain and thinking.
 
-    MAX_REASONING = 400
+    The current turn is not saved until after the reply is sent, so the newest
+    assistant row in `history` is exactly the message the user is asking about.
+    """
+
+    MAX_REASONING = 1200
 
     def __init__(self, database_manager: Any, msg_package: Any) -> None:
         self.db = database_manager
@@ -1521,46 +1525,52 @@ class ExplainSelfTool:
     def explain_self_call(self, robot: Any, ai: Any) -> None:
         _set_tool_meta(ai, ai.ai_message.get("tool_calls"))
 
-        chain = []
+        group_id = robot.group_id if robot.msg_type == "group" else None
         try:
-            chain = self.db.get_recent_tool_chain(
-                robot.group_id if robot.msg_type == "group" else None,
-                robot.user_id, limit=5,
-            )
+            last = self.db.get_last_bot_turn(robot.user_id, group_id)
         except Exception:
-            logger.exception("explain_self chain lookup failed")
+            logger.exception("explain_self lookup failed")
+            last = None
 
-        # The reasoning captured on THIS request belongs to the turn being
-        # explained (it is what produced the current tool call).
-        reasoning = (getattr(ai, "reasoning_content", "") or "").strip()
-
-        if not chain and not reasoning:
+        if not last:
             ai.tool_result_text = (
-                "你上一轮没有调用任何工具，也没有留下可复述的思考。"
-                "自然地说明一下就好，不要编造调用记录。"
+                "你还没有回复过这个人，没有可查阅的记录。如实说明即可，不要编造。"
             )
             ai.user_text = ai.tool_result_text
             return
 
-        lines = ["你上一轮的执行情况（真实记录）："]
-        if chain:
-            lines.append("调用过的工具：")
-            for c in chain:
-                args = (c["arguments"] or "").strip()
-                result = " ".join((c["result"] or "").split())[:120]
-                lines.append(f"- {c['tool_name']}（参数 {args or '无'}）→ {result or '无返回'}")
-        else:
-            lines.append("上一轮没有调用工具。")
+        lines = ["你上一次回复的真实记录（用户要求查阅，可以如实展示）："]
+        reply = " ".join((last["content"] or "").split())
+        if reply:
+            lines.append(f"上次回复的内容：{reply[:200]}")
 
+        chain: list[dict[str, Any]] = []
+        if last["tool_calls"]:
+            try:
+                chain = json.loads(last["tool_calls"])
+            except (json.JSONDecodeError, TypeError):
+                chain = []
+        if chain:
+            parts = []
+            for c in chain:
+                name = c.get("name", "?")
+                args = (c.get("arguments") or "").strip()
+                parts.append(f"{name}({args})" if args and args != "{}" else name)
+            lines.append("上次调用过的工具：" + "、".join(parts))
+        else:
+            lines.append("上次没有调用工具，是直接回答的。")
+
+        reasoning = " ".join((last["reasoning"] or "").split())
         if reasoning:
-            excerpt = " ".join(reasoning.split())
-            if len(excerpt) > self.MAX_REASONING:
-                excerpt = excerpt[:self.MAX_REASONING] + "…"
-            lines.append(f"当时的思考（节选）：{excerpt}")
+            if len(reasoning) > self.MAX_REASONING:
+                reasoning = reasoning[:self.MAX_REASONING] + "…"
+            lines.append(f"上次的思维链：{reasoning}")
+        else:
+            lines.append("上次没有留下思维链记录。")
 
         lines.append(
-            "用第一人称口语化地说明你刚才做了什么，不要输出工具名清单，"
-            "也不要说「根据记录」这类话。"
+            "用第一人称把这些讲给对方听，像在回忆自己刚才的想法，"
+            "不要提「记录」「数据库」这类词。思维链可以照实说，但不要逐字复读整段。"
         )
         ai.tool_result_text = "\n".join(lines)
         ai.user_text = ai.tool_result_text

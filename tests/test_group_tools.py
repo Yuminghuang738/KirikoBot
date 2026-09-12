@@ -208,3 +208,71 @@ class TestContextPromptGuidance:
         prompt = build_system_prompt(Robot())
         assert "read_context" in prompt
         assert "群聊语境" in prompt
+
+
+class TestTurnChainRecording:
+    """The chain belongs to a turn, and users ask about the PREVIOUS reply."""
+
+    def test_saves_and_reads_back_the_thinking_chain(self, db):
+        db.deposit_chat_history("assistant", "u1", "g1", "今天多云", "", "",
+                                reasoning="先查天气再回答")
+        last = db.get_last_bot_turn("u1", "g1")
+        assert last["content"] == "今天多云"
+        assert last["reasoning"] == "先查天气再回答"
+
+    def test_stores_the_tool_chain_json(self, db):
+        chain = '[{"name": "weather", "arguments": "{\\"city\\": \\"杭州\\"}"}]'
+        db.deposit_chat_history("assistant", "u1", "g1", "查到了", chain, "", "")
+        last = db.get_last_bot_turn("u1", "g1")
+        assert '"weather"' in last["tool_calls"]
+
+    def test_returns_the_most_recent_reply_only(self, db):
+        db.deposit_chat_history("assistant", "u1", "g1", "第一句", "", "", "")
+        db.deposit_chat_history("user", "u1", "g1", "第二问", "", "", "")
+        db.deposit_chat_history("assistant", "u1", "g1", "第二句", "", "", "")
+        assert db.get_last_bot_turn("u1", "g1")["content"] == "第二句"
+
+    def test_user_rows_are_not_returned(self, db):
+        db.deposit_chat_history("user", "u1", "g1", "用户的问话", "", "", "")
+        assert db.get_last_bot_turn("u1", "g1") is None
+
+    def test_scoped_per_user_and_group(self, db):
+        db.deposit_chat_history("assistant", "u1", "g1", "给 u1 的", "", "", "")
+        db.deposit_chat_history("assistant", "u2", "g1", "给 u2 的", "", "", "")
+        assert db.get_last_bot_turn("u2", "g1")["content"] == "给 u2 的"
+        assert db.get_last_bot_turn("u1", "g2") is None
+
+    def test_history_page_exposes_chain_and_reasoning(self, db):
+        db.deposit_chat_history("assistant", "u1", "g1", "回复",
+                                '[{"name":"dice"}]', "", reasoning="想了想")
+        rec = db.get_all_history(10)[0]
+        assert rec["tool_calls"] == '[{"name":"dice"}]'
+        assert rec["reasoning"] == "想了想"
+
+    def test_reasoning_column_is_migrated_onto_old_dbs(self, tmp_path):
+        import sqlite3
+
+        from database_manager import DatabaseManager
+
+        path = str(tmp_path / "legacy.db")
+        conn = sqlite3.connect(path)
+        conn.execute(
+            """CREATE TABLE history(
+                id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL,
+                group_id TEXT, role TEXT NOT NULL, content TEXT NOT NULL,
+                tool_calls TEXT, tool_call_id TEXT,
+                timestamp DATETIME DEFAULT (datetime('now','localtime'))
+            )"""
+        )
+        conn.execute("INSERT INTO history (user_id,role,content) VALUES ('u1','assistant','旧回复')")
+        conn.commit()
+        conn.close()
+
+        DatabaseManager(path)
+        conn = sqlite3.connect(path)
+        try:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(history)")}
+            assert "reasoning" in cols
+            assert conn.execute("SELECT COUNT(*) FROM history").fetchone()[0] == 1
+        finally:
+            conn.close()
