@@ -95,6 +95,7 @@ backups/
 .DS_Store
 Thumbs.db
 *.bak
+*.db.bak*
 
 # ====================
 # QR Codes / Auth Images

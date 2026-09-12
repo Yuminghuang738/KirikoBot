@@ -17,7 +17,8 @@ MAIN_PY = os.path.join(APP_DIR, "main.py")
 APP_JS = os.path.join(APP_DIR, "static", "js", "app.js")
 
 from prompt_builder import (  # noqa: E402  (needs conftest's sys.path setup)
-    STYLE_GUIDE,
+    PERSONA,
+    build_role_prompt,
     build_system_prompt,
     build_user_message,
 )
@@ -41,28 +42,38 @@ class _Robot:
 
 class TestStyleGuide:
     def test_is_substantial(self):
-        assert len(STYLE_GUIDE) > 300
+        assert len(PERSONA) > 300
 
     @pytest.mark.parametrize("keyword", ["傲娇", "立场", "AI"])
     def test_covers_the_persona_requirements(self, keyword):
-        assert keyword in STYLE_GUIDE
+        assert keyword in PERSONA
 
     def test_bans_ai_isms(self):
         for phrase in ("作为一个AI", "希望对你有帮助", "首先", "总结"):
-            assert phrase in STYLE_GUIDE, f"missing anti-AI-ism rule for {phrase!r}"
+            assert phrase in PERSONA, f"missing anti-AI-ism rule for {phrase!r}"
 
 
 class TestSystemPrompt:
-    def test_includes_role_style_and_time(self):
+    def test_includes_persona_and_time(self):
         prompt = build_system_prompt(_Robot())
-        assert STYLE_GUIDE in prompt
+        assert PERSONA in prompt
         assert "当前时间：" in prompt
-        assert os.environ["GROUP_ROLE"] in prompt
 
-    def test_private_uses_private_role_and_drops_group_rule(self):
+    def test_private_drops_the_group_rule(self):
         prompt = build_system_prompt(_Robot(msg_type="private"))
-        assert os.environ["PRIVATE_ROLE"] in prompt
+        assert PERSONA in prompt
         assert "只在群内回复" not in prompt
+
+    def test_env_notes_are_appended_but_subordinate(self):
+        """A stale .env line must not be able to redefine who she is."""
+        prompt = build_role_prompt("你是聊天小助手，可以使用颜文字")
+        assert prompt.startswith(PERSONA)
+        assert "部署方补充设定" in prompt
+        assert "冲突时以上面为准" in prompt
+
+    def test_empty_extra_yields_the_persona_alone(self):
+        assert build_role_prompt("") == PERSONA
+        assert build_role_prompt(None) == PERSONA
 
     def test_group_gets_the_group_rule(self):
         assert "只在群内回复" in build_system_prompt(_Robot())
@@ -87,7 +98,7 @@ class TestSystemPrompt:
             _Robot(), db=object(), profile_service=Boom(),
             learning_service=Boom(), affection_service=Boom(),
         )
-        assert STYLE_GUIDE in prompt
+        assert PERSONA in prompt
 
     def test_context_services_are_used_when_provided(self):
         class Stub:
@@ -162,5 +173,5 @@ class TestMainStaysThin:
         """The persona/rules block must not creep back into main.py."""
         source = open(MAIN_PY, encoding="utf-8").read()
         assert "def _build_system_prompt" not in source
-        assert "STYLE_GUIDE = " not in source
-        assert "from prompt_builder import" in source
+        assert "PERSONA = " not in source
+        assert "persona" not in source.lower() or "build_role_prompt" in source

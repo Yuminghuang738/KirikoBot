@@ -48,6 +48,10 @@ class Config:
     # Background calls (news translation, vision, judge, profiling) pass
     # thinking: disabled explicitly and are unaffected by this setting.
     DEEPSEEK_REASONING_EFFORT: Final[str] = os.getenv("DEEPSEEK_REASONING_EFFORT") or "low"
+    # OPTIONAL extra notes appended AFTER the built-in persona. Kiriko's
+    # identity and delivery rules live in prompt_builder.PERSONA — that is the
+    # single source of truth, and anything here is explicitly subordinate to it
+    # (a contradictory line can no longer redefine her).
     GROUP_ROLE: Final[str | None] = os.getenv("GROUP_ROLE")
     PRIVATE_ROLE: Final[str | None] = os.getenv("PRIVATE_ROLE")
     TAROT_ROLE: Final[str | None] = os.getenv("TAROT_ROLE")
@@ -117,9 +121,6 @@ class Config:
             "ONEBOT_API": cls.ONEBOT_API,
             "ONEBOT_TOKEN": cls.ONEBOT_TOKEN,
             "DEEPSEEK_TOKEN": cls.DEEPSEEK_TOKEN,
-            "GROUP_ROLE": cls.GROUP_ROLE,
-            "PRIVATE_ROLE": cls.PRIVATE_ROLE,
-            "TAROT_ROLE": cls.TAROT_ROLE,
         }
         missing = [k for k, v in required.items() if not v]
         if missing:
