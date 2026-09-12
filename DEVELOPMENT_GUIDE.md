@@ -824,3 +824,54 @@ CI 在 `.github/workflows/ci.yml`：跑 pytest + `compileall`。
 4. 时间输入框的 fallback 也要跟着改，否则**显示的**是 07:00 而**存下去的**是别的值
 
 话题处理函数返回字符串或消息段列表都行（见 10.17）。
+
+### 10.19 箱头库的自动扩充（从 Wikipedia 爬取）
+
+库不能只靠手写 —— 55 条总会轮完。`amp_head_crawler.py` 每周从英文维基百科
+补一批新条目。**但它是"抽取"不是"生成"**，这是整个设计的前提。
+
+**为什么只抽取**：年代、管子配置、价格是**事实**。让模型"整理一下"就等于把当初
+用静态表的理由亲手推翻 —— 它会写出像模像样但错误的年份。所以：
+- 正文没写的字段**必须留空**，提示词里写死了这条，宁可留空不可编造
+- 每条都存 `source_url`，任何一条都能回溯查证
+- 抓来的没有价格就不显示价格那一行（价格是最容易编的字段）
+
+**为什么是 Wikipedia**：Sweetwater 直接 403；商店页的价格又是最不可靠的数据。
+Wikipedia 有 API、URL 稳定、无反爬、且有**型号级**条目。
+
+**过滤是这里最容易出错的地方**，两层：
+
+1. `_looks_like_model()` 按**词尾**判断。不能用子串匹配 —— 型号名里常有通用词
+   （`Epiphone Valve Junior`），但**以**通用词结尾的标题是在描述一类东西
+   （`Instrument amplifier`、`Dattorro industry scheme`）
+2. `_amplifier_titles()` **问 Wikipedia 这个条目属于什么分类**。这才是关键：
+   `Category:Boss Corporation` / `Vox (company)` 是**厂商全品类**分类，里面有
+   吉他、风琴、鼓机、单块（`Boss DS-1`、`Vox Phantom`、`Vox Continental`、
+   `Tone Bender`）—— 单块的型号名和箱头长得一模一样，**词表不可能分开**，
+   只能问分类本身。按 50 个一批查询，一次爬取只多一个请求
+
+注意厂商分类里也含 "amplifier"（`Category:Guitar amplifier manufacturers`），
+所以要**排除**含 manufacturer/company/brands 的分类，否则品牌页会被当成箱头。
+
+**近似型号要去重**（`_is_near_duplicate`）：Wikipedia 的粒度和手写库不一样，
+它有 `Marshall JCM800` 而库里是 `JCM800 2203`，有 `Fender Twin` 而库里是
+`Twin Reverb`。用词元包含判断，**宁可漏抓也不重复** —— 少一条可以手补，
+同一个箱子推两次就是明显 bug。
+
+**踩过的坑**：
+
+- **Wikipedia 会限流**。连续 10 个请求就开始返回空 body（不是 4xx，是空响应，
+  很容易被当成"没有数据"）。必须节流 + 重试，`MIN_INTERVAL = 1.5s`
+- 每次爬取**限量**（默认 8 条）：一是礼貌，二是限制 AI 开销
+- 首次部署时 `amp_crawl_last` 为空，**容器一启动就会抓一批**（用于 bootstrap）。
+  这是有意的，但要知道启动后几十秒内会有一批 Wikipedia 请求和 AI 调用
+- `app_state` 表存 `amp_crawl_last` / `amp_crawl_running`。用持久化状态而不是
+  模块全局变量：重启既不该重复触发，也不该把这一周悄悄跳过
+
+**手动增删**：面板 →「🎸 箱头库」。抓错/质量差的直接删；看到好箱子想固定下来，
+就补进 `amp_heads_data.py`（重启后种子会把它标回 `manual`，不再被算作抓取结果，
+因为手写文件永远优先）。
+
+**改资料库 vs 改爬虫**：单条内容不对 → 改 `amp_heads_data.py`；
+一整类被误抓 → 改这里的过滤规则，并**为那个真实标题补一条测试**
+（`TestTitleFilter` 里存着实际抓错过的标题，就是干这个用的）。
