@@ -25,6 +25,7 @@ const PAGE_META={
   reminders:['提醒','定时提醒管理'],
   tarot:['塔罗','塔罗抽牌记录'],
   stickers:['表情包','表情包库与整理'],
+  amps:['箱头库','每日箱头推荐的资料库'],
   features:['功能清单','群友提出的功能请求'],
   versions:['版本日志','版本与变更记录'],
   groups:['群管理','已接入的群'],
@@ -84,6 +85,7 @@ async function loadPage(name){
     case 'features': mc.innerHTML=await featuresHTML(); bindFeatures(); break;
     case 'versions': mc.innerHTML=await versionsHTML(); bindVersions(); break;
     case 'stickers': mc.innerHTML=await stickersHTML(); break;
+    case 'amps': mc.innerHTML=await ampsHTML(); bindAmps(); break;
     case 'groups': mc.innerHTML=await groupsHTML(); break;
     case 'activity': mc.innerHTML=await activityHTML(); bindActivity(); break;
     case 'history': mc.innerHTML=await historyHTML(); bindHistory(); break;
@@ -2294,6 +2296,120 @@ async function savePush(topic, time, enabled){
     const r=await fetch('/api/subscriptions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
     if(r.ok) toast('已保存'); else toast('保存失败: '+(r.error||''),'err');
   }catch(_){toast('请求失败','err')}
+}
+
+// ══════════════════════════════════════════════════════════
+//  Amp head library (箱头库)
+// ══════════════════════════════════════════════════════════
+
+function ampsHTML(){
+  // 壳先出来、数据后到：库有几百条，等 fetch 完再渲染会让点击看起来没反应。
+  return `<div class="page-head">
+    <div><div class="ph-title">箱头 <span class="em">库</span></div>
+      <div class="ph-sub">每日箱头推荐的资料库 · 手写条目与 Wikipedia 抓取的条目都在这里，抓取很慢，触发后要等几分钟</div></div>
+    <div class="ph-right">
+      <button class="btn accent" id="ampCrawlBtn" onclick="crawlAmps()">🔄 立即抓取</button>
+    </div>
+  </div>
+  <div class="stats" id="ampStats"></div>
+  <div class="panel reveal" style="--i:1;margin-top:16px">
+    <div class="panel-header"><span class="hicon">🎸</span>全部箱头
+      <span class="ph-right"><span class="tag u" id="ampCount">—</span></span></div>
+    <div class="panel-body tight" id="ampBody" style="max-height:72vh;overflow-y:auto">
+      <div class="empty">读取中…</div>
+    </div>
+  </div>`;
+}
+
+function bindAmps(){ loadAmps(); }
+
+// 来源徽章自己成函数：manual 只有手写标签，wikipedia 有原条目地址时才做成外链。
+function ampSourceTag(h){
+  const url=String((h&&h.source_url)||'');
+  // esc() 只能挡住标签注入，挡不住 javascript: 这类伪协议，所以只给 http(s) 做外链。
+  const href=/^https?:\/\//i.test(url)?url:'';
+  if((h&&h.source)==='wikipedia'){
+    const tag='<span class="tag t">Wikipedia</span>';
+    return href?`<a href="${esc(href)}" target="_blank" rel="noopener" title="打开原始条目">${tag}</a>`:tag;
+  }
+  return '<span class="tag ok">手写</span>';
+}
+
+async function loadAmps(){
+  const box=$('ampBody'); if(!box)return;
+  box.innerHTML='<div class="empty">读取中…</div>';
+
+  let d={heads:[],total:0,manual:0,crawled:0,last_crawl:'',crawl_running:false};
+  // 接口默认只回 200 条，而库会长到几百条：显式要 500（接口上限），免得列表被默默截断。
+  try{d=await fetch('/api/amp-heads?limit=500').then(r=>r.json())}catch(_){toast('箱头库读取失败','err')}
+  // 请求失败时 fetch 仍可能返回 ok:false，按空库渲染，不要拿 undefined 去 map。
+  if(!d||d.ok===false||!Array.isArray(d.heads))d={heads:[],total:0,manual:0,crawled:0,last_crawl:'',crawl_running:false};
+  const heads=d.heads;
+
+  const stats=$('ampStats');
+  if(stats)stats.innerHTML=
+    `<div class="tile c1 reveal" style="--i:0"><div class="tico">🎸</div><div class="tbody"><div class="num">${esc(d.total)}</div><div class="lbl">总数</div></div></div>
+     <div class="tile c2 reveal" style="--i:1"><div class="tico">✍️</div><div class="tbody"><div class="num">${esc(d.manual)}</div><div class="lbl">手写</div></div></div>
+     <div class="tile c3 reveal" style="--i:2"><div class="tico">🌐</div><div class="tbody"><div class="num">${esc(d.crawled)}</div><div class="lbl">Wikipedia 抓取</div></div></div>
+     <div class="tile c5 reveal" style="--i:3"><div class="tico">🕒</div><div class="tbody"><div class="num" style="font-size:.95rem;line-height:1.5">${esc(d.last_crawl||'还没抓过')}</div><div class="lbl">上次抓取</div></div></div>`;
+
+  // 抓取跑在后台线程里，前端只能靠 crawl_running 这个状态位判断，所以每次刷新都同步按钮。
+  const btn=$('ampCrawlBtn');
+  if(btn){btn.disabled=!!d.crawl_running;btn.textContent=d.crawl_running?'⏳ 抓取中…':'🔄 立即抓取'}
+  const cnt=$('ampCount'); if(cnt)cnt.textContent=heads.length+' 条';
+
+  if(!heads.length){box.innerHTML='<div class="empty"><span class="em-ico">🎸</span>资料库还是空的</div>';return}
+
+  const rows=heads.map(h=>{
+    // 抓取时原页面没写的字段就是空字符串，空的直接不占行——留白比一排「—」更容易看出哪条没抓全。
+    const metas=[h.year,h.origin,h.kind,h.power,h.tubes]
+      .map(v=>String(v==null?'':v).trim()).filter(Boolean).map(esc).join(' · ');
+    const tone=String(h.tone||'').trim();
+    const price=String(h.price||'').trim();
+    const metaLine=metas?`<div class="isub">${metas}</div>`:'';
+    // 音色一段常常上百字，限制三行再截断，否则一条就把整屏撑满。
+    const toneLine=tone?`<div class="isub" style="display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;white-space:normal">${esc(tone)}</div>`:'';
+    const priceLine=price?`<div class="isub">💰 ${esc(price)}</div>`:'';
+    return `<div class="item">
+      <div class="iava">🎸</div>
+      <div class="imain">
+        <div class="ititle">${esc(h.brand||'')} ${esc(h.model||'')} ${ampSourceTag(h)}</div>
+        ${metaLine}${toneLine}${priceLine}
+      </div>
+      <div class="iact"><button class="btn sm danger" onclick="deleteAmp(${esc(h.id)})" title="删除这条箱头">🗑️</button></div>
+    </div>`;
+  }).join('');
+
+  box.innerHTML=`<div class="list">${rows}</div>`;
+}
+
+async function deleteAmp(id){
+  if(!confirm('确定删除这条箱头？删除后不再参与每日推荐，且不可恢复。'))return;
+  try{
+    const d=await fetch('/api/amp-heads/'+encodeURIComponent(id),{method:'DELETE'}).then(r=>r.json());
+    if(d.ok){toast('已删除');loadAmps()}else toast('删除失败: '+(d.error||'未知错误'),'err');
+  }catch(_){toast('请求失败','err')}
+}
+
+async function crawlAmps(){
+  const btn=$('ampCrawlBtn');
+  // 先禁用再发请求：抓取接口立刻返回，但用户连点两次第二次会撞 409，看着像报错。
+  if(btn){btn.disabled=true;btn.textContent='⏳ 抓取中…'}
+  try{
+    const r=await fetch('/api/amp-heads/crawl',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({limit:8})});
+    const d=await r.json();
+    if(r.status===409||!d.ok){
+      toast(d.error||'触发失败','err');
+      loadAmps(); // 409 说明后台本来就在跑，按真实状态把按钮同步回去。
+      return;
+    }
+    toast(`已在后台抓取，最多新增 ${d.limit||8} 条，稍后自动刷新`);
+    // 抓取没有进度推送，只能隔一会儿回来看看；20 秒足够看到 running 置位了。
+    setTimeout(loadAmps,20000);
+  }catch(_){
+    toast('请求失败','err');
+    if(btn){btn.disabled=false;btn.textContent='🔄 立即抓取'}
+  }
 }
 
 // ── Init ──
