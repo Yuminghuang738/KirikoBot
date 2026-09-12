@@ -87,7 +87,8 @@ class Tarot:
         # AI interpretation
         ai.model_type = Config.DEEPSEEK_MODEL
         ai.thinking_type = "disabled"
-        ai.system_text = Config.TAROT_ROLE or ""
+        from prompt_builder import build_role_prompt
+        ai.system_text = build_role_prompt(Config.TAROT_ROLE)
         ai.user_text = (
             f"抽牌人：{display_name}，抽牌结果：{card['card_name']}，牌面：{card['card_text']}。"
             f"请为{display_name}解读这张牌。"
