@@ -448,6 +448,30 @@ async function tarotHTML(){
   return h+`</div>`;
 }
 
+// Per-turn record: which tools this reply used, and what the model was thinking.
+function chainBlock(x){
+  if(x.role!=='assistant')return '';
+  let chain=[];
+  if(x.tool_calls){
+    try{chain=JSON.parse(x.tool_calls)||[]}catch(_){chain=[]}
+  }
+  const reasoning=String(x.reasoning||'').trim();
+  if(!chain.length && !reasoning)return '';
+
+  const rows=chain.map(c=>{
+    let args=String(c.arguments||'').trim();
+    if(args==='{}')args='';
+    return `<div class="chain-row"><span class="tag t">🔧 ${esc(c.name||'?')}</span>
+      ${args?`<code>${esc(args.slice(0,160))}</code>`:''}</div>`;
+  }).join('');
+
+  return `<details class="chain">
+    <summary>🔗 调用链${chain.length?` · ${chain.length} 个工具`:''}${reasoning?' · 思维链':''}</summary>
+    ${rows}
+    ${reasoning?`<div class="chain-think">${esc(reasoning.slice(0,1500))}</div>`:''}
+  </details>`;
+}
+
 // ── Chat ──
 async function chatHTML(){
   let d={records:[]};try{d=await fetch('/api/history').then(r=>r.json())}catch(_){}
@@ -469,6 +493,7 @@ async function chatHTML(){
         <div class="imain">
           <div class="ititle"><span class="tag ${m[1]}">${esc(m[2])}</span>${x.has_tools?'<span class="tag t">🔧 调用工具</span>':''}</div>
           <div class="isub">${esc(String(x.content||'').slice(0,200))}</div>
+          ${chainBlock(x)}
         </div>
         <div class="imeta">
           <span class="tag">${esc(x.time||'')}</span>
