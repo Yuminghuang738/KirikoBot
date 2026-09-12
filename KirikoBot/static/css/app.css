@@ -1091,6 +1091,20 @@ tbody tr:hover td { background: var(--card-2); }
   padding-left: 7px; margin-bottom: 3px;
 }
 
+/* ── Topic threads (review page) ────────────────────────── */
+.thread { border-bottom: 1px solid var(--border); }
+.thread:last-child { border-bottom: none; }
+.thread-head {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 11px 18px; background: var(--card-2);
+  border-bottom: 1px solid var(--border);
+  font-size: .82rem;
+}
+.thread-head b { font-weight: 700; }
+.thread-head .ph-right { margin-left: auto; display: flex; gap: 6px; }
+.thread-body { background: var(--surface-solid); }
+.thread .msg-row { padding-left: 24px; }
+
 /* ── Responsive ─────────────────────────────────────────── */
 @media (max-width: 1280px) {
   .b-3, .b-4, .b-5 { grid-column: span 6; }

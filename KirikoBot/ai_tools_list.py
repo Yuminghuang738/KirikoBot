@@ -272,8 +272,40 @@ class AiTools:
                 "required": [],
             },
         }
-        function_read_context = {
-            "name": "read_context",
+        function_feature_list = {
+            "name": "feature_list",
+            "description": (
+                "查询群友提交过的功能需求清单及其处理状态。"
+                "当用户问「还有什么功能没做」「之前提的需求怎么样了」「待完成的功能有哪些」时调用"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "status": {
+                        "type": "string",
+                        "description": "筛选状态：pending（待处理，默认）、done（已完成）、rejected（已拒绝）、all（全部）",
+                    },
+                },
+                "required": [],
+            },
+        }
+        function_explain_self = {
+            "name": "explain_self",
+            "description": (
+                "回顾你上一轮做了什么：调用了哪些工具、参数是什么、结果如何，以及当时的思考。"
+                "当用户问「你刚才干了什么」「你调用什么工具了」「你刚才在想什么」「怎么做到的」时调用"
+            ),
+            "parameters": empty_params,
+        }
+        function_similar_sticker = {
+            "name": "similar_sticker",
+            "description": (
+                "当用户发了一张图/表情包并想找类似的时调用"
+                "（例如「有没有类似的」「来个同款表情」）。会从表情库里挑最像的一张发出来"
+            ),
+            "parameters": empty_params,
+        }
+        function_read_context = {            "name": "read_context",
             "description": (
                 "读取本群最近一段时间的聊天记录，用来搞清楚群里正在聊什么。"
                 "当你觉得当前这句话指代不明（「那这个呢」「那个怎么办」）、"
@@ -316,6 +348,9 @@ class AiTools:
         tool_recall_message = {"type": "function", "function": function_recall_message}
         tool_group_stats = {"type": "function", "function": function_group_stats}
         tool_read_context = {"type": "function", "function": function_read_context}
+        tool_feature_list = {"type": "function", "function": function_feature_list}
+        tool_explain_self = {"type": "function", "function": function_explain_self}
+        tool_similar_sticker = {"type": "function", "function": function_similar_sticker}
 
         return [
             tool_tarot,
@@ -344,4 +379,7 @@ class AiTools:
             tool_recall_message,
             tool_group_stats,
             tool_read_context,
+            tool_feature_list,
+            tool_explain_self,
+            tool_similar_sticker,
         ]

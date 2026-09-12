@@ -147,4 +147,15 @@ class ProfileService:
             )
             if pf.get("note"):
                 lines.append(f"  （{pf['note']}）")
+            # Long-term memory: a changed impression is worth remembering.
+            try:
+                history = db.get_profile_history(p["user_id"], group_id, limit=1)
+            except Exception:
+                history = []
+            if history:
+                old_pf = history[0]["profile"] or {}
+                before = old_pf.get("personality") or old_pf.get("mood")
+                now = pf.get("personality") or pf.get("mood")
+                if before and now and before != now:
+                    lines.append(f"  （你以前的印象是「{before}」，现在变成「{now}」了）")
         return "\n".join(lines[:20])  # limit to 20 profiles
