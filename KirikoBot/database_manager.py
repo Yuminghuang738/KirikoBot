@@ -16,6 +16,7 @@ VALID_TABLES = {
     "app_versions", "changelog", "stickers",
     "user_affection", "user_affection_log",
     "feature_settings", "bot_messages", "ai_calls", "group_subscriptions", "profile_history",
+    "amp_heads",
 }
 
 
@@ -148,6 +149,24 @@ class DatabaseManager:
                         card_path TEXT NOT NULL
                     )"""
                 )
+                connect.execute(
+                    """CREATE TABLE IF NOT EXISTS amp_heads(
+                        id     INTEGER PRIMARY KEY AUTOINCREMENT,
+                        brand  TEXT NOT NULL,
+                        model  TEXT NOT NULL,
+                        year   TEXT DEFAULT '',
+                        origin TEXT DEFAULT '',
+                        kind   TEXT DEFAULT '',
+                        power  TEXT DEFAULT '',
+                        tubes  TEXT DEFAULT '',
+                        tone   TEXT DEFAULT '',
+                        price  TEXT DEFAULT '',
+                        famous TEXT DEFAULT '',
+                        tip    TEXT DEFAULT '',
+                        UNIQUE(brand, model)
+                    )"""
+                )
+                self.seed_amp_heads(connect)
                 connect.execute(
                     """CREATE TABLE IF NOT EXISTS group_messages(
                         id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -804,7 +823,8 @@ class DatabaseManager:
 
     # ── Group push subscriptions ─────────────────────────
 
-    SUBSCRIPTION_TOPICS = ("morning_news", "gaming_news", "hitokoto", "daily_roll_call")
+    SUBSCRIPTION_TOPICS = ("morning_news", "gaming_news", "hitokoto", "daily_roll_call",
+                           "amp_head")
 
     def get_subscriptions(self, group_id: str | None = None) -> list[dict[str, Any]]:
         """Per-group push subscriptions, optionally for one group."""
@@ -1456,6 +1476,74 @@ class DatabaseManager:
             "user_profiles": profiles,
             "tarot_cards": stickers,
         }
+
+    # ── Daily amp head (箱头推荐) ───────────────────────────
+    def seed_amp_heads(self, connect: sqlite3.Connection | None = None) -> int:
+        """Load the curated amp-head list, idempotently.
+
+        Keyed on (brand, model), so restarting after editing
+        ``amp_heads_data.py`` *updates* the row rather than duplicating it.
+        That is the intended way to fix a wrong year or a stale price.
+        """
+        try:
+            from amp_heads_data import AMP_HEADS, COLUMNS
+        except ImportError:
+            logger.exception("amp_heads dataset unavailable")
+            return 0
+
+        placeholders = ", ".join("?" for _ in COLUMNS)
+        updates = ", ".join(
+            f"{c}=excluded.{c}" for c in COLUMNS if c not in ("brand", "model")
+        )
+        sql = (
+            f"INSERT INTO amp_heads ({', '.join(COLUMNS)}) VALUES ({placeholders}) "
+            f"ON CONFLICT(brand, model) DO UPDATE SET {updates}"
+        )
+        own = connect is None
+        if own:
+            connect = self.get_connect()
+        try:
+            connect.executemany(sql, AMP_HEADS)
+            if own:
+                connect.commit()
+            return len(AMP_HEADS)
+        except sqlite3.Error:
+            logger.exception("amp_heads seeding failed")
+            return 0
+
+    def count_amp_heads(self) -> int:
+        try:
+            return int(self.fetch_data("SELECT COUNT(*) FROM amp_heads")[0][0])
+        except (sqlite3.Error, IndexError, TypeError, ValueError):
+            return 0
+
+    def get_amp_head_of_the_day(self) -> dict[str, Any] | None:
+        """Today's amp head, rotating through the whole library once per cycle.
+
+        Deliberately *not* ``ORDER BY RANDOM()``: with a daily push that
+        repeats the same amp back-to-back far too easily, which reads as a
+        bug. Walking the list by day-of-year guarantees every entry is shown
+        before any repeats, with no per-group bookkeeping. Side effect worth
+        keeping: every group gets the same amp on the same day, so people can
+        actually talk about it.
+        """
+        try:
+            from amp_heads_data import COLUMNS
+        except ImportError:
+            return None
+        sql = (
+            f"SELECT {', '.join(COLUMNS)} FROM amp_heads ORDER BY id LIMIT 1 OFFSET ("
+            "  CAST(strftime('%j','now','localtime') AS INTEGER) "
+            "  % MAX((SELECT COUNT(*) FROM amp_heads), 1))"
+        )
+        try:
+            rows = self.fetch_data(sql)
+        except sqlite3.Error:
+            logger.exception("amp_head query failed")
+            return None
+        if not rows:
+            return None
+        return dict(zip(COLUMNS, rows[0]))
 
     def get_all_history(self, limit: int = 50) -> list[dict[str, Any]]:
         rows = self.fetch_data(
