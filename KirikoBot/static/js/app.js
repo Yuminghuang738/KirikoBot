@@ -31,6 +31,7 @@ const PAGE_META={
   activity:['群活跃','单日发言统计与时段分布'],
   history:['聊天回看','按天回看群聊完整记录'],
   ai:['AI 用量','调用量、延迟、token 与成本'],
+  push:['群推送','按群订阅定时推送'],
   settings:['群设置','按群 / 用户精细开关功能'],
   llbot:['LLBot 连接','登录状态、运行指标与配置'],
   webqq:['WebQQ','LLBot 完整 WebUI（内嵌）'],
@@ -87,6 +88,7 @@ async function loadPage(name){
     case 'activity': mc.innerHTML=await activityHTML(); bindActivity(); break;
     case 'history': mc.innerHTML=await historyHTML(); bindHistory(); break;
     case 'ai': mc.innerHTML=aiUsageHTML(); bindAiUsage(); break;
+    case 'push': mc.innerHTML=await pushHTML(); bindPush(); break;
     case 'settings': mc.innerHTML=await settingsHTML(); bindSettings(); break;
     case 'affection': mc.innerHTML=await affectionHTML(); bindAffection(); break;
     case 'messages': mc.innerHTML=await messagesHTML(); break;
@@ -1949,6 +1951,7 @@ async function historyHTML(){
       <input id="histUser" placeholder="按昵称筛选" style="width:130px">
       <button class="btn primary" onclick="loadHistory(1)">查询</button>
       <button class="btn" onclick="resetHistory()">清空筛选</button>
+      <button class="btn accent" id="threadToggle" onclick="toggleThreads()">🧩 按话题分组</button>
     </div>
   </div></div>
   <div id="histBody"><div class="empty"><span class="em-ico">🗂️</span>选择群后点「查询」（留空日期 = 不限日期）</div></div>`;
@@ -1968,6 +1971,9 @@ async function loadHistory(page){
   const q=($('histQ')||{}).value?.trim()||'';
   const user=($('histUser')||{}).value?.trim()||'';
   if(!gid){box.innerHTML='<div class="empty">还没有任何群</div>';return}
+
+  if(_threadMode){ return loadThreads(gid, date, box); }
+
   box.innerHTML='<div class="empty">读取中…</div>';
 
   const params=new URLSearchParams({page:String(page||1),size:'100'});
@@ -2122,6 +2128,141 @@ async function loadAiUsage(){
     </div>
   </div>
   ${errBlock}`;
+}
+
+// ══════════════════════════════════════════════════════════
+//  Topic threads (群聊话题聚类)
+// ══════════════════════════════════════════════════════════
+
+let _threadMode=false;
+
+function toggleThreads(){
+  _threadMode=!_threadMode;
+  const btn=$('threadToggle');
+  if(btn)btn.classList.toggle('on',_threadMode);
+  loadHistory(1);
+}
+
+async function loadThreads(gid, date, box){
+  box.innerHTML='<div class="empty">聚类中…</div>';
+  const params=new URLSearchParams();
+  if(date)params.set('date',date);
+
+  let d=null;
+  try{d=await fetch(`/api/groups/${encodeURIComponent(gid)}/threads?${params}`).then(r=>r.json())}catch(_){}
+  if(!d||!d.ok){box.innerHTML='<div class="empty">读取失败</div>';return}
+  const threads=d.threads||[];
+  if(!threads.length){
+    box.innerHTML='<div class="empty"><span class="em-ico">🧩</span>没有可聚类的内容</div>';
+    return;
+  }
+
+  const blocks=threads.map(t=>`<div class="thread reveal" style="--i:${Math.min(t.index,12)}">
+    <div class="thread-head">
+      <span class="tag a">话题 ${t.index}</span>
+      <b>${esc(t.title)}</b>
+      <span class="ph-sub">${esc(String(t.start||'').slice(5,16))} → ${esc(String(t.end||'').slice(11,16))}</span>
+      <span class="ph-right"><span class="tag u">${t.size} 条</span><span class="tag">${t.participants.length} 人</span></span>
+    </div>
+    <div class="thread-body">${t.messages.map(m=>`<div class="msg-row${m.is_bot?' bot':''}">
+      <div class="m-time">${esc(String(m.timestamp||'').slice(11,16))}</div>
+      <div class="m-who" title="${esc(m.user_name)}">${esc(m.user_name)}</div>
+      <div class="m-text">${esc(m.content)}</div>
+    </div>`).join('')}</div>
+  </div>`).join('');
+
+  box.innerHTML=`<div class="panel reveal" style="--i:0">
+    <div class="panel-header"><span class="hicon">🧩</span>按话题分组
+      <span class="ph-right"><span class="tag u">共 ${threads.length} 个话题</span></span></div>
+    <div class="panel-body tight">${blocks}</div>
+  </div>`;
+}
+
+// ══════════════════════════════════════════════════════════
+//  Push subscriptions (群订阅推送)
+// ══════════════════════════════════════════════════════════
+
+const PUSH_TOPICS={
+  morning_news:'☀️ 早间新闻',
+  gaming_news:'🎮 游戏速递',
+  hitokoto:'💬 每日一言',
+  daily_roll_call:'📣 今日发言榜',
+};
+const PUSH_HINT={
+  morning_news:'时政要闻 + 游戏资讯 + 每日一言',
+  gaming_news:'只推游戏圈热点',
+  hitokoto:'一句随机的语录',
+  daily_roll_call:'@ 出当天发言最多的三个人',
+};
+
+async function pushHTML(){
+  const opts=await _groupOptions();
+  return `<div class="page-head">
+    <div><div class="ph-title">群 <span class="em">推送</span></div>
+      <div class="ph-sub">按群订阅定时推送 · 每天到点自动发，错过超过 2 小时则跳过</div></div>
+  </div>
+  <div class="panel reveal" style="--i:0"><div class="panel-body">
+    <div class="toolbar" style="margin:0">
+      <label>群</label><select id="pushGroup" onchange="loadPush()">${opts}</select>
+      <span class="ph-sub">修改后即时保存</span>
+    </div>
+  </div></div>
+  <div id="pushBody"><div class="empty">选择一个群</div></div>`;
+}
+
+function bindPush(){ loadPush(); }
+
+async function loadPush(){
+  const box=$('pushBody'); if(!box)return;
+  const gid=($('pushGroup')||{}).value||'';
+  if(!gid){box.innerHTML='<div class="empty">还没有任何群</div>';return}
+  box.innerHTML='<div class="empty">读取中…</div>';
+
+  let subs=[];
+  try{subs=(await fetch('/api/subscriptions?group_id='+encodeURIComponent(gid)).then(r=>r.json())).subscriptions||[]}catch(_){}
+  const byTopic={};
+  subs.forEach(s=>{byTopic[s.topic]=s});
+
+  const rows=Object.keys(PUSH_TOPICS).map(t=>{
+    const cur=byTopic[t]||{enabled:false,push_time:'07:00'};
+    return `<div class="set-row">
+      <div class="sr-info">
+        <div class="sr-label">${esc(PUSH_TOPICS[t])}</div>
+        <div class="sr-desc">${esc(PUSH_HINT[t]||'')}</div>
+      </div>
+      <input type="time" value="${esc(cur.push_time||'07:00')}" data-push-time="${esc(t)}"
+             style="width:120px" onchange="savePush('${esc(t)}',this.value,null)">
+      <label class="switch"><input type="checkbox" data-push-on="${esc(t)}" ${cur.enabled?'checked':''}
+             onchange="savePush('${esc(t)}',null,this.checked)"><span class="slider"></span></label>
+    </div>`;
+  }).join('');
+
+  box.innerHTML=`<div class="panel reveal" style="--i:1">
+    <div class="panel-header"><span class="hicon">🔔</span>订阅项
+      <span class="ph-right"><span class="tag u">每天 ${subs.filter(s=>s.enabled).length} 项已开</span></span></div>
+    <div class="panel-body tight">${rows}</div>
+    <div class="set-note">推送受「群设置 → 群推送订阅」总开关控制；群内关掉后这里即使打开也不会发。</div>
+  </div>`;
+}
+
+async function savePush(topic, time, enabled){
+  const gid=($('pushGroup')||{}).value||'';
+  if(!gid)return;
+  const body={group_id:gid, topic};
+  if(time!=null) body.time=time;
+  if(enabled!=null) body.enabled=enabled;
+  if(time==null){
+    const el=document.querySelector(`[data-push-time="${topic}"]`);
+    if(el) body.time=el.value;
+  }
+  if(enabled==null){
+    const el=document.querySelector(`[data-push-on="${topic}"]`);
+    if(el) body.enabled=el.checked;
+  }
+  try{
+    const r=await fetch('/api/subscriptions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
+    if(r.ok) toast('已保存'); else toast('保存失败: '+(r.error||''),'err');
+  }catch(_){toast('请求失败','err')}
 }
 
 // ── Init ──

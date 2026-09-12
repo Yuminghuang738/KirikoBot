@@ -67,7 +67,7 @@ class TestDailyStats:
         assert stats["total"] == 3
         assert stats["active_users"] == 2
         assert stats["images"] == 1
-        assert stats["top"][0] == {"user_name": "小明", "count": 2}
+        assert stats["top"][0] == {"user_name": "小明", "count": 2, "user_id": "u1"}
         assert len(stats["hourly"]) == 24
         assert sum(stats["hourly"]) == 3
 

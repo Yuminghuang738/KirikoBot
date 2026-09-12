@@ -5,6 +5,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -24,6 +25,7 @@ from ai_tools import (
     StickerBattleTool, BATTLE_DEFAULT_ROUNDS,
     AffectionTool, AffectionLeaderboardTool,
     RecallMessageTool, GroupStatsTool, ReadContextTool,
+    FeatureListTool, ExplainSelfTool, SimilarStickerTool,
 )
 from affection_service import AffectionService
 from balance_service import BalanceService
@@ -137,6 +139,9 @@ affection_leaderboard_tool = AffectionLeaderboardTool(pkg, db)
 recall_tool = RecallMessageTool(db, llbot)
 group_stats_tool = GroupStatsTool(db, pkg)
 read_context_tool = ReadContextTool(db, pkg)
+feature_list_tool = FeatureListTool(db, pkg)
+explain_self_tool = ExplainSelfTool(db, pkg)
+similar_sticker_tool = SimilarStickerTool(sticker_collector, pkg)
 
 # Persist the bot's own outgoing messages so transcripts are complete and
 # "recall the last thing I said" works across restarts.
@@ -207,6 +212,9 @@ ROUTES = {
     "recall_message": recall_tool.recall_message_call,
     "group_stats": group_stats_tool.group_stats_call,
     "read_context": read_context_tool.read_context_call,
+    "feature_list": feature_list_tool.feature_list_call,
+    "explain_self": explain_self_tool.explain_self_call,
+    "similar_sticker": similar_sticker_tool.similar_sticker_call,
 }
 
 # Self-contained tools format and send their own reply — no AI follow-up needed
@@ -749,10 +757,6 @@ def main_logic(robot: RobotServer) -> None:
                 handler = ROUTES.get(fn)
                 if not handler:
                     continue
-                try:
-                    db.record_tool_usage(fn, robot.user_id, robot.group_id)
-                except Exception:
-                    logger.debug("main.main_logic 忽略了异常", exc_info=True)
 
                 # Affection bonus for tool engagement
                 if "affection" not in disabled:
@@ -771,6 +775,18 @@ def main_logic(robot: RobotServer) -> None:
                     tc_id = tc.get("id", "")
                     result_text = getattr(ai, "tool_result_text", "") or ai.user_text or ""
                     ai.add_tool_result(tc_id, result_text)
+
+                # Recorded after the handler so the chain also carries the
+                # outcome — this is what explain_self replays back to the user.
+                try:
+                    db.record_tool_usage(
+                        fn, robot.user_id, robot.group_id,
+                        arguments=tc.get("function", {}).get("arguments", ""),
+                        result=getattr(ai, "tool_result_text", "") or "",
+                        reasoning=ai.reasoning_content or "",
+                    )
+                except Exception:
+                    logger.debug("tool chain record failed", exc_info=True)
 
             if follow_up_tcs:
                 ai.follow_up_request(follow_up_tcs)
@@ -1711,6 +1727,18 @@ def api_group_stats(group_id: str):
                     "stats": db.get_daily_group_stats(group_id, day)})
 
 
+@app.route("/api/groups/<group_id>/threads")
+def api_group_threads(group_id: str):
+    """Transcript clustered into topic threads. ?date=&gap= (minutes)."""
+    try:
+        gap = int(request.args.get("gap", 10))
+    except ValueError:
+        gap = 10
+    threads = db.get_group_threads(group_id, day=request.args.get("date") or None,
+                                   max_gap_minutes=gap)
+    return jsonify({"ok": True, "group_id": group_id, "threads": threads})
+
+
 @app.route("/api/groups/<group_id>/days")
 def api_group_days(group_id: str):
     """Days that have messages, for the review page's date picker."""
@@ -1737,6 +1765,36 @@ def api_group_messages(group_id: str):
         size=size,
     )
     return jsonify({"ok": True, "group_id": group_id, **result})
+
+
+@app.route("/api/subscriptions")
+def api_subscriptions():
+    """All push subscriptions (optionally ?group_id=)."""
+    return jsonify({"ok": True,
+                    "topics": list(db.SUBSCRIPTION_TOPICS),
+                    "subscriptions": db.get_subscriptions(request.args.get("group_id") or None)})
+
+
+@app.route("/api/subscriptions", methods=["POST"])
+def api_subscription_set():
+    """Create/update one subscription: {group_id, topic, time, enabled}."""
+    data = request.get_json(silent=True) or {}
+    group_id = str(data.get("group_id") or "").strip()
+    topic = str(data.get("topic") or "").strip()
+    if not group_id or topic not in db.SUBSCRIPTION_TOPICS:
+        return jsonify({"ok": False, "error": "group_id and a valid topic are required"}), 400
+    push_time = str(data.get("time") or "07:00").strip()
+    if not re.match(r"^\d{1,2}:\d{2}$", push_time):
+        return jsonify({"ok": False, "error": "time must look like HH:MM"}), 400
+    db.set_subscription(group_id, topic, push_time=push_time,
+                        enabled=bool(data.get("enabled", True)))
+    return jsonify({"ok": True, "subscriptions": db.get_subscriptions(group_id)})
+
+
+@app.route("/api/subscriptions/<group_id>/<topic>", methods=["DELETE"])
+def api_subscription_delete(group_id: str, topic: str):
+    db.delete_subscription(group_id, topic)
+    return jsonify({"ok": True, "subscriptions": db.get_subscriptions(group_id)})
 
 
 @app.route("/api/ai/metrics")
