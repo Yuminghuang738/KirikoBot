@@ -33,6 +33,7 @@ from ai_tools_list import AiTools
 from config import Config
 import ai_metrics
 import dashboard_auth
+from chat_history import load_history, save_turn
 import webhook_auth
 from prompt_builder import (
     build_role_prompt,
@@ -231,41 +232,16 @@ SELF_CONTAINED_TOOLS = {
 }
 
 # ── History (only recent context, filtered for clarity) ──
-MAX_HISTORY = 8  # fewer turns = less noise, more focus on current message
-
+# History storage/replay lives in chat_history.py so it can be unit-tested
+# (importing main would start the scheduler). These stay as thin wrappers so
+# call sites keep working against the process-wide db.
 def _load_history(uid: str, gid: str | None) -> list[dict[str, Any]]:
-    try:
-        rows = db.takeout_chat_history(uid, gid)
-    except Exception:
-        return []
-    history: list[dict[str, Any]] = []
-    for role, content, tool_calls, _ in rows:
-        if role == "user":
-            history.append({"role": "user", "content": content or ""})
-        elif role == "assistant":
-            # Skip assistant messages that only contain tool calls (no text)
-            if content and content.strip():
-                history.append({"role": "assistant", "content": content.strip()})
-            elif tool_calls:
-                # Assistant only called tools, no text — summarize instead of raw JSON
-                history.append({"role": "assistant", "content": "[已调用工具处理]"})
-    return history[-MAX_HISTORY:]
+    return load_history(db, uid, gid)
 
 def _save_turn(uid: str, gid: str | None, user_msg: str, ai_text: str,
-               reasoning: str = "", tool_chain: str = "") -> None:
-    """Persist one conversation turn.
-
-    The assistant row carries this turn's thinking chain and tool chain, so
-    the user can later ask "what were you thinking" about this reply (and the
-    dashboard's conversation log can show the chain).
-    """
-    try:
-        db.deposit_chat_history("user", uid, gid, user_msg, "", "")
-        if ai_text:
-            db.deposit_chat_history("assistant", uid, gid, ai_text,
-                                    tool_chain, "", reasoning)
-    except Exception:
-        logger.debug("main._save_turn 忽略了异常", exc_info=True)
+               reasoning: str = "", tool_chain: str = "",
+               handled: bool = False) -> None:
+    save_turn(db, uid, gid, user_msg, ai_text, reasoning, tool_chain, handled)
 
 # ── Group seeding ───────────────────────────────────────
 def _seed_group(gid: str) -> None:
@@ -830,7 +806,10 @@ def main_logic(robot: RobotServer) -> None:
         # race an unwritten record.
         _save_turn(robot.user_id, robot.group_id, robot.msg, final_text,
                    reasoning=ai.reasoning_content or "",
-                   tool_chain=_tool_chain_json(tool_calls))
+                   tool_chain=_tool_chain_json(tool_calls),
+                   # A self-contained tool replied on its own, so this turn is
+                   # answered even though final_text stayed empty.
+                   handled=bool(tool_calls))
         if final_text:
             robot.reply(final_text)
 
