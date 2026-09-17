@@ -273,23 +273,34 @@ def format_group_context(rows: list[dict[str, Any]], minutes: int = 15) -> str:
 
 
 def build_user_message(robot: Any, reply_note: str = "",
-                       group_context: str = "") -> str:
+                       group_context: str = "", now: Any = None) -> str:
     """Build the user-role message — the ambient context plus this interaction.
 
-    Both the quote note and the group context are prepended rather than put in
-    the system prompt: they belong right next to the message they explain, and
-    keeping the system prompt stable is what lets DeepSeek's prefix cache work.
+    Everything volatile lives here rather than in the system prompt: the quote
+    note, the group context and the timestamp. They belong next to the message
+    they describe, and — more importantly — the system prompt plus the tool
+    schemas are the cacheable prefix. One changed character anywhere in the
+    system prompt throws away the entire tool-schema cache, and the timestamp
+    used to change every single minute.
     """
     msg = robot.msg.strip()
     if not msg:
         # Fallback so image-only / empty messages never reach the AI as blank text
         msg = "[图片消息]" if robot.incoming.has_images else "[空消息]"
+    stamp = _time_line(now)
     prefix = f"{reply_note}\n" if reply_note else ""
     context = f"{group_context}\n" if group_context else ""
     if robot.msg_type == "group":
-        return (f"{context}{prefix}群「{robot.group_name or ''}」中 "
+        return (f"{stamp}{context}{prefix}群「{robot.group_name or ''}」中 "
                 f"用户 {robot.user_name} 说：{msg}")
-    return f"{prefix}用户 {robot.user_name} 说：{msg}"
+    return f"{stamp}{prefix}用户 {robot.user_name} 说：{msg}"
+
+
+def _time_line(now: Any = None) -> str:
+    """The current-time line, kept out of the cacheable system prompt."""
+    now = now or datetime.now()
+    weekday = ["一", "二", "三", "四", "五", "六", "日"][now.weekday()]
+    return f"当前时间：{now.strftime('%Y年%m月%d日 %H:%M')} 周{weekday}\n"
 
 
 def build_system_prompt(
@@ -306,9 +317,6 @@ def build_system_prompt(
     dependency-light and testable; pass them from the caller that owns the
     singletons.
     """
-    now = datetime.now()
-    now_text = now.strftime("%Y年%m月%d日 %H:%M")
-    weekday = ["一", "二", "三", "四", "五", "六", "日"][now.weekday()]
     disabled = disabled or set()
 
     is_private = robot.msg_type == "private"
@@ -316,8 +324,13 @@ def build_system_prompt(
 
     parts: list[str] = [build_role_prompt(extra)]
 
-    # ── Time context ──
-    parts.append(f"当前时间：{now_text} 周{weekday}")
+    # ── Time context: deliberately NOT here ──
+    # The system prompt is the cacheable prefix, and DeepSeek serialises the
+    # `tools` block AFTER it — so any change anywhere in this string, even at
+    # the very end, invalidates the whole 3157-token tool schema. A timestamp
+    # that changes every minute therefore meant the tool cache never hit at
+    # all (measured: 10% hit with a volatile tail vs 95% with a stable one).
+    # It goes in the user message instead, which is a miss either way.
 
     # ── Tool usage rules (compact but strict) ──
     parts.append(
