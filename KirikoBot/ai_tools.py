@@ -1421,7 +1421,7 @@ class ReadContextTool:
         try:
             rows = self.db.get_recent_group_context(
                 robot.group_id, minutes=minutes, limit=limit,
-                exclude_user=robot.user_id,
+                exclude_message_id=robot.incoming.message_id,
             )
         except Exception:
             logger.exception("read_context failed")
