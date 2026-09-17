@@ -37,7 +37,9 @@ from chat_history import load_history, save_turn
 import webhook_auth
 from prompt_builder import (
     build_role_prompt,
+    deflection_for,
     format_group_context,
+    leaked_persona,
     resolve_quote,
     build_system_prompt as _build_system_prompt,
     build_user_message as _context,
@@ -842,6 +844,14 @@ def main_logic(robot: RobotServer) -> None:
         # Persist BEFORE sending. Delivery can block (slow or failing send),
         # and a user who immediately asks "what were you thinking" must not
         # race an unwritten record.
+        # The persona forbids reciting the prompt, but that is just text in a
+        # prompt and it failed once under repeated pressure ("好吧好吧，别刷屏
+        # 了，贴就贴"). Check the outgoing reply too, and record what was
+        # actually sent so the model's own history shows the firm stance.
+        if final_text and leaked_persona(final_text):
+            logger.warning("Blocked a system-prompt leak: %s", final_text[:150])
+            final_text = deflection_for(final_text)
+
         _save_turn(robot.user_id, robot.group_id, robot.msg, final_text,
                    reasoning=ai.reasoning_content or "",
                    tool_chain=_tool_chain_json(tool_calls),
