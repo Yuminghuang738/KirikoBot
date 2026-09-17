@@ -211,7 +211,8 @@ class TestAmbientContextInUserMessage:
         from prompt_builder import build_user_message
 
         text = build_user_message(self._Robot(), "", "")
-        assert text.startswith("群「测试群」中")
+        assert "群「测试群」中" in text
+        assert "群里最近" not in text
 
     def test_private_chat_never_gets_group_context(self):
         from prompt_builder import build_user_message
