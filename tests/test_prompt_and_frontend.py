@@ -57,7 +57,10 @@ class TestSystemPrompt:
     def test_includes_persona_and_time(self):
         prompt = build_system_prompt(_Robot())
         assert PERSONA in prompt
-        assert "当前时间：" in prompt
+        # The timestamp must NOT be in the system prompt: it is the cacheable
+        # prefix, and a per-minute change there invalidates the whole tool
+        # schema cache. It belongs in the user message.
+        assert "当前时间：" not in prompt
 
     def test_private_drops_the_group_rule(self):
         prompt = build_system_prompt(_Robot(msg_type="private"))
