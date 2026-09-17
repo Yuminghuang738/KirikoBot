@@ -133,6 +133,10 @@ class Config:
     GROUP_CONTEXT_MINUTES: Final[int] = int(os.getenv("GROUP_CONTEXT_MINUTES") or 15)
     GROUP_CONTEXT_LIMIT: Final[int] = int(os.getenv("GROUP_CONTEXT_LIMIT") or 20)
 
+    # How far back to count "how many times has this user pestered me" — the
+    # signal behind the persona's escalating temper. Larger = slower to anger.
+    PATIENCE_WINDOW_MINUTES: Final[int] = int(os.getenv("PATIENCE_WINDOW_MINUTES") or 10)
+
     @classmethod
     def validate(cls) -> None:
         required: dict[str, str | None] = {
