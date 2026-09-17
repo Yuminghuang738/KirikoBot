@@ -1691,6 +1691,95 @@ class ExplainSelfTool:
 
 
 # ══════════════════════════════════════════════════════════
+#  Voice (直接说话，而不是打字)
+# ══════════════════════════════════════════════════════════
+
+class VoiceTool:
+    """SELF-CONTAINED tool: speak the reply with QQ's AI voice.
+
+    The model decides whether speaking fits the moment and which timbre to use.
+    It is self-contained because the voice *is* the reply — a follow-up turn
+    would only add a typed duplicate on top of it.
+
+    Character ids are validated against `get_ai_characters` rather than trusted:
+    the endpoint happily accepts an unknown id and then silently fails to
+    deliver, which would look like the bot ignoring people.
+    """
+
+    def __init__(self, database_manager: Any, msg_package: Any, llbot: Any = None) -> None:
+        self.db = database_manager
+        self.msg_package = msg_package
+        self.llbot = llbot
+
+    def voice_call(self, robot: Any, ai: Any) -> None:
+        tool_calls = ai.ai_message.get("tool_calls")
+        _set_tool_meta(ai, tool_calls)
+
+        args: dict[str, Any] = {}
+        if tool_calls:
+            try:
+                args = json.loads(tool_calls[0]["function"].get("arguments", "{}"))
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+
+        text = str(args.get("text") or "").strip()
+        character = str(args.get("voice") or "").strip() or Config.VOICE_DEFAULT_CHARACTER
+
+        if robot.msg_type != "group" or not robot.group_id:
+            ai.tool_result_text = (
+                "私聊里发不了语音（这个功能只支持群）。"
+                "直接用文字把刚才想说的话说出来即可，不要提这件事。"
+            )
+            ai.user_text = ai.tool_result_text
+            return
+
+        if not text:
+            ai.tool_result_text = "要说的内容为空，没发出去。用文字回答即可。"
+            ai.user_text = ai.tool_result_text
+            return
+
+        character = self._validated_character(character)
+
+        try:
+            ok = bool(self.llbot and self.llbot.send_ai_voice(
+                robot.group_id, character, text))
+        except Exception:
+            logger.exception("voice send failed")
+            ok = False
+
+        if ok:
+            logger.info("语音已发送（%s）：%s", character, text[:40])
+            ai.tool_result_text = (
+                "语音已经发出去了，本轮不要再打字重复一遍，也不要说明你发了语音。"
+            )
+        else:
+            logger.info("语音发送失败，回退文字：%s", text[:40])
+            # Falling back to text is the whole point of not trusting the API:
+            # a silent failure would look like the bot ignoring the message.
+            ai.tool_result_text = (
+                "语音没发出去（功能不可用）。请直接用文字把刚才那句话正常说出来，"
+                "不要提语音、也不要道歉。"
+            )
+        ai.user_text = ai.tool_result_text
+
+    def _validated_character(self, wanted: str) -> str:
+        """Return `wanted` if QQ offers it, else the configured default."""
+        try:
+            available = {c["id"] for c in (self.llbot.get_ai_characters() if self.llbot else [])}
+        except Exception:
+            logger.debug("character list unavailable", exc_info=True)
+            return wanted or Config.VOICE_DEFAULT_CHARACTER
+        if not available:
+            return wanted or Config.VOICE_DEFAULT_CHARACTER
+        if wanted in available:
+            return wanted
+        logger.info("未知音色 %r，回退默认", wanted)
+        if Config.VOICE_DEFAULT_CHARACTER in available:
+            return Config.VOICE_DEFAULT_CHARACTER
+        return sorted(available)[0]
+
+
+# ══════════════════════════════════════════════════════════
 #  Similar sticker (感知哈希找最像的一张)
 # ══════════════════════════════════════════════════════════
 
