@@ -141,6 +141,15 @@ class Config:
     # either. The mood decays to normal over this many minutes.
     MOOD_COOLDOWN_MINUTES: Final[int] = int(os.getenv("MOOD_COOLDOWN_MINUTES") or 30)
 
+    # ── AI voice (QQ's own synthesis, via LLOneBot) ────
+    # The model decides on its own whether to speak instead of type. Voice is
+    # group-only (the LLOneBot endpoint is send_group_ai_record) and needs QQ's
+    # AI voice feature to be available, so every failure falls back to text.
+    VOICE_ENABLED: Final[bool] = os.getenv("VOICE_ENABLED", "1") == "1"
+    # Kiriko is an 18-year-old tsundere girl, so this is the default timbre.
+    # Verified present via get_ai_characters: lucy-voice-f38 = 傲娇少女.
+    VOICE_DEFAULT_CHARACTER: Final[str] = os.getenv("VOICE_DEFAULT_CHARACTER") or "lucy-voice-f38"
+
     @classmethod
     def validate(cls) -> None:
         required: dict[str, str | None] = {

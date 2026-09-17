@@ -299,6 +299,42 @@ class AiTools:
             ),
             "parameters": empty_params,
         }
+        function_send_voice = {
+            "name": "send_voice",
+            "description": (
+                "用语音把话直接说出来，而不是打字。撒娇、吐槽、情绪上来了、"
+                "或者一句话就能说完的时候可以用。"
+                "**先想清楚这句话念出来是什么效果**：要口语、短、不带颜文字和表情符号，"
+                "写完了自己念一遍顺不顺。"
+                "正经答题、内容里有数字/链接/代码、或者需要对方反复看着操作时就打字，别用这个。"
+                "也不要每条都用——偶尔说一次才显得自然。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "要念出来的话。口语化、简短，不要颜文字、不要表情符号、不要书面语",
+                    },
+                    "voice": {
+                        "type": "string",
+                        "description": (
+                            "音色。默认 lucy-voice-f38（傲娇少女，就是你平时说话的声音）。"
+                            "f38=傲娇少女，xueling=元气少女，female1=邻家小妹，f36=温柔妹妹，"
+                            "f37=文艺少女，f34=书香少女，female2=暖心姐姐，suxinjiejie=酥心御姐。"
+                            "搞怪时可以故意用 houge=猴哥 或 laibixiaoxin=小新（偶尔一次就好）"
+                        ),
+                        "enum": [
+                            "lucy-voice-f38", "lucy-voice-xueling", "lucy-voice-female1",
+                            "lucy-voice-f36", "lucy-voice-f37", "lucy-voice-f34",
+                            "lucy-voice-female2", "lucy-voice-suxinjiejie",
+                            "lucy-voice-houge", "lucy-voice-laibixiaoxin",
+                        ],
+                    },
+                },
+                "required": ["text"],
+            },
+        }
         function_similar_sticker = {
             "name": "similar_sticker",
             "description": (
@@ -354,6 +390,7 @@ class AiTools:
         tool_read_context = {"type": "function", "function": function_read_context}
         tool_feature_list = {"type": "function", "function": function_feature_list}
         tool_explain_self = {"type": "function", "function": function_explain_self}
+        tool_send_voice = {"type": "function", "function": function_send_voice}
         tool_similar_sticker = {"type": "function", "function": function_similar_sticker}
 
         return [
@@ -385,5 +422,6 @@ class AiTools:
             tool_read_context,
             tool_feature_list,
             tool_explain_self,
+            tool_send_voice,
             tool_similar_sticker,
         ]
