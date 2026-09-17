@@ -299,16 +299,6 @@ class AiTools:
             ),
             "parameters": empty_params,
         }
-        function_ignore_user = {
-            "name": "ignore_user",
-            "description": (
-                "掀桌，直接不理对方——本轮一个字都不回。"
-                "只有当同一个人反复纠缠、问同样的事、或者说话难听到让你真的不想再搭理时才用。"
-                "消息里会给你「你现在的心情」，到了「掀桌」这一级就用它。"
-                "注意这是最后一招：普通的不耐烦应该用冷淡短句表达，不是不理人。"
-            ),
-            "parameters": empty_params,
-        }
         function_similar_sticker = {
             "name": "similar_sticker",
             "description": (
@@ -364,7 +354,6 @@ class AiTools:
         tool_read_context = {"type": "function", "function": function_read_context}
         tool_feature_list = {"type": "function", "function": function_feature_list}
         tool_explain_self = {"type": "function", "function": function_explain_self}
-        tool_ignore_user = {"type": "function", "function": function_ignore_user}
         tool_similar_sticker = {"type": "function", "function": function_similar_sticker}
 
         return [
@@ -396,6 +385,5 @@ class AiTools:
             tool_read_context,
             tool_feature_list,
             tool_explain_self,
-            tool_ignore_user,
             tool_similar_sticker,
         ]

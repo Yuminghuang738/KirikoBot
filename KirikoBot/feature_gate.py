@@ -43,7 +43,6 @@ FEATURE_DEFS: list[dict[str, str]] = [
     {"key": "context_read",    "label": "语境读取",     "category": "群功能",   "desc": "需要时读取群里的近期聊天记录来理解语境"},
     {"key": "feature_list",    "label": "需求清单查询", "category": "群功能",   "desc": "群友可查询提过的功能需求进度"},
     {"key": "explain_self",    "label": "执行回放",     "category": "群功能",   "desc": "调试用：把上一轮的思维链原文/工具调用/回复原文照录发出来，不经 AI 转述"},
-    {"key": "ignore",          "label": "不理人",       "category": "群功能",   "desc": "被反复纠缠时可以直接一个字都不回（情绪阶梯的最高一级）"},
     {"key": "similar_sticker", "label": "相似表情",     "category": "视觉",     "desc": "按用户发的图找库里最像的表情"},
     {"key": "subscription",    "label": "群推送订阅",   "category": "推送",     "desc": "按设定时间推送早报/游戏/一言/发言榜"},
 ]
@@ -81,7 +80,6 @@ TOOL_FEATURE: dict[str, str] = {
     "read_context": "context_read",
     "feature_list": "feature_list",
     "explain_self": "explain_self",
-    "ignore_user": "ignore",
     "similar_sticker": "similar_sticker",
 }
 

@@ -136,6 +136,10 @@ class Config:
     # How far back to count "how many times has this user pestered me" — the
     # signal behind the persona's escalating temper. Larger = slower to anger.
     PATIENCE_WINDOW_MINUTES: Final[int] = int(os.getenv("PATIENCE_WINDOW_MINUTES") or 10)
+    # A temper that never subsides is worse than no temper at all, and one
+    # that resets the instant the counting window rolls over isn't human
+    # either. The mood decays to normal over this many minutes.
+    MOOD_COOLDOWN_MINUTES: Final[int] = int(os.getenv("MOOD_COOLDOWN_MINUTES") or 30)
 
     @classmethod
     def validate(cls) -> None:
