@@ -23,10 +23,24 @@ class TestTheLadderIsWritten:
         for rung in ("正常", "不耐烦", "生气", "掀桌"):
             assert rung in section, f"missing rung: {rung}"
 
-    def test_the_top_rung_is_the_ignore_tool(self):
+    def test_the_top_rung_still_speaks(self):
+        """Silence reads as "the bot went offline", which is what we must avoid."""
         section = PERSONA[PERSONA.index("【情绪是渐进式的】"):]
         section = section[:section.index("【不要用「换个话题」逃开】")]
-        assert "ignore" in section
+        assert "话还是要说" in section
+        assert "不要装作没看见" in section
+        assert "掉线" in section
+
+    def test_the_top_rung_refuses_the_topic_and_the_service(self):
+        section = PERSONA[PERSONA.index("【情绪是渐进式的】"):]
+        section = section[:section.index("【不要用「换个话题」逃开】")]
+        assert "不伺候了" in section
+        assert "表达你的不满" in section
+
+    def test_nothing_asks_the_bot_to_go_silent(self):
+        """The old design used a tool that sent no message at all."""
+        assert "一个字都不回" not in PERSONA
+        assert "ignore" not in PERSONA
 
     def test_it_says_not_to_restart_at_polite_every_turn(self):
         """Without this the model is friendly again the moment the wording changes."""
@@ -47,7 +61,8 @@ class TestTheLadderIsWritten:
         section = PERSONA[PERSONA.index("【不要用「换个话题」逃开】"):]
         section = section[:section.index("【要有自己的立场】")]
         assert "不要" in section
-        assert "要么直接怼回去，要么干脆不理" in section
+        assert "要么直接怼回去" in section
+        assert "不要用「换个话题」来打圆场" in section
 
     def test_the_offered_escapisms_are_named_as_bad(self):
         section = PERSONA[PERSONA.index("【不要用「换个话题」逃开】"):]
@@ -184,43 +199,140 @@ class TestTheSignalReachesTheModel:
         assert "你现在的心情" not in build_user_message(self._Robot())
 
 
-class TestIgnoringIsAnAction:
-    def test_an_ignored_turn_is_recorded_so_the_model_remembers(self, db):
-        """Without this every later turn looks like the first."""
-        save_turn(db, "u1", "g1", "又来了", "",
-                  tool_chain='[{"name": "ignore_user", "arguments": "{}"}]',
-                  handled=True)
-        assert load_history(db, "u1", "g1") == [
-            {"role": "user", "content": "又来了"},
-            {"role": "assistant", "content": "[没理他]"},
-        ]
+class TestMoodCooldown:
+    """A temper that never subsides is worse than no temper at all."""
 
-    def test_other_tools_keep_the_generic_marker(self, db):
-        save_turn(db, "u1", "g1", "搜一下", "",
-                  tool_chain='[{"name": "web_search", "arguments": "{}"}]',
-                  handled=True)
-        assert load_history(db, "u1", "g1")[1]["content"] == "[已调用工具处理]"
+    def _set_mood(self, db, level, minutes_ago=0, uid="u1", gid="g1"):
+        db.execute_action(
+            "INSERT INTO user_mood (user_id, group_id, level, updated_at) "
+            "VALUES (?, ?, ?, datetime('now','localtime',?)) "
+            "ON CONFLICT(user_id, group_id) DO UPDATE SET "
+            "level=excluded.level, updated_at=excluded.updated_at",
+            (uid, gid, level, f"-{minutes_ago} minutes"),
+        )
 
-    def test_the_tool_sends_nothing(self, db):
-        """Being silent has to be an action, not the absence of one."""
-        from ai_tools import IgnoreTool
+    def test_a_fresh_mood_is_calm(self, db):
+        assert db.get_mood("u1", "g1", text="你好")["level"] == 0
 
-        class AI:
-            def __init__(self):
-                self.ai_message = {"tool_calls": [{"id": "c1",
-                                                   "function": {"name": "ignore_user"}}]}
-                self.tool_result_text = ""
-                self.user_text = ""
+    def test_pressure_raises_it(self, db):
+        for _ in range(6):
+            db.deposit_chat_history("user", "u1", "g1", "同一句话", "", "")
+        assert db.get_mood("u1", "g1", text="同一句话", cooldown_minutes=30)["level"] >= 3
 
-        class Robot:
-            user_name, group_id = "小明", "g1"
+    def test_it_stays_up_right_after_the_pressure_window(self, db):
+        """The counting window rolling over must not instantly forgive."""
+        self._set_mood(db, 4, minutes_ago=0)
+        # 11 minutes later: outside the 10-minute pressure window, but well
+        # inside the 30-minute cooldown.
+        assert db.get_mood("u1", "g1", text="新问题", pressure_minutes=10,
+                           cooldown_minutes=30)["level"] > 0
 
-        ai = AI()
-        IgnoreTool(db, None).ignore_user_call(Robot(), ai)
-        assert "一个字都不要回" in ai.tool_result_text
+    def test_it_decays_over_the_cooldown(self, db):
+        levels = []
+        for minutes_ago in (0, 8, 16, 24, 31):
+            self._set_mood(db, 4, minutes_ago=minutes_ago)
+            levels.append(db.get_mood("u1", "g1", text="", cooldown_minutes=30)["level"])
+        assert levels == sorted(levels, reverse=True), "must cool monotonically"
+        assert levels[0] == 4
 
-    def test_it_is_registered_as_self_contained(self):
-        """Otherwise main_logic would ask the model for a follow-up reply."""
+    def test_it_fully_cools_after_the_cooldown(self, db):
+        self._set_mood(db, 4, minutes_ago=45)
+        assert db.get_mood("u1", "g1", text="", cooldown_minutes=30)["level"] == 0
+
+    def test_the_cooldown_is_configurable(self, db):
+        self._set_mood(db, 4, minutes_ago=20)
+        assert db.get_mood("u1", "g1", text="", cooldown_minutes=60)["level"] > 0
+        self._set_mood(db, 4, minutes_ago=20)
+        assert db.get_mood("u1", "g1", text="", cooldown_minutes=20)["level"] == 0
+
+    def test_cooling_is_reported_so_the_model_eases_off(self, db):
+        self._set_mood(db, 4, minutes_ago=20)
+        info = db.get_mood("u1", "g1", text="", cooldown_minutes=30)
+        assert info["level"] > 0
+        assert info["cooling"] is True
+
+    def test_a_fresh_peak_is_not_reported_as_cooling(self, db):
+        for _ in range(10):
+            db.deposit_chat_history("user", "u1", "g1", "同一句话", "", "")
+        info = db.get_mood("u1", "g1", text="同一句话", cooldown_minutes=30)
+        assert info["level"] == 4
+        assert info["cooling"] is False
+
+    def test_the_mood_persists_between_calls(self, db):
+        for _ in range(6):
+            db.deposit_chat_history("user", "u1", "g1", "同一句话", "", "")
+        db.get_mood("u1", "g1", text="同一句话", cooldown_minutes=30)
+        assert db._read_mood("u1", "g1")[0] > 0
+
+    def test_a_calm_state_is_not_stored(self, db):
+        db.get_mood("u1", "g1", text="你好", cooldown_minutes=30)
+        assert db._read_mood("u1", "g1")[0] == 0
+
+    def test_moods_are_per_user_and_per_group(self, db):
+        self._set_mood(db, 4, uid="u1", gid="g1")
+        assert db.get_mood("u2", "g1", text="", cooldown_minutes=30)["level"] == 0
+        assert db.get_mood("u1", "g2", text="", cooldown_minutes=30)["level"] == 0
+
+    def test_the_level_is_capped(self, db):
+        for _ in range(50):
+            db.deposit_chat_history("user", "u1", "g1", "同一句话", "", "")
+        assert db.get_mood("u1", "g1", text="同一句话")["level"] == db.MAX_MOOD_LEVEL
+
+    def test_a_garbled_timestamp_does_not_raise(self, db):
+        db.execute_action(
+            "INSERT INTO user_mood (user_id, group_id, level, updated_at) "
+            "VALUES ('u1','g1',4,'not a date')")
+        assert db.get_mood("u1", "g1", text="")["level"] >= 0
+
+    def test_a_broken_state_read_does_not_raise(self, db, monkeypatch):
+        monkeypatch.setattr(db, "_read_mood", lambda *a: (_ for _ in ()).throw(RuntimeError("x")))
+        with pytest.raises(RuntimeError):
+            db.get_mood("u1", "g1", text="")   # caller (main) wraps this
+
+
+class TestPatienceWindowIsConfigurable:
+    def test_the_window_has_a_default(self):
+        from config import Config
+
+        assert Config.PATIENCE_WINDOW_MINUTES == 10
+
+
+class TestNeverSendNothing:
+    """An empty reply reads as "the bot is offline" — worse than any filler."""
+
+    def test_a_filler_is_returned(self):
+        from prompt_builder import filler_for
+
+        line = filler_for("随便一句话")
+        assert line and line.strip()
+
+    def test_it_is_stable_for_the_same_message(self):
+        from prompt_builder import filler_for
+
+        assert filler_for("同上") == filler_for("同上")
+
+    def test_it_stays_in_character(self):
+        """Not "抱歉，我无法回答" — that is the AI voice we are removing."""
+        from prompt_builder import FILLER_LINES
+
+        for line in FILLER_LINES:
+            assert "抱歉" not in line
+            assert "无法" not in line
+            assert "AI" not in line
+
+    def test_it_is_short(self):
+        from prompt_builder import FILLER_LINES
+
+        assert all(len(line) < 40 for line in FILLER_LINES)
+
+    def test_a_blank_message_does_not_crash_it(self):
+        from prompt_builder import filler_for
+
+        assert filler_for("")
+        assert filler_for(None)
+
+    def test_main_falls_back_only_when_nothing_was_produced(self):
+        """Self-contained tools have already replied; don't talk over them."""
         import ast
         import os
 
@@ -231,28 +343,10 @@ class TestIgnoringIsAnAction:
         with open(path, encoding="utf-8") as fh:
             tree = ast.parse(fh.read())
         for node in ast.walk(tree):
-            if isinstance(node, ast.Assign):
-                names = [t.id for t in node.targets if isinstance(t, ast.Name)]
-                if "SELF_CONTAINED_TOOLS" in names:
-                    assert "ignore_user" in {e.value for e in node.value.elts}
+            if isinstance(node, ast.If):
+                src = ast.unparse(node.test)
+                if "final_text" in src and "handled" in src:
+                    body = ast.unparse(node)
+                    assert "filler_for" in body
                     return
-        raise AssertionError("SELF_CONTAINED_TOOLS not found")
-
-    def test_the_feature_gate_knows_it(self):
-        from feature_gate import FEATURE_KEYS, TOOL_FEATURE
-
-        assert "ignore" in FEATURE_KEYS
-        assert TOOL_FEATURE["ignore_user"] == "ignore"
-
-    def test_the_schema_is_offered_to_the_model(self):
-        from ai_tools_list import AiTools
-
-        names = {t["function"]["name"] for t in AiTools().ai_tools()}
-        assert "ignore_user" in names
-
-
-class TestPatienceWindowIsConfigurable:
-    def test_the_window_has_a_default(self):
-        from config import Config
-
-        assert Config.PATIENCE_WINDOW_MINUTES == 10
+        raise AssertionError("no empty-reply fallback found in main")
