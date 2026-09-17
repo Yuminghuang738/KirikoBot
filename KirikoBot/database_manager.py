@@ -724,25 +724,38 @@ class DatabaseManager:
 
         # The bot's lines first: telling "they are quoting ME" apart from
         # "they are quoting someone else" is the whole point of the feature.
-        try:
-            rows = self.fetch_data(
-                "SELECT text FROM bot_messages WHERE message_id = ? "
-                "AND (? IS NULL OR group_id = ?) ORDER BY id DESC LIMIT 1",
-                (mid, group_id, group_id),
-            )
-            if rows:
+        #
+        # Group-scoped first, then a global fallback. Scoping alone fails
+        # *silently* whenever the group id does not match byte-for-byte, and a
+        # dropped quote note is invisible — the bot just answers as if nothing
+        # had been quoted. QQ message ids are unique account-wide, so the
+        # fallback is safe and turns a silent miss into a hit.
+        lookups = (
+            ("SELECT text FROM bot_messages WHERE message_id = ? AND group_id = ?"
+             " ORDER BY id DESC LIMIT 1", True, True),
+            ("SELECT text FROM bot_messages WHERE message_id = ?"
+             " ORDER BY id DESC LIMIT 1", True, False),
+            ("SELECT content, user_name FROM group_messages WHERE message_id = ?"
+             " AND group_id = ? ORDER BY id DESC LIMIT 1", False, True),
+            ("SELECT content, user_name FROM group_messages WHERE message_id = ?"
+             " ORDER BY id DESC LIMIT 1", False, False),
+        )
+        for sql, own, scoped in lookups:
+            if scoped and group_id is None:
+                continue
+            params = (mid, group_id) if scoped else (mid,)
+            try:
+                rows = self.fetch_data(sql, params)
+            except sqlite3.Error:
+                logger.debug("find_quoted lookup failed", exc_info=True)
+                continue
+            if not rows:
+                continue
+            if own:
                 return {"text": rows[0][0] or "", "user_name": "", "is_own": True}
-            rows = self.fetch_data(
-                "SELECT content, user_name FROM group_messages WHERE message_id = ? "
-                "AND (? IS NULL OR group_id = ?) ORDER BY id DESC LIMIT 1",
-                (mid, group_id, group_id),
-            )
-        except sqlite3.Error:
-            logger.debug("find_quoted lookup failed", exc_info=True)
-            return None
-        if not rows:
-            return None
-        return {"text": rows[0][0] or "", "user_name": rows[0][1] or "", "is_own": False}
+            return {"text": rows[0][0] or "", "user_name": rows[0][1] or "",
+                    "is_own": False}
+        return None
 
     def get_recent_group_context(
         self, group_id: str, minutes: int = 30, limit: int = 40,
