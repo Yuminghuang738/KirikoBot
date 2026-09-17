@@ -112,10 +112,22 @@ class TestFindQuoted:
         assert db.find_quoted("g1", None) is None
         assert db.find_quoted("g1", "not-a-number") is None
 
-    def test_lookups_are_scoped_to_the_group(self, db):
+    def test_the_scoped_lookup_is_tried_first(self, db):
+        db.record_bot_message("g1", 123, "g1 的那条")
+        assert db.find_quoted("g1", 123)["text"] == "g1 的那条"
+
+    def test_a_group_id_mismatch_still_resolves(self, db):
+        """Scoping alone failed silently: a wrong group id dropped the note and
+        the bot answered as if nothing had been quoted. QQ ids are unique
+        account-wide, so falling back to a global lookup is safe and turns an
+        invisible miss into a hit."""
         db.record_bot_message("g1", 123, "给 g1 的")
-        assert db.find_quoted("g2", 123) is None
-        assert db.find_quoted("g1", 123) is not None
+        found = db.find_quoted("some-other-group", 123)
+        assert found is not None and found["text"] == "给 g1 的"
+
+    def test_a_private_chat_lookup_still_works_without_a_group(self, db):
+        db.record_group_message("g1", "u1", "小明", "群里说的", message_id=321)
+        assert db.find_quoted(None, 321)["text"] == "群里说的"
 
     def test_the_bots_own_message_wins_over_a_same_id_member_message(self, db):
         """Ids collide across stores; the bot's line is what matters here."""
@@ -212,84 +224,124 @@ class TestAmbientContextInUserMessage:
 
 
 class TestContextDefaults:
-    def test_ambient_context_is_on_by_default(self):
+    def test_ambient_context_is_off_by_default(self):
+        """Reading the room is the model's decision, not an unconditional dump.
+
+        Attaching a transcript to every message was tried and reverted: what
+        was wanted was a looser trigger for read_context, not blanket
+        awareness. Quote resolution is what is always on.
+        """
         from config import Config
 
-        assert Config.GROUP_CONTEXT_ENABLED is True
+        assert Config.GROUP_CONTEXT_ENABLED is False
+
+    def test_the_knobs_still_exist_for_opting_in(self):
+        from config import Config
+
         assert Config.GROUP_CONTEXT_MINUTES == 15
         assert Config.GROUP_CONTEXT_LIMIT == 20
 
-    def test_the_prompt_explains_the_background_is_attached(self):
-        from prompt_builder import build_system_prompt
+    class _Robot:
+        msg_type, msg = "group", "那这个呢"
+        group_id, user_id = "g1", "u1"
+        user_name, group_name = "小明", "测试群"
 
-        class Incoming:
+        class incoming:
             has_images = False
 
-        class Robot:
-            msg_type, msg = "group", "那这个呢"
-            group_id, user_id = "g1", "u1"
-            user_name, group_name = "小明", "测试群"
-            incoming = Incoming()
+    def test_the_prompt_tells_it_to_look_when_unsure(self, monkeypatch):
+        from config import Config
+        from prompt_builder import build_system_prompt
 
-        prompt = build_system_prompt(Robot())
+        monkeypatch.setattr(Config, "GROUP_CONTEXT_ENABLED", False)
+        prompt = build_system_prompt(self._Robot())
         assert "群聊语境" in prompt
-        assert "背景" in prompt
-        assert "read_context" in prompt, "the deeper tool must still be offered"
+        assert "read_context" in prompt
+        assert "一丝不确定" in prompt, "the trigger should be deliberately loose"
+        assert "宁可多查一次" in prompt
+
+    def test_the_prompt_lists_concrete_triggers(self, monkeypatch):
+        from config import Config
+        from prompt_builder import build_system_prompt
+
+        monkeypatch.setattr(Config, "GROUP_CONTEXT_ENABLED", False)
+        prompt = build_system_prompt(self._Robot())
+        for trigger in ("指代不明", "接着别人的话说", "你完全没参与的讨论", "拿不准"):
+            assert trigger in prompt, f"missing trigger: {trigger}"
+
+    def test_the_prompt_says_what_not_to_look_up(self, monkeypatch):
+        from config import Config
+        from prompt_builder import build_system_prompt
+
+        monkeypatch.setattr(Config, "GROUP_CONTEXT_ENABLED", False)
+        prompt = build_system_prompt(self._Robot())
+        assert "一对一闲聊" in prompt, "otherwise it would call the tool every time"
+
+    def test_opting_in_describes_the_attached_background(self, monkeypatch):
+        from config import Config
+        from prompt_builder import build_system_prompt
+
+        monkeypatch.setattr(Config, "GROUP_CONTEXT_ENABLED", True)
+        prompt = build_system_prompt(self._Robot())
+        assert "已经附了一段最近的群聊背景" in prompt
+
+    def test_private_chat_gets_no_group_context_rule(self, monkeypatch):
+        from config import Config
+        from prompt_builder import build_system_prompt
+
+        monkeypatch.setattr(Config, "GROUP_CONTEXT_ENABLED", False)
+
+        class Private(self._Robot):
+            msg_type = "private"
+            group_id = None
+
+        assert "群聊语境" not in build_system_prompt(Private())
 
 
-class TestAmbientContextSelection:
-    """Which recent lines the model gets to see."""
+class TestReplySegmentParsing:
+    """The reply segment's id and message_seq are different number spaces.
 
-    def _seed(self, db):
-        db.record_group_message("g1", "u1", "小明", "我先说一句", message_id=101)
-        db.record_group_message("g1", "u2", "小红", "别人插一句", message_id=102)
-        db.record_group_message("g1", "u1", "小明", "那这个呢", message_id=103)
-        db.record_bot_message("g1", 104, "回了小红")
-        return db
+    Live LLBot sends only `{"id": ...}` and that value matches
+    bot_messages.message_id. Taking `message_seq` first would silently resolve
+    to nothing whenever a build supplies both.
+    """
 
-    def test_current_message_is_excluded(self, db):
-        self._seed(db)
-        rows = db.get_recent_group_context("g1", minutes=30,
-                                           exclude_message_id=103)
-        contents = [r["content"] for r in rows]
-        assert "那这个呢" not in contents
+    def test_id_is_preferred_over_message_seq(self):
+        from llbot_client import IncomingMessage
 
-    def test_the_authors_other_messages_are_kept(self, db):
-        """The gap that exclude_user left: their own earlier lines matter.
+        reply = IncomingMessage._extract_reply([
+            {"type": "reply", "data": {"id": "75563830", "message_seq": 36427}},
+        ])
+        assert reply.message_seq == 75563830
 
-        Messages that never mentioned the bot are stored nowhere else — not in
-        `history` either — so dropping the whole author made them invisible.
-        """
-        self._seed(db)
-        rows = db.get_recent_group_context("g1", minutes=30,
-                                           exclude_message_id=103)
-        assert "我先说一句" in [r["content"] for r in rows]
+    def test_message_seq_is_used_when_id_is_absent(self):
+        from llbot_client import IncomingMessage
 
-    def test_exclude_user_still_works_for_other_callers(self, db):
-        self._seed(db)
-        rows = db.get_recent_group_context("g1", minutes=30, exclude_user="u1")
-        contents = [r["content"] for r in rows]
-        assert "我先说一句" not in contents
-        assert "那这个呢" not in contents
-        assert "别人插一句" in contents
+        reply = IncomingMessage._extract_reply([
+            {"type": "reply", "data": {"message_seq": "75563830"}},
+        ])
+        assert reply.message_seq == 75563830
 
-    def test_the_bots_lines_are_included(self, db):
-        self._seed(db)
-        rows = db.get_recent_group_context("g1", minutes=30)
-        assert any(r["is_bot"] and "回了小红" in r["content"] for r in rows)
+    def test_the_live_payload_shape_parses(self):
+        """Exactly what a real LLBot sends."""
+        from llbot_client import IncomingMessage
 
-    def test_ordering_is_oldest_first(self, db):
-        self._seed(db)
-        rows = db.get_recent_group_context("g1", minutes=30)
-        contents = [r["content"] for r in rows]
-        assert contents.index("我先说一句") < contents.index("那这个呢")
+        reply = IncomingMessage._extract_reply([
+            {"type": "reply", "data": {"id": "75563830"}},
+        ])
+        assert reply is not None
+        assert reply.message_seq == 75563830
+        assert reply.text == "" and reply.sender_name == ""
 
-    def test_no_exclusion_returns_everything(self, db):
-        self._seed(db)
-        assert len(db.get_recent_group_context("g1", minutes=30)) == 4
+    def test_a_non_numeric_id_does_not_raise(self):
+        from llbot_client import IncomingMessage
 
-    def test_a_non_numeric_exclusion_id_is_ignored_not_fatal(self, db):
-        self._seed(db)
-        rows = db.get_recent_group_context("g1", minutes=30,
-                                           exclude_message_id="not-a-number")
-        assert rows, "a junk id must not blank the whole transcript"
+        reply = IncomingMessage._extract_reply([
+            {"type": "reply", "data": {"id": "abc"}},
+        ])
+        assert reply.message_seq is None
+
+    def test_no_reply_segment(self):
+        from llbot_client import IncomingMessage
+
+        assert IncomingMessage._extract_reply([{"type": "text", "data": {"text": "hi"}}]) is None
