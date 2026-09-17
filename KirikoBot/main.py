@@ -16,6 +16,7 @@ from flask import Flask, Response, jsonify, render_template, request, send_from_
 
 from ai_server import AiServer
 from ai_tools import (
+    IgnoreTool,
     Tarot, Tarot_History, GamingNews,
     WebSearchTool, WeatherTool, StickerTool,
     HitokotoTool, FoodPickerTool, DiceTool, BilibiliTool,
@@ -149,6 +150,7 @@ group_stats_tool = GroupStatsTool(db, pkg)
 read_context_tool = ReadContextTool(db, pkg)
 feature_list_tool = FeatureListTool(db, pkg)
 explain_self_tool = ExplainSelfTool(db, pkg)
+ignore_tool = IgnoreTool(db, pkg)
 similar_sticker_tool = SimilarStickerTool(sticker_collector, pkg)
 
 # Persist the bot's own outgoing messages so transcripts are complete and
@@ -222,6 +224,7 @@ ROUTES = {
     "read_context": read_context_tool.read_context_call,
     "feature_list": feature_list_tool.feature_list_call,
     "explain_self": explain_self_tool.explain_self_call,
+    "ignore_user": ignore_tool.ignore_user_call,
     "similar_sticker": similar_sticker_tool.similar_sticker_call,
 }
 
@@ -233,6 +236,8 @@ SELF_CONTAINED_TOOLS = {
     # explain_self sends the raw debug dump itself; a follow-up turn would only
     # add the model's paraphrase on top of the text we want verbatim.
     "explain_self",
+    # ignore_user answers by sending nothing; a follow-up would defeat it.
+    "ignore_user",
 }
 
 # ── History (only recent context, filtered for clarity) ──
@@ -311,6 +316,35 @@ def _reply_note(robot: RobotServer) -> str:
         logger.info("引用感知未命中：id=%s 不在库里（无法还原被引用的内容）",
                     reply.message_seq)
     return note
+
+def _mood_signal(robot: RobotServer) -> str:
+    """Tell the model how hard this user has been leaning on it.
+
+    The persona's temper is meant to escalate across a *conversation*, but
+    every request is independent: the model sees only the last few turns, so
+    it cannot tell "first question today" from "the sixth time in five
+    minutes". The count is computed here and handed over as a fact, which is
+    what makes the escalation actually advance instead of restarting at polite
+    every turn.
+    """
+    if not robot.user_id:
+        return ""
+    try:
+        info = db.get_recent_pestering(
+            robot.user_id, robot.group_id,
+            minutes=Config.PATIENCE_WINDOW_MINUTES, text=robot.msg,
+        )
+    except Exception:
+        logger.debug("mood signal failed", exc_info=True)
+        return ""
+    if info["level"] <= 0:
+        return ""
+    detail = f"最近 {Config.PATIENCE_WINDOW_MINUTES} 分钟这个用户已经找了你 {info['count']} 次"
+    if info["repeats"]:
+        detail += f"，其中 {info['repeats']} 次问的是同一件事"
+    return (f"【你现在的心情】{detail}。"
+            f"按你的脾气，现在至少是「{info['label']}」的程度了，不要退回客气。")
+
 
 def _ambient_group_context(robot: RobotServer, disabled: set[str]) -> str:
     """The recent group transcript attached to every group message.
@@ -779,7 +813,8 @@ def main_logic(robot: RobotServer) -> None:
         history = _load_history(robot.user_id, robot.group_id)
         is_private = robot.msg_type == "private"
         user_text = _context(robot, _reply_note(robot),
-                             _ambient_group_context(robot, disabled))
+                             _ambient_group_context(robot, disabled),
+                             mood=_mood_signal(robot))
         system_prompt = _build_system_prompt(
             robot, db, profile_service, learning_service, affection_service, disabled,
         )
