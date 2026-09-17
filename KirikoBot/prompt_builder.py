@@ -331,22 +331,39 @@ def build_system_prompt(
     )
 
     # ── When to pull the wider group context ──
-    # A recent transcript is attached to every group message by default (see
-    # Config.GROUP_CONTEXT_*), because leaving this to the model's judgement
-    # did not work: read_context was called 12 times against 1000+ for other
-    # tools, and replies regularly answered the wrong thing. This section now
-    # tells the model how to *use* that background, and when to dig deeper.
-    parts.append(
-        "【关于群聊语境】"
-        "你只能收到 @你 的消息，群里其他人之间的对话平常你是收不到的。"
-        "所以每条群消息前面都会附一段最近的群聊背景（标着「群里最近…还发生了这些」），"
-        "先看那段再回答，它能解释对方在说什么、在跟谁说话。"
-        "如果背景不够用——当前消息指代不明（“那这个呢”“所以呢”）、"
-        "像是接着更早的话说的、或提到一段你完全没参与过的讨论——"
-        "再用 read_context 往前多翻一些。"
-        "但能直接回答的闲聊、打招呼就别调用它，也不要每句都去查。"
-        "背景里那些不是发给你的话，不用挨个回应，知道就好。"
-    )
+    # Reading the room is a decision the model makes via read_context. It used
+    # to fire 12 times against 1000+ for other tools, so the trigger is
+    # deliberately loose now: when in doubt, look. Getting the context wrong
+    # costs a reply that answers the wrong thing, which is far worse than one
+    # extra cheap tool call.
+    if is_private:
+        context_rule = ""
+    elif Config.GROUP_CONTEXT_ENABLED:
+        context_rule = (
+            "【关于群聊语境】"
+            "你只能收到 @你 的消息，群里其他人之间的对话平常你是收不到的。"
+            "每条群消息前面已经附了一段最近的群聊背景（标着「群里最近…还发生了这些」），"
+            "先看那段再回答。背景不够用时（当前消息指代不明、像是接着更早的话说的、"
+            "或提到一段你完全没参与的讨论），再用 read_context 往前多翻一些。"
+            "背景里那些不是发给你的话，不用挨个回应，知道就好。"
+        )
+    else:
+        context_rule = (
+            "【关于群聊语境】"
+            "你只能收到 @你 的消息，群里其他人之间的对话你是看不到的，"
+            "所以**不要假装知道自己没看到的内容**。"
+            "只要有一丝不确定，就先调用 read_context 看一眼群里最近在聊什么再回答——"
+            "宁可多查一次，也不要凭猜测答非所问。下面几种情况**一定要查**："
+            "① 当前消息指代不明（“那这个呢”“所以呢”“那个怎么办”）；"
+            "② 像是接着别人的话说的，但你不知道前文；"
+            "③ 提到了人名、作品、事件，或一段你完全没参与的讨论；"
+            "④ 对方说“这个”“那个”“刚才那个”而没有明确指代；"
+            "⑤ 你拿不准对方到底在问什么。"
+            "只有明显在跟你一对一闲聊、打招呼，或问题本身自足"
+            "（例如“今天几号”“帮我翻译这句”）时，才不用查。"
+        )
+    if context_rule:
+        parts.append(context_rule)
 
     # ── Group-specific rules ──
     if not is_private:

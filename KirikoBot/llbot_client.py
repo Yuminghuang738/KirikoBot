@@ -54,9 +54,11 @@ class IncomingMessage:
     text: str = ""
     is_at_bot: bool = False
     message_id: int | None = None
-    # QQ-level sequence. LLBot sends BOTH: `message_id` is a short id usable
-    # with delete_msg/get_msg, while `message_seq` is what a `reply` segment
-    # references. Quote chains must be linked on message_seq.
+    # The quoted message's **id**, despite the name. Verified against a live
+    # LLBot: the reply segment is `{"type": "reply", "data": {"id": "75563830"}}`
+    # and that value matches `bot_messages.message_id` / `group_messages.
+    # message_id`, not the QQ sequence number. `_extract_reply` therefore
+    # prefers `id`; see its docstring.
     message_seq: int | None = None
     reply: ReplyInfo | None = None
 
@@ -108,7 +110,13 @@ class IncomingMessage:
             if not isinstance(quoted, list):
                 quoted = []
 
-            seq = data.get("message_seq", data.get("id"))
+            # Prefer `id`. Both fields exist in some LLBot builds, but they
+            # live in different number spaces: `id` is the message id (what our
+            # tables are keyed on), `message_seq` is the QQ sequence number.
+            # Taking `message_seq` first silently resolved to nothing.
+            seq = data.get("id")
+            if seq is None:
+                seq = data.get("message_seq")
             try:
                 seq = int(seq) if seq is not None else None
             except (TypeError, ValueError):

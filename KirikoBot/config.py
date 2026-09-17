@@ -114,20 +114,22 @@ class Config:
     VISION_ENABLED: Final[bool] = os.getenv("VISION_ENABLED", "1") == "1"
     VISION_MODEL: Final[str] = os.getenv("VISION_MODEL") or DEEPSEEK_MODEL
 
-    # ── Ambient group context ─────────────────────────
-    # The bot only receives messages addressed to it, so a conversation
-    # between other members is invisible unless it goes looking. That lookup
-    # used to be left entirely to the model's judgement via the `read_context`
-    # tool, and in practice it almost never fired (12 calls against 1000+ for
-    # other tools), so replies regularly answered the wrong thing. A short
-    # recent transcript is now attached to every group message by default —
-    # which is how a person in a group chat actually follows along.
+    # ── Ambient group context (OFF by default) ────────
+    # Reading the room is meant to be a *decision*: the model calls
+    # `read_context` when it judges that it needs to. Attaching a transcript
+    # to every message instead was tried and reverted — it made the bot's
+    # awareness unconditional and blanketed, when what was actually wanted was
+    # a looser trigger for the tool.
     #
-    # It goes in the user message, not the system prompt, so the large stable
-    # system prompt keeps hitting DeepSeek's prefix cache.
-    # Set GROUP_CONTEXT_ENABLED=0 to turn it off; read_context stays available
-    # for digging deeper either way.
-    GROUP_CONTEXT_ENABLED: Final[bool] = os.getenv("GROUP_CONTEXT_ENABLED", "1") == "1"
+    # What IS always on is quote awareness: if a message quotes something, the
+    # quoted content is always resolved and attached (see _reply_note). That is
+    # a fact about the current message, not a judgement call.
+    #
+    # Set GROUP_CONTEXT_ENABLED=1 to attach the transcript to every group
+    # message as well. When on, it goes in the user message rather than the
+    # system prompt so the large stable system prompt keeps hitting
+    # DeepSeek's prefix cache.
+    GROUP_CONTEXT_ENABLED: Final[bool] = os.getenv("GROUP_CONTEXT_ENABLED", "0") == "1"
     GROUP_CONTEXT_MINUTES: Final[int] = int(os.getenv("GROUP_CONTEXT_MINUTES") or 15)
     GROUP_CONTEXT_LIMIT: Final[int] = int(os.getenv("GROUP_CONTEXT_LIMIT") or 20)
 
