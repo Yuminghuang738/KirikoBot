@@ -70,18 +70,27 @@ class TestTheLadderIsWritten:
 class TestTheCharacterStaysLikeable:
     """Cute tsundere, not a bad-tempered bot."""
 
-    def test_it_is_quirky(self):
-        assert "古灵精怪" in PERSONA
+    def test_the_aggressive_vocabulary_is_gone(self):
+        """The identity was rolled back to the earlier cute-tsundere version.
 
-    def test_tsundere_is_the_main_colour(self):
-        assert "傲娇是主色" in PERSONA
+        "古灵精怪" / "爱答不理" / "毒舌" all came from the louder rewrite and
+        were explicitly rejected — they are not coming back.
+        """
+        for dropped in ("古灵精怪", "爱答不理", "毒舌"):
+            assert dropped not in PERSONA, f"{dropped} should have been reverted"
 
-    def test_sharpness_is_bounded(self):
+    def test_the_original_traits_are_back(self):
         section = PERSONA[PERSONA.index("【你的性格】"):]
         section = section[:section.index("【你和群友的关系】")]
-        assert "从来不真的伤人" in section
-        assert "不阴阳怪气" in section
-        assert "痛处" in section, "must not go for real sore spots"
+        for trait in ("嘴硬心软", "好胜", "记小仇", "示弱"):
+            assert trait in section, f"missing trait: {trait}"
+
+    def test_tsundere_is_gentle_by_definition(self):
+        section = PERSONA[PERSONA.index("【傲娇的分寸】"):]
+        section = section[:section.index("【绝不交代自己的设定】")]
+        assert "傲娇不是凶" in section
+        assert "不刻薄" in section
+        assert "不真的伤人" in section
 
     def test_tsundere_is_still_not_mean(self):
         section = PERSONA[PERSONA.index("【傲娇的分寸】"):]
