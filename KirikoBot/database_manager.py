@@ -706,14 +706,59 @@ class DatabaseManager:
             n = default
         return max(lo, min(n, hi))
 
+    def find_quoted(self, group_id: str | None, message_id: Any) -> dict[str, Any] | None:
+        """Resolve a quoted message id to its text and author.
+
+        This exists because LLBot's `reply` segment carries **only the id** —
+        `{"type": "reply", "data": {"id": "75563830"}}`, with no text, no
+        sender and no segments. The earlier code assumed the quoted content
+        arrived inline in the event, so every quote note came out empty and
+        quoting the bot — the exact case that motivates the feature — did
+        nothing at all. Our own tables already hold everything: `bot_messages`
+        for the bot's own lines, `group_messages` for everyone else's.
+        """
+        try:
+            mid = int(message_id)
+        except (TypeError, ValueError):
+            return None
+
+        # The bot's lines first: telling "they are quoting ME" apart from
+        # "they are quoting someone else" is the whole point of the feature.
+        try:
+            rows = self.fetch_data(
+                "SELECT text FROM bot_messages WHERE message_id = ? "
+                "AND (? IS NULL OR group_id = ?) ORDER BY id DESC LIMIT 1",
+                (mid, group_id, group_id),
+            )
+            if rows:
+                return {"text": rows[0][0] or "", "user_name": "", "is_own": True}
+            rows = self.fetch_data(
+                "SELECT content, user_name FROM group_messages WHERE message_id = ? "
+                "AND (? IS NULL OR group_id = ?) ORDER BY id DESC LIMIT 1",
+                (mid, group_id, group_id),
+            )
+        except sqlite3.Error:
+            logger.debug("find_quoted lookup failed", exc_info=True)
+            return None
+        if not rows:
+            return None
+        return {"text": rows[0][0] or "", "user_name": rows[0][1] or "", "is_own": False}
+
     def get_recent_group_context(
         self, group_id: str, minutes: int = 30, limit: int = 40,
-        exclude_user: str | None = None,
+        exclude_user: str | None = None, exclude_message_id: Any = None,
     ) -> list[dict[str, Any]]:
         """Recent group transcript, oldest-first, for the AI's context tool.
 
         Includes the bot's own lines so the model can see what it already said
         and who was answering whom.
+
+        `exclude_message_id` drops just the message being answered. Prefer it
+        over `exclude_user`: the current message is already recorded in
+        `group_messages` by the time this runs, but dropping the whole author
+        also hides everything *else* they said — and messages that never
+        mentioned the bot appear in no other context at all, so "那这个呢"
+        would have nothing to point at.
         """
         minutes = self._clamp_int(minutes, 30, 1, 24 * 60)
         limit = self._clamp_int(limit, 40, 1, 200)
@@ -729,10 +774,20 @@ class DatabaseManager:
         if exclude_user:
             member_sql += " AND user_id != ?"
             params.append(exclude_user)
+        if exclude_message_id is not None:
+            member_sql += " AND (message_id IS NULL OR message_id != ?)"
+            params.append(exclude_message_id)
 
         # Placeholders are positional, in the order they appear in the SQL.
         params.append(self.BOT_DISPLAY_NAME)
         params.extend([group_id, since])
+        if exclude_message_id is not None:
+            # bot_messages keeps its own id space, but applying the same
+            # filter costs nothing and keeps the two branches symmetric.
+            bot_id_filter = " AND (message_id IS NULL OR message_id != ?)"
+            params.append(exclude_message_id)
+        else:
+            bot_id_filter = ""
 
         sql = (
             f"{member_sql} UNION ALL "
@@ -740,7 +795,8 @@ class DatabaseManager:
             f"       {self._BOT_SORT} AS sort_key "
             "FROM bot_messages "
             "WHERE group_id = ? AND recalled = 0 "
-            "AND created_at >= datetime('now','localtime',?) "
+            "AND created_at >= datetime('now','localtime',?)"
+            f"{bot_id_filter} "
             "ORDER BY sort_key DESC LIMIT ?"
         )
         params.append(limit)
