@@ -18,7 +18,7 @@ VALID_TABLES = {
     "app_versions", "changelog", "stickers",
     "user_affection", "user_affection_log",
     "feature_settings", "bot_messages", "ai_calls", "group_subscriptions", "profile_history",
-    "amp_heads", "app_state",
+    "amp_heads", "app_state", "user_mood",
 }
 
 
@@ -186,6 +186,15 @@ class DatabaseManager:
                     """CREATE TABLE IF NOT EXISTS app_state(
                         key   TEXT PRIMARY KEY,
                         value TEXT DEFAULT ''
+                    )"""
+                )
+                connect.execute(
+                    """CREATE TABLE IF NOT EXISTS user_mood(
+                        user_id    TEXT NOT NULL,
+                        group_id   TEXT NOT NULL DEFAULT '',
+                        level      INTEGER DEFAULT 0,
+                        updated_at DATETIME DEFAULT (datetime('now','localtime')),
+                        PRIMARY KEY (user_id, group_id)
                     )"""
                 )
                 connect.execute(
@@ -772,6 +781,120 @@ class DatabaseManager:
     def _squeeze(text: str) -> str:
         """Lowercase, punctuation-free — so "在吗？" and "在吗" are the same."""
         return re.sub(r"[\s\W_]+", "", (text or "").lower())
+
+    # ── Mood with a cooldown ──────────────────────────────
+    MAX_MOOD_LEVEL = 4
+
+    def _read_mood(self, user_id: str, group_id: str | None) -> tuple[int, str]:
+        try:
+            rows = self.fetch_data(
+                "SELECT level, updated_at FROM user_mood "
+                "WHERE user_id = ? AND group_id = ?", (user_id, group_id or ""))
+        except Exception:
+            return 0, ""
+        if not rows:
+            return 0, ""
+        return int(rows[0][0] or 0), str(rows[0][1] or "")
+
+    def _write_mood(self, user_id: str, group_id: str | None, level: int) -> None:
+        try:
+            if level <= 0:
+                self.execute_action(
+                    "DELETE FROM user_mood WHERE user_id = ? AND group_id = ?",
+                    (user_id, group_id or ""))
+                return
+            self.execute_action(
+                "INSERT INTO user_mood (user_id, group_id, level, updated_at) "
+                "VALUES (?, ?, ?, datetime('now','localtime')) "
+                "ON CONFLICT(user_id, group_id) DO UPDATE SET "
+                "level = excluded.level, updated_at = excluded.updated_at",
+                (user_id, group_id or "", level))
+        except Exception:
+            logger.debug("mood write failed", exc_info=True)
+
+    def get_today_tarot(self, user_id: str) -> dict[str, Any] | None:
+        """The card this user already drew today, with its text and image.
+
+        One card per person per day: drawing again would make the reading
+        meaningless ("the cards said X, now they say Y"), so a repeat shows
+        the *original* card rather than a fresh one — good or bad, it stands.
+        """
+        try:
+            rows = self.fetch_data(
+                "SELECT card_name, timestamp FROM tarot_history "
+                "WHERE user_id = ? AND date(timestamp) = date('now','localtime') "
+                "ORDER BY id DESC LIMIT 1",
+                (user_id,),
+            )
+        except Exception:
+            # Best-effort by design: if this fails we fall through to drawing a
+            # card. That is the wrong side of the daily limit to err on, but
+            # refusing every reading because of a transient DB error is worse.
+            logger.exception("today's tarot query failed")
+            return None
+        if not rows:
+            return None
+
+        name = str(rows[0][0] or "").strip()
+        card = {"card_name": name, "timestamp": rows[0][1],
+                "card_text": "", "card_path": ""}
+        try:
+            detail = self.fetch_data(
+                "SELECT card_text, card_path FROM tarot_content "
+                "WHERE TRIM(card_name) = ? LIMIT 1", (name,))
+        except sqlite3.Error:
+            logger.debug("tarot card lookup failed", exc_info=True)
+            detail = []
+        if detail:
+            card["card_text"] = detail[0][0] or ""
+            card["card_path"] = detail[0][1] or ""
+        return card
+
+    def get_mood(self, user_id: str, group_id: str | None, text: str = "",
+                 pressure_minutes: int = 10, cooldown_minutes: int = 30) -> dict[str, Any]:
+        """The bot's current temper toward this user, and how it is cooling.
+
+        Mood has to be *state*, not just a property of the last few messages.
+        Otherwise someone who has just been driven up the wall is instantly
+        pleasant again the moment the counting window rolls over, which is not
+        how a person works — and a temper that never subsides is worse.
+
+        So the stored level decays linearly to zero over `cooldown_minutes`,
+        and the current message's pressure sets a floor. Both directions are
+        modelled: quick to rise, slow-ish to forgive.
+        """
+        pressure = self.get_recent_pestering(
+            user_id, group_id, minutes=pressure_minutes, text=text)
+
+        stored, updated = self._read_mood(user_id, group_id)
+        cooldown = max(1, int(cooldown_minutes or 30))
+        decayed = 0
+        cooling = False
+        if stored > 0 and updated:
+            try:
+                elapsed = (datetime.now() - datetime.strptime(
+                    updated, "%Y-%m-%d %H:%M:%S")).total_seconds() / 60.0
+            except ValueError:
+                elapsed = 0.0
+            # Decay in whole steps. Truncating the remaining level instead
+            # would shave a level off the moment a second had passed, so a
+            # freshly-earned 4 read back as a 3.
+            step = cooldown / float(self.MAX_MOOD_LEVEL)
+            steps = int(elapsed // step)
+            decayed = max(0, min(stored, stored - steps))
+            cooling = decayed < stored
+
+        level = max(decayed, int(pressure["level"]))
+        level = max(0, min(level, self.MAX_MOOD_LEVEL))
+        self._write_mood(user_id, group_id, level)
+
+        return {
+            "level": level,
+            "label": self.PESTER_LEVELS[level][1],
+            "cooling": cooling and level > 0,
+            "count": pressure["count"],
+            "repeats": pressure["repeats"],
+        }
 
     def find_quoted(self, group_id: str | None, message_id: Any) -> dict[str, Any] | None:
         """Resolve a quoted message id to its text and author.

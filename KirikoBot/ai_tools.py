@@ -51,6 +51,43 @@ class Tarot:
         except Exception:
             return None
 
+    def _resend_today(self, robot: Any, ai: Any, card: dict[str, Any],
+                      display_name: str, is_for_self: bool) -> None:
+        """Tell them they already drew today, and show that same card again."""
+        from llbot_client import MessageBuilder
+
+        builder = MessageBuilder()
+        if not is_for_self:
+            builder.text(f"🔮 {display_name}的牌今天已经抽过了。\n\n")
+        if card.get("card_path"):
+            builder.image(card["card_path"])
+        builder.text(f"\n🎴 {display_name}今天抽到的还是这张：{card['card_name']}")
+        if card.get("card_text"):
+            builder.text(f"\n{card['card_text']}")
+        if robot.msg_type == "group":
+            robot.llbot.send_group_msg(robot.group_id or "", builder.build())
+        else:
+            robot.llbot.send_private_msg(robot.user_id, builder.build())
+
+        ai.model_type = Config.DEEPSEEK_MODEL
+        ai.thinking_type = "disabled"
+        from prompt_builder import build_role_prompt
+        ai.system_text = build_role_prompt(Config.TAROT_ROLE)
+        ai.user_text = (
+            f"{display_name}今天已经抽过牌了，抽到的是「{card['card_name']}」，"
+            f"牌面：{card.get('card_text') or ''}。"
+            "牌已经发出去了。请告诉对方今天只能抽一次，一天一张，"
+            "并且用这句话把这张牌再解读一遍——不管这牌是好是坏，抽到什么就是什么，"
+            "不要因为对方想要别的结果就重抽或者改口。"
+        )
+        ai.ai_request()
+        if ai.ai_text:
+            reply = MessageBuilder().text(ai.ai_text.strip())
+            if robot.msg_type == "group":
+                robot.llbot.send_group_msg(robot.group_id or "", reply.build())
+            else:
+                robot.llbot.send_private_msg(robot.user_id, reply.build())
+
     def tarot_call(self, robot: Any, ai: Any) -> None:
         tool_calls = ai.ai_message.get("tool_calls")
         _set_tool_meta(ai, tool_calls)
@@ -68,6 +105,20 @@ class Tarot:
         is_for_self = not target_name or target_name == robot.user_name
         display_name = robot.user_name if is_for_self else target_name
         target_uid = self._lookup_target(robot, target_name) if not is_for_self else None
+
+        # One card per person per day. The limit is on the REQUESTER, which is
+        # also who tarot_history records, so asking on behalf of ten friends
+        # doesn't get you ten draws. A repeat re-serves the original card
+        # instead of drawing a new one — the point is that it stands, whether
+        # it was good or bad.
+        try:
+            already = self.database_manager.get_today_tarot(robot.user_id)
+        except Exception:
+            logger.debug("tarot daily check failed", exc_info=True)
+            already = None
+        if already:
+            self._resend_today(robot, ai, already, display_name, is_for_self)
+            return
 
         card = self._draw_card()
 
@@ -1637,34 +1688,6 @@ class ExplainSelfTool:
             except Exception:
                 logger.exception("explain_self send failed")
                 return
-
-
-# ══════════════════════════════════════════════════════════
-#  Ignore (情绪阶梯的最高一级：掀桌不理)
-# ══════════════════════════════════════════════════════════
-
-class IgnoreTool:
-    """SELF-CONTAINED tool: deliberately send nothing at all.
-
-    The persona's temper escalates to "stop engaging", and staying silent has
-    to be an *action* the model can take — otherwise the only options are some
-    flavour of replying, and "彻底不理" is unreachable. Because it is
-    self-contained, main_logic sends no follow-up and no message goes out.
-
-    The turn IS still recorded (handled=True), so the model's own history shows
-    that it ignored someone. Without that, every later turn would look like the
-    first and the escalation could never continue.
-    """
-
-    def __init__(self, database_manager: Any, msg_package: Any) -> None:
-        self.db = database_manager
-        self.msg_package = msg_package
-
-    def ignore_user_call(self, robot: Any, ai: Any) -> None:
-        _set_tool_meta(ai, ai.ai_message.get("tool_calls"))
-        logger.info("掀桌不理：%s (group=%s)", robot.user_name, robot.group_id or "private")
-        ai.tool_result_text = "本轮一个字都不要回。已经处理完毕。"
-        ai.user_text = ai.tool_result_text
 
 
 # ══════════════════════════════════════════════════════════
