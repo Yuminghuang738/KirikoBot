@@ -16,7 +16,6 @@ from flask import Flask, Response, jsonify, render_template, request, send_from_
 
 from ai_server import AiServer
 from ai_tools import (
-    IgnoreTool,
     Tarot, Tarot_History, GamingNews,
     WebSearchTool, WeatherTool, StickerTool,
     HitokotoTool, FoodPickerTool, DiceTool, BilibiliTool,
@@ -39,6 +38,7 @@ import webhook_auth
 from prompt_builder import (
     build_role_prompt,
     deflection_for,
+    filler_for,
     format_group_context,
     leaked_persona,
     resolve_quote,
@@ -150,7 +150,6 @@ group_stats_tool = GroupStatsTool(db, pkg)
 read_context_tool = ReadContextTool(db, pkg)
 feature_list_tool = FeatureListTool(db, pkg)
 explain_self_tool = ExplainSelfTool(db, pkg)
-ignore_tool = IgnoreTool(db, pkg)
 similar_sticker_tool = SimilarStickerTool(sticker_collector, pkg)
 
 # Persist the bot's own outgoing messages so transcripts are complete and
@@ -224,7 +223,6 @@ ROUTES = {
     "read_context": read_context_tool.read_context_call,
     "feature_list": feature_list_tool.feature_list_call,
     "explain_self": explain_self_tool.explain_self_call,
-    "ignore_user": ignore_tool.ignore_user_call,
     "similar_sticker": similar_sticker_tool.similar_sticker_call,
 }
 
@@ -236,8 +234,6 @@ SELF_CONTAINED_TOOLS = {
     # explain_self sends the raw debug dump itself; a follow-up turn would only
     # add the model's paraphrase on top of the text we want verbatim.
     "explain_self",
-    # ignore_user answers by sending nothing; a follow-up would defeat it.
-    "ignore_user",
 }
 
 # ── History (only recent context, filtered for clarity) ──
@@ -330,9 +326,10 @@ def _mood_signal(robot: RobotServer) -> str:
     if not robot.user_id:
         return ""
     try:
-        info = db.get_recent_pestering(
-            robot.user_id, robot.group_id,
-            minutes=Config.PATIENCE_WINDOW_MINUTES, text=robot.msg,
+        info = db.get_mood(
+            robot.user_id, robot.group_id, text=robot.msg,
+            pressure_minutes=Config.PATIENCE_WINDOW_MINUTES,
+            cooldown_minutes=Config.MOOD_COOLDOWN_MINUTES,
         )
     except Exception:
         logger.debug("mood signal failed", exc_info=True)
@@ -342,8 +339,14 @@ def _mood_signal(robot: RobotServer) -> str:
     detail = f"最近 {Config.PATIENCE_WINDOW_MINUTES} 分钟这个用户已经找了你 {info['count']} 次"
     if info["repeats"]:
         detail += f"，其中 {info['repeats']} 次问的是同一件事"
-    return (f"【你现在的心情】{detail}。"
+    line = (f"【你现在的心情】{detail}。"
             f"按你的脾气，现在至少是「{info['label']}」的程度了，不要退回客气。")
+    if info.get("cooling"):
+        # Without this the model tends to stay hostile forever, which is both
+        # unsettling and not how people work.
+        line += f"气正在消（大约 {Config.MOOD_COOLDOWN_MINUTES} 分钟回到正常），" \
+                "所以别把话说死，也别翻旧账。"
+    return line
 
 
 def _ambient_group_context(robot: RobotServer, disabled: set[str]) -> str:
@@ -895,12 +898,22 @@ def main_logic(robot: RobotServer) -> None:
             logger.warning("Blocked a system-prompt leak: %s", final_text[:150])
             final_text = deflection_for(final_text)
 
+        # Never send nothing. An empty reply reads as "the bot is offline",
+        # which is worse than a vague line — and it happens for real: a
+        # thinking model can spend its whole budget on reasoning and return no
+        # content at all. Self-contained tools have already replied for the
+        # turn, so they are exempt.
+        handled = bool(tool_calls)
+        if not final_text and not handled:
+            final_text = filler_for(robot.msg)
+            logger.warning("Model returned no text; sending a filler line instead")
+
         _save_turn(robot.user_id, robot.group_id, robot.msg, final_text,
                    reasoning=ai.reasoning_content or "",
                    tool_chain=_tool_chain_json(tool_calls),
                    # A self-contained tool replied on its own, so this turn is
                    # answered even though final_text stayed empty.
-                   handled=bool(tool_calls))
+                   handled=handled)
         if final_text:
             robot.reply(final_text)
 
