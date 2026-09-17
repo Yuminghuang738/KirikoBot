@@ -301,8 +301,16 @@ def _reply_note(robot: RobotServer) -> str:
         logger.debug("is_own_message failed", exc_info=True)
         is_own = False
 
-    return resolve_quote(reply, is_own,
+    note = resolve_quote(reply, is_own,
                          lambda mid: db.find_quoted(robot.group_id, mid))
+    # Quote awareness is otherwise invisible: if the lookup misses, the bot just
+    # answers as though nothing were quoted, and there is no error to notice.
+    if note:
+        logger.info("引用感知命中（id=%s）：%s", reply.message_seq, note[:100])
+    elif reply.message_seq is not None:
+        logger.info("引用感知未命中：id=%s 不在库里（无法还原被引用的内容）",
+                    reply.message_seq)
+    return note
 
 def _ambient_group_context(robot: RobotServer, disabled: set[str]) -> str:
     """The recent group transcript attached to every group message.
