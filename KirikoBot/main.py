@@ -25,7 +25,7 @@ from ai_tools import (
     StickerBattleTool, BATTLE_DEFAULT_ROUNDS,
     AffectionTool, AffectionLeaderboardTool,
     RecallMessageTool, GroupStatsTool, ReadContextTool,
-    FeatureListTool, ExplainSelfTool, SimilarStickerTool,
+    FeatureListTool, ExplainSelfTool, SimilarStickerTool, VoiceTool,
 )
 from affection_service import AffectionService
 from balance_service import BalanceService
@@ -150,6 +150,7 @@ group_stats_tool = GroupStatsTool(db, pkg)
 read_context_tool = ReadContextTool(db, pkg)
 feature_list_tool = FeatureListTool(db, pkg)
 explain_self_tool = ExplainSelfTool(db, pkg)
+voice_tool = VoiceTool(db, pkg, llbot)
 similar_sticker_tool = SimilarStickerTool(sticker_collector, pkg)
 
 # Persist the bot's own outgoing messages so transcripts are complete and
@@ -223,6 +224,7 @@ ROUTES = {
     "read_context": read_context_tool.read_context_call,
     "feature_list": feature_list_tool.feature_list_call,
     "explain_self": explain_self_tool.explain_self_call,
+    "send_voice": voice_tool.voice_call,
     "similar_sticker": similar_sticker_tool.similar_sticker_call,
 }
 
@@ -234,6 +236,8 @@ SELF_CONTAINED_TOOLS = {
     # explain_self sends the raw debug dump itself; a follow-up turn would only
     # add the model's paraphrase on top of the text we want verbatim.
     "explain_self",
+    # send_voice *is* the reply; a follow-up would add a typed duplicate.
+    "send_voice",
 }
 
 # ── History (only recent context, filtered for clarity) ──
@@ -336,16 +340,16 @@ def _mood_signal(robot: RobotServer) -> str:
         return ""
     if info["level"] <= 0:
         return ""
-    detail = f"最近 {Config.PATIENCE_WINDOW_MINUTES} 分钟这个用户已经找了你 {info['count']} 次"
+    detail = f"最近 {Config.PATIENCE_WINDOW_MINUTES} 分钟这个用户找了你 {info['count']} 次"
     if info["repeats"]:
-        detail += f"，其中 {info['repeats']} 次问的是同一件事"
-    line = (f"【你现在的心情】{detail}。"
-            f"按你的脾气，现在至少是「{info['label']}」的程度了，不要退回客气。")
+        detail += f"，其中 {info['repeats']} 次是同一件事"
+    # Deliberately advisory. Spelling out "you are now at level 3, act like it"
+    # made the bot recite the count back instead of just having a mood, which
+    # read as mechanical.
+    line = (f"【你现在的状态】{detail}（仅供参考：可能会有点「{info['label']}」）。"
+            "这只是让你知道自己被磨了多久，**别刻意照着演，也别把这个次数说出来**。")
     if info.get("cooling"):
-        # Without this the model tends to stay hostile forever, which is both
-        # unsettling and not how people work.
-        line += f"气正在消（大约 {Config.MOOD_COOLDOWN_MINUTES} 分钟回到正常），" \
-                "所以别把话说死，也别翻旧账。"
+        line += f"而且你气已经消得差不多了（大约 {Config.MOOD_COOLDOWN_MINUTES} 分钟回到正常），别翻旧账。"
     return line
 
 
