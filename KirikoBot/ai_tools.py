@@ -1640,6 +1640,34 @@ class ExplainSelfTool:
 
 
 # ══════════════════════════════════════════════════════════
+#  Ignore (情绪阶梯的最高一级：掀桌不理)
+# ══════════════════════════════════════════════════════════
+
+class IgnoreTool:
+    """SELF-CONTAINED tool: deliberately send nothing at all.
+
+    The persona's temper escalates to "stop engaging", and staying silent has
+    to be an *action* the model can take — otherwise the only options are some
+    flavour of replying, and "彻底不理" is unreachable. Because it is
+    self-contained, main_logic sends no follow-up and no message goes out.
+
+    The turn IS still recorded (handled=True), so the model's own history shows
+    that it ignored someone. Without that, every later turn would look like the
+    first and the escalation could never continue.
+    """
+
+    def __init__(self, database_manager: Any, msg_package: Any) -> None:
+        self.db = database_manager
+        self.msg_package = msg_package
+
+    def ignore_user_call(self, robot: Any, ai: Any) -> None:
+        _set_tool_meta(ai, ai.ai_message.get("tool_calls"))
+        logger.info("掀桌不理：%s (group=%s)", robot.user_name, robot.group_id or "private")
+        ai.tool_result_text = "本轮一个字都不要回。已经处理完毕。"
+        ai.user_text = ai.tool_result_text
+
+
+# ══════════════════════════════════════════════════════════
 #  Similar sticker (感知哈希找最像的一张)
 # ══════════════════════════════════════════════════════════
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import difflib
 import logging
+import re
 import sqlite3
 import threading
 import time
@@ -705,6 +707,71 @@ class DatabaseManager:
         except (TypeError, ValueError):
             n = default
         return max(lo, min(n, hi))
+
+    # Patience ladder. Counts come from `history`, not `group_messages`:
+    # history only holds messages the bot actually processed (i.e. addressed to
+    # it), so a user chatting with other people does not count as pestering it.
+    PESTER_LEVELS = (
+        (0, "正常"),
+        (2, "略烦"),
+        (4, "不耐烦"),
+        (6, "生气"),
+        (9, "掀桌"),
+    )
+    _REPEAT_RATIO = 0.8   # how similar a message must be to count as "the same"
+
+    def get_recent_pestering(self, user_id: str, group_id: str | None,
+                             minutes: int = 10, text: str = "") -> dict[str, Any]:
+        """How hard this user has been leaning on the bot lately.
+
+        Progressive emotion needs a *memory of how many times* it has been
+        asked, and each request is otherwise independent — the model cannot
+        count what it cannot see. So the count and the repeat count are
+        computed here and handed to the model as a fact.
+
+        Returns {"count", "repeats", "level", "label"}. `count` excludes the
+        message being answered (it is not saved yet).
+        """
+        minutes = self._clamp_int(minutes, 10, 1, 24 * 60)
+        try:
+            rows = self.fetch_data(
+                "SELECT content FROM history "
+                "WHERE role = 'user' AND user_id = ? AND IFNULL(group_id,'') = ? "
+                "AND timestamp >= datetime('now','localtime',?) "
+                "ORDER BY id DESC LIMIT 20",
+                (user_id, group_id or "", f"-{minutes} minutes"),
+            )
+        except Exception:
+            # Best-effort: a mood signal that fails must not make the bot angry,
+            # nor break the reply it was only decorating.
+            logger.debug("pestering query failed", exc_info=True)
+            return {"count": 0, "repeats": 0, "level": 0, "label": "正常"}
+
+        past = [str(r[0] or "") for r in rows]
+        count = len(past)
+
+        needle = self._squeeze(text)
+        repeats = 0
+        if needle:
+            for old in past:
+                old_n = self._squeeze(old)
+                if old_n and difflib.SequenceMatcher(None, needle, old_n).ratio() >= self._REPEAT_RATIO:
+                    repeats += 1
+
+        level = 0
+        for idx, (threshold, _label) in enumerate(self.PESTER_LEVELS):
+            if count >= threshold:
+                level = idx
+        # Repeats are the stronger signal: asking the same thing again is more
+        # annoying than merely talking a lot.
+        level = max(level, min(repeats, len(self.PESTER_LEVELS) - 1))
+        return {"count": count, "repeats": repeats, "level": level,
+                "label": self.PESTER_LEVELS[level][1]}
+
+    @staticmethod
+    def _squeeze(text: str) -> str:
+        """Lowercase, punctuation-free — so "在吗？" and "在吗" are the same."""
+        return re.sub(r"[\s\W_]+", "", (text or "").lower())
 
     def find_quoted(self, group_id: str | None, message_id: Any) -> dict[str, Any] | None:
         """Resolve a quoted message id to its text and author.

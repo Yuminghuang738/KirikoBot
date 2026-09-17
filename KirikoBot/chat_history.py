@@ -48,7 +48,15 @@ def load_history(db: Any, uid: str, gid: str | None) -> list[dict[str, Any]]:
                 # The reply went out from the tool itself, so keep a marker in
                 # its place: the turn is closed, but the model can still see
                 # that something was handled here.
-                history.append({"role": "assistant", "content": "[已调用工具处理]"})
+                #
+                # "Ignored on purpose" gets its own wording — the escalation
+                # depends on the model recognising that it already walked away,
+                # and "[已调用工具处理]" reads like it answered instead.
+                ignored = "ignore_user" in str(tool_calls)
+                history.append({
+                    "role": "assistant",
+                    "content": "[没理他]" if ignored else "[已调用工具处理]",
+                })
 
     # The caller appends the message being answered AFTER this list, so a
     # history that ends on a user turn would put two user messages back to
