@@ -315,7 +315,10 @@ class LLBotClient:
         except (ValueError, AttributeError):
             return
         message_id = data.get("message_id")
-        if message_id is None:
+        # `send_group_ai_record` always reports 0 while still delivering, so a
+        # falsy id means "no usable id" — recording it would make recall try to
+        # delete message 0 and make quotes of that message unresolvable.
+        if not message_id:
             return
 
         text = ""
@@ -377,6 +380,51 @@ class LLBotClient:
         return self._post("send_group_msg", {
             "group_id": group_id,
             "message": message,
+        })
+
+    # ── AI voice (LLOneBot / NapCat extension) ───────────
+    # QQ's own AI voice synthesis: the text is spoken by a chosen 音色. The
+    # character ids are validated against get_ai_characters before use, because
+    # the API accepts an unknown id and simply fails to deliver.
+    VOICE_ENDPOINT = "send_group_ai_record"
+
+    def get_ai_characters(self) -> list[dict[str, Any]]:
+        """Available voices, flattened to [{id, name, category}]."""
+        try:
+            r = self._session.post(
+                f"{self.api_url}/get_ai_characters", json={}, timeout=self.timeout)
+            r.raise_for_status()
+            data = (r.json() or {}).get("data")
+        except Exception:
+            logger.debug("get_ai_characters failed", exc_info=True)
+            return []
+
+        groups = data if isinstance(data, list) else (data or {}).get("characters") or []
+        out: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            category = str(group.get("type") or group.get("name") or "")
+            for c in group.get("characters") or []:
+                if not isinstance(c, dict):
+                    continue
+                cid = str(c.get("character_id") or "")
+                if not cid or cid in seen:
+                    continue
+                seen.add(cid)
+                out.append({"id": cid, "name": str(c.get("character_name") or ""),
+                            "category": category})
+        return out
+
+    def send_ai_voice(self, group_id: str, character: str, text: str) -> bool:
+        """Speak `text` in the group using QQ's AI voice. Groups only."""
+        if not text.strip():
+            return False
+        return self._post(self.VOICE_ENDPOINT, {
+            "group_id": group_id,
+            "character": character,
+            "text": text,
         })
 
     def send_private_msg(

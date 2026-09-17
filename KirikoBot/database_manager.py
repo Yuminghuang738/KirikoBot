@@ -720,12 +720,14 @@ class DatabaseManager:
     # Patience ladder. Counts come from `history`, not `group_messages`:
     # history only holds messages the bot actually processed (i.e. addressed to
     # it), so a user chatting with other people does not count as pestering it.
+    # The escalation is tsundere, not anger: the bot gets more sulky and
+    # eventually slacks off, but never turns genuinely mean.
     PESTER_LEVELS = (
         (0, "正常"),
-        (2, "略烦"),
-        (4, "不耐烦"),
-        (6, "生气"),
-        (9, "掀桌"),
+        (2, "有点小情绪"),
+        (4, "开始傲娇"),
+        (6, "傲娇加倍"),
+        (9, "摆烂不干了"),
     )
     _REPEAT_RATIO = 0.8   # how similar a message must be to count as "the same"
 

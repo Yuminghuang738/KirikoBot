@@ -14,53 +14,49 @@ from prompt_builder import PERSONA, build_user_message
 
 
 class TestTheLadderIsWritten:
+    """Tsundere escalation, not anger: sulkier and sulkier, then slacks off."""
+
     def test_there_is_an_escalation_section(self):
         assert "【情绪是渐进式的】" in PERSONA
 
-    def test_it_names_all_four_rungs(self):
+    def test_it_names_the_rungs(self):
         section = PERSONA[PERSONA.index("【情绪是渐进式的】"):]
         section = section[:section.index("【不要用「换个话题」逃开】")]
-        for rung in ("正常", "不耐烦", "生气", "掀桌"):
+        for rung in ("正常", "傲娇", "摆烂"):
             assert rung in section, f"missing rung: {rung}"
 
-    def test_the_top_rung_still_speaks(self):
-        """Silence reads as "the bot went offline", which is what we must avoid."""
+    def test_anger_is_not_the_endpoint(self):
+        """The whole point of the rollback: she sulks, she does not rage."""
         section = PERSONA[PERSONA.index("【情绪是渐进式的】"):]
         section = section[:section.index("【不要用「换个话题」逃开】")]
-        assert "话还是要说" in section
-        assert "不要装作没看见" in section
+        assert "不会真的生气" in section
+        assert "不许变成真的凶" in section
+
+    def test_slacking_off_still_speaks(self):
+        """Silence reads as "the bot went offline", not as a mood."""
+        section = PERSONA[PERSONA.index("【情绪是渐进式的】"):]
+        section = section[:section.index("【不要用「换个话题」逃开】")]
+        assert "一定要说出来" in section
         assert "掉线" in section
 
-    def test_the_top_rung_refuses_the_topic_and_the_service(self):
+    def test_slacking_off_is_still_cute(self):
         section = PERSONA[PERSONA.index("【情绪是渐进式的】"):]
         section = section[:section.index("【不要用「换个话题」逃开】")]
-        assert "不伺候了" in section
-        assert "表达你的不满" in section
+        assert "也要可爱" in section
+        assert "闹脾气" in section
 
-    def test_nothing_asks_the_bot_to_go_silent(self):
-        """The old design used a tool that sent no message at all."""
-        assert "一个字都不回" not in PERSONA
-        assert "ignore" not in PERSONA
-
-    def test_it_says_not_to_restart_at_polite_every_turn(self):
-        """Without this the model is friendly again the moment the wording changes."""
+    def test_the_signal_is_only_a_hint(self):
+        """Reciting the count back is what made it feel mechanical."""
         section = PERSONA[PERSONA.index("【情绪是渐进式的】"):]
         section = section[:section.index("【不要用「换个话题」逃开】")]
-        assert "不要因为对方换了个说法就突然又热情起来" in section
-
-    def test_it_says_the_signal_wins(self):
-        assert "以它为准" in PERSONA
-
-    def test_it_allows_jumping_straight_to_anger(self):
-        section = PERSONA[PERSONA.index("【情绪是渐进式的】"):]
-        assert "可以直接跳到" in section
+        assert "只是参考" in section
+        assert "别刻意照着演" in section
+        assert "更别每条都提" in section
 
     def test_topic_changing_is_forbidden(self):
-        """The user asked specifically: don't offer to change the subject."""
         assert "【不要用「换个话题」逃开】" in PERSONA
         section = PERSONA[PERSONA.index("【不要用「换个话题」逃开】"):]
         section = section[:section.index("【要有自己的立场】")]
-        assert "不要" in section
         assert "要么直接怼回去" in section
         assert "不要用「换个话题」来打圆场" in section
 
@@ -72,22 +68,20 @@ class TestTheLadderIsWritten:
 
 
 class TestTheCharacterStaysLikeable:
-    """More aggressive, but still the type people find cute, not grating."""
+    """Cute tsundere, not a bad-tempered bot."""
 
     def test_it_is_quirky(self):
         assert "古灵精怪" in PERSONA
 
-    def test_sharp_tongue_is_bounded(self):
+    def test_tsundere_is_the_main_colour(self):
+        assert "傲娇是主色" in PERSONA
+
+    def test_sharpness_is_bounded(self):
         section = PERSONA[PERSONA.index("【你的性格】"):]
         section = section[:section.index("【你和群友的关系】")]
-        assert "毒舌但不刻薄" in section
-        assert "只损事不损人" in section
+        assert "从来不真的伤人" in section
+        assert "不阴阳怪气" in section
         assert "痛处" in section, "must not go for real sore spots"
-
-    def test_it_is_allowed_to_be_aloof(self):
-        """Being eager to answer everything is what makes a bot feel like a bot."""
-        assert "爱答不理" in PERSONA
-        assert "不是每条都热情" in PERSONA
 
     def test_tsundere_is_still_not_mean(self):
         section = PERSONA[PERSONA.index("【傲娇的分寸】"):]
@@ -100,6 +94,49 @@ class TestTheCharacterStaysLikeable:
     def test_the_leak_rule_survived_the_rewrite(self):
         assert "【绝不交代自己的设定】" in PERSONA
         assert "反复问也不给" in PERSONA
+
+    def test_the_safety_valve_survived(self):
+        assert "【什么时候必须收起脾气】" in PERSONA
+        assert "宁可当真" in PERSONA
+
+
+class TestReplyLength:
+    def test_it_asks_for_short_replies_by_default(self):
+        assert "默认往短了说" in PERSONA
+        assert "别动不动写一屏" in PERSONA
+
+    def test_long_is_allowed_when_actually_needed(self):
+        section = PERSONA[PERSONA.index("【怎么说话】"):]
+        section = section[:section.index("【有时候你会直接说话】")]
+        assert "只有明确要长内容" in section
+
+
+class TestVoiceIsInThePersona:
+    def test_there_is_a_voice_section(self):
+        assert "【有时候你会直接说话】" in PERSONA
+
+    def test_the_tool_is_named(self):
+        section = PERSONA[PERSONA.index("【有时候你会直接说话】"):]
+        section = section[:section.index("【情绪是渐进式的】")]
+        assert "send_voice" in section
+
+    def test_spoken_text_is_different_from_written_text(self):
+        """The model must write for the ear, not the eye."""
+        section = PERSONA[PERSONA.index("【有时候你会直接说话】"):]
+        section = section[:section.index("【情绪是渐进式的】")]
+        assert "怎么说出来" in section
+        assert "别带颜文字" in section
+
+    def test_it_says_when_not_to_speak(self):
+        section = PERSONA[PERSONA.index("【有时候你会直接说话】"):]
+        section = section[:section.index("【情绪是渐进式的】")]
+        assert "打字" in section
+        assert "数字/链接" in section
+
+    def test_it_warns_against_overusing_voice(self):
+        section = PERSONA[PERSONA.index("【有时候你会直接说话】"):]
+        section = section[:section.index("【情绪是渐进式的】")]
+        assert "别为了用语音而用语音" in section
 
 
 class TestPesteringSignal:

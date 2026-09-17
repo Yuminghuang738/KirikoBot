@@ -58,8 +58,13 @@ class TestPersonaIsPresentAndWhole:
         assert "别演过头" in PERSONA
 
     def test_it_stays_a_reasonable_size(self):
-        """The persona is prompt prefix on every single call."""
-        assert len(PERSONA) < 3200, "persona has grown too costly to send"
+        """The persona is prompt prefix on every call.
+
+        The limit is generous now that the prefix is cached (see the cache
+        fix): a longer persona costs almost nothing per message, but it still
+        should not balloon silently.
+        """
+        assert len(PERSONA) < 4200, "persona has grown too costly to send"
 
 
 class TestLeakDetection:
