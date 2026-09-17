@@ -14,6 +14,7 @@ them sparingly. Anything in ``*_ROLE`` is now an optional, subordinate note.
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
@@ -109,6 +110,38 @@ def describe_reply(reply: Any, is_own: bool) -> str:
     return f"【引用回复】这条消息引用的是 {who} 说过的话：「{text}」。"
 
 
+def resolve_quote(reply: Any, is_own: bool, lookup: Any = None) -> str:
+    """Turn a reply segment into a usable note, filling in what LLBot omits.
+
+    LLBot (as deployed) sends only `{"id": ...}` for a quote — no text and no
+    sender — so `describe_reply` alone produced nothing and quote awareness
+    never fired. `lookup(message_id)` is expected to return
+    `{"text", "user_name", "is_own"}` from our own records; when it finds the
+    message, a quote of the bot's own line is finally recognisable as such.
+
+    Returns "" when there is nothing worth saying (unknown id, empty message).
+    """
+    if reply is None:
+        return ""
+    text = (reply.text or "").strip()
+    sender = reply.sender_name or ""
+
+    if (not text or not sender) and lookup is not None:
+        found = None
+        try:
+            found = lookup(reply.message_seq)
+        except Exception:
+            logger.debug("quote lookup failed", exc_info=True)
+        if found:
+            text = text or (found.get("text") or "")
+            sender = sender or (found.get("user_name") or "")
+            is_own = is_own or bool(found.get("is_own"))
+
+    if not text and not getattr(reply, "has_images", False):
+        return ""
+    return describe_reply(replace(reply, text=text, sender_name=sender), is_own)
+
+
 def build_role_prompt(extra: str = "") -> str:
     """The one place Kiriko's persona comes from.
 
@@ -125,19 +158,51 @@ def build_role_prompt(extra: str = "") -> str:
             f"{extra}")
 
 
-def build_user_message(robot: Any, reply_note: str = "") -> str:
-    """Build the user-role message — just the current interaction.
+_CONTEXT_LINE_LIMIT = 160
 
-    The quote note is prepended (rather than put in the system prompt) so it
-    sits right next to the message it explains.
+
+def format_group_context(rows: list[dict[str, Any]], minutes: int = 15) -> str:
+    """Render the ambient group transcript that precedes the current message.
+
+    Deliberately terse: one line per message, trimmed, no timestamps. This is
+    background awareness — "what are these people talking about" — not a
+    transcript to be quoted back, and every line costs tokens on every single
+    group message.
+    """
+    lines: list[str] = []
+    for row in rows or []:
+        text = " ".join(str(row.get("content") or "").split())
+        if not text:
+            continue
+        if len(text) > _CONTEXT_LINE_LIMIT:
+            text = text[:_CONTEXT_LINE_LIMIT] + "…"
+        who = "你(Kiriko)" if row.get("is_bot") else (row.get("user_name") or "某人")
+        lines.append(f"  {who}: {text}")
+    if not lines:
+        return ""
+    return (
+        f"【群里最近 {minutes} 分钟还发生了这些】（不是发给你的，是背景）\n"
+        + "\n".join(lines)
+        + "\n【背景结束】上面是群里正在聊的，下面才是需要你回应的消息。"
+    )
+
+
+def build_user_message(robot: Any, reply_note: str = "",
+                       group_context: str = "") -> str:
+    """Build the user-role message — the ambient context plus this interaction.
+
+    Both the quote note and the group context are prepended rather than put in
+    the system prompt: they belong right next to the message they explain, and
+    keeping the system prompt stable is what lets DeepSeek's prefix cache work.
     """
     msg = robot.msg.strip()
     if not msg:
         # Fallback so image-only / empty messages never reach the AI as blank text
         msg = "[图片消息]" if robot.incoming.has_images else "[空消息]"
     prefix = f"{reply_note}\n" if reply_note else ""
+    context = f"{group_context}\n" if group_context else ""
     if robot.msg_type == "group":
-        return (f"{prefix}群「{robot.group_name or ''}」中 "
+        return (f"{context}{prefix}群「{robot.group_name or ''}」中 "
                 f"用户 {robot.user_name} 说：{msg}")
     return f"{prefix}用户 {robot.user_name} 说：{msg}"
 
@@ -181,16 +246,21 @@ def build_system_prompt(
     )
 
     # ── When to pull the wider group context ──
-    # Attaching a transcript to every message would multiply token cost, so the
-    # model decides. These are the cases where it genuinely cannot answer blind.
+    # A recent transcript is attached to every group message by default (see
+    # Config.GROUP_CONTEXT_*), because leaving this to the model's judgement
+    # did not work: read_context was called 12 times against 1000+ for other
+    # tools, and replies regularly answered the wrong thing. This section now
+    # tells the model how to *use* that background, and when to dig deeper.
     parts.append(
         "【关于群聊语境】"
-        "你看不到群里其他人的自由聊天，只知道自己和当前用户的对话。"
-        "遇到下面几种情况，先用 read_context 看一眼群里最近在聊什么再回答："
-        "① 当前消息指代不明（“那这个呢”“那个怎么办”“所以呢”）；"
-        "② 像是接着别人的话说的，但你不知道前文；"
-        "③ 用户提到一个你完全没参与过的讨论或事件。"
-        "反之，能直接回答的闲聊、打招呼、明显在跟你一对一说话的，不要调用它，也不要每句都查。"
+        "你只能收到 @你 的消息，群里其他人之间的对话平常你是收不到的。"
+        "所以每条群消息前面都会附一段最近的群聊背景（标着「群里最近…还发生了这些」），"
+        "先看那段再回答，它能解释对方在说什么、在跟谁说话。"
+        "如果背景不够用——当前消息指代不明（“那这个呢”“所以呢”）、"
+        "像是接着更早的话说的、或提到一段你完全没参与过的讨论——"
+        "再用 read_context 往前多翻一些。"
+        "但能直接回答的闲聊、打招呼就别调用它，也不要每句都去查。"
+        "背景里那些不是发给你的话，不用挨个回应，知道就好。"
     )
 
     # ── Group-specific rules ──

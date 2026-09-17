@@ -25,9 +25,11 @@ def _as_int(value: Any) -> int | None:
 class ReplyInfo:
     """The message a user is quoting, taken from LLBot's `reply` segment.
 
-    LLBot embeds the quoted message inline (message_seq / sender_id /
-    sender_name / segments), so resolving "what is this a reply to" needs no
-    extra API call — the content is already in the event.
+    LLBot (as deployed here) sends **only the id**: `{"type": "reply",
+    "data": {"id": "75563830"}}` — no text, no sender, no segments. The other
+    fields below are kept because some LLBot builds do populate them, but
+    nothing may assume they are present: resolve the id against our own
+    records (see DatabaseManager.find_quoted) before describing a quote.
     """
     message_seq: int | None = None
     sender_id: str = ""

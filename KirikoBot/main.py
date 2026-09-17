@@ -37,6 +37,8 @@ from chat_history import load_history, save_turn
 import webhook_auth
 from prompt_builder import (
     build_role_prompt,
+    format_group_context,
+    resolve_quote,
     build_system_prompt as _build_system_prompt,
     build_user_message as _context,
     describe_reply,
@@ -282,19 +284,54 @@ def _tool_chain_json(tool_calls: Any) -> str:
 def _reply_note(robot: RobotServer) -> str:
     """Describe the quoted message when the incoming one is a reply.
 
-    LLBot embeds the quoted content in the event, so this costs nothing extra.
+    LLBot's reply segment is only `{"id": ...}` — no text, no sender — so the
+    quoted message is resolved from our own records (bot_messages /
+    group_messages). That lookup is what makes "another user quotes the reply
+    the bot just gave someone else" work at all.
     """
     reply = getattr(robot.incoming, "reply", None)
     if reply is None:
         return ""
-    if not reply.text and not reply.has_images:
-        return ""
+
     try:
         is_own = llbot.is_own_message(reply.message_seq, reply.text)
     except Exception:
         logger.debug("is_own_message failed", exc_info=True)
         is_own = False
-    return describe_reply(reply, is_own)
+
+    return resolve_quote(reply, is_own,
+                         lambda mid: db.find_quoted(robot.group_id, mid))
+
+def _ambient_group_context(robot: RobotServer, disabled: set[str]) -> str:
+    """The recent group transcript attached to every group message.
+
+    On by default: the bot only receives messages addressed to it, and leaving
+    the "go read the room" decision to the model meant it almost never
+    happened (read_context: 12 calls vs 1000+ for other tools), so replies
+    kept answering the wrong thing. A person in a group follows the
+    conversation continuously — this is the cheap version of that.
+
+    Reuses the same feature key as the read_context tool, so turning 语境读取
+    off in the panel disables both the background and the tool.
+    """
+    if not Config.GROUP_CONTEXT_ENABLED or robot.msg_type != "group":
+        return ""
+    if "context_read" in disabled or not robot.group_id:
+        return ""
+    try:
+        rows = db.get_recent_group_context(
+            robot.group_id,
+            minutes=Config.GROUP_CONTEXT_MINUTES,
+            limit=Config.GROUP_CONTEXT_LIMIT,
+            # Drop only the message being answered: the author's own earlier
+            # lines are context too, and non-@ messages reach the model no
+            # other way.
+            exclude_message_id=robot.incoming.message_id,
+        )
+    except Exception:
+        logger.debug("ambient group context failed", exc_info=True)
+        return ""
+    return format_group_context(rows, Config.GROUP_CONTEXT_MINUTES)
 
 def _log_thinking(user_name: str, reasoning: str) -> None:
     """Log thinking chain to dedicated logger (visible in logs + frontend)."""
@@ -730,11 +767,12 @@ def main_logic(robot: RobotServer) -> None:
         _trigger_profile_update(robot, disabled)
 
         history = _load_history(robot.user_id, robot.group_id)
-        user_text = _context(robot, _reply_note(robot))
+        is_private = robot.msg_type == "private"
+        user_text = _context(robot, _reply_note(robot),
+                             _ambient_group_context(robot, disabled))
         system_prompt = _build_system_prompt(
             robot, db, profile_service, learning_service, affection_service, disabled,
         )
-        is_private = robot.msg_type == "private"
 
         # Every enabled tool is offered — the AI picks via native function calling
         active_tools = _enabled_tools(disabled)
