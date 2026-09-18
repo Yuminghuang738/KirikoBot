@@ -395,36 +395,35 @@ def build_system_prompt(
     )
 
     # ── When to pull the wider group context ──
-    # Reading the room is a decision the model makes via read_context. It used
-    # to fire 12 times against 1000+ for other tools, so the trigger is
-    # deliberately loose now: when in doubt, look. Getting the context wrong
-    # costs a reply that answers the wrong thing, which is far worse than one
-    # extra cheap tool call.
-    if is_private:
-        context_rule = ""
-    elif Config.GROUP_CONTEXT_ENABLED:
+    # Reading the room is a decision the model makes via read_context. It first
+    # almost never fired, was loosened to "when in doubt, look" — and then fired
+    # on greetings, insults and "[图片消息]", dumping a transcript that the
+    # reply answered *instead of* the actual message. So the trigger is now a
+    # single narrow test, plus an explicit do-not-call list.
+    context_rule = ""
+    if not is_private and not Config.GROUP_CONTEXT_ENABLED:
         context_rule = (
             "【关于群聊语境】"
-            "你只能收到 @你 的消息，群里其他人之间的对话平常你是收不到的。"
-            "每条群消息前面已经附了一段最近的群聊背景（标着「群里最近…还发生了这些」），"
-            "先看那段再回答。背景不够用时（当前消息指代不明、像是接着更早的话说的、"
-            "或提到一段你完全没参与的讨论），再用 read_context 往前多翻一些。"
-            "背景里那些不是发给你的话，不用挨个回应，知道就好。"
+            "你只收得到 @你 的消息，群里其他人在聊什么你看不到，"
+            "但**不要假装知道自己没看到的内容**。"
+            "只有**一种**情况需要调用 read_context："
+            "当前这句话单独看根本读不懂——比如只有一个「那这个呢」「所以呢」，"
+            "或者明显在接别人的话，而你不知道前文。"
+            "除此之外都**不要**调用：打招呼、骂你、夸你、说「收到」「好的」「哈哈」、"
+            "发图片表情、以及问题本身自足的话（「tail 是什么」「今天几号」），"
+            "按字面回答就行，用不着看聊天记录。"
+            "**拿不准的时候不要查。** 多查一次会把群里几十条无关的聊天塞进你眼前，"
+            "反而把当前这句话淹掉，更容易答非所问。"
+            "宁可先问一句「你说的是哪个」，也不要抓一堆记录来猜。"
         )
-    else:
+    elif not is_private:
         context_rule = (
             "【关于群聊语境】"
-            "你只能收到 @你 的消息，群里其他人之间的对话你是看不到的，"
-            "所以**不要假装知道自己没看到的内容**。"
-            "只要有一丝不确定，就先调用 read_context 看一眼群里最近在聊什么再回答——"
-            "宁可多查一次，也不要凭猜测答非所问。下面几种情况**一定要查**："
-            "① 当前消息指代不明（“那这个呢”“所以呢”“那个怎么办”）；"
-            "② 像是接着别人的话说的，但你不知道前文；"
-            "③ 提到了人名、作品、事件，或一段你完全没参与的讨论；"
-            "④ 对方说“这个”“那个”“刚才那个”而没有明确指代；"
-            "⑤ 你拿不准对方到底在问什么。"
-            "只有明显在跟你一对一闲聊、打招呼，或问题本身自足"
-            "（例如“今天几号”“帮我翻译这句”）时，才不用查。"
+            "你只收得到 @你 的消息。每条群消息前面已经附了一段最近的群聊背景"
+            "（标着「群里最近…还发生了这些」），先看那段再回答。"
+            "背景还不够用时（当前这句话单独读不懂），再用 read_context 往前翻；"
+            "但**拿不准就别查**——多查一次会把几十条无关聊天塞进你眼前，"
+            "反而把当前这句话淹掉。"
         )
     if context_rule:
         parts.append(context_rule)
