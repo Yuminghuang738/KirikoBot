@@ -250,7 +250,12 @@ class TestContextDefaults:
         class incoming:
             has_images = False
 
-    def test_the_prompt_tells_it_to_look_when_unsure(self, monkeypatch):
+    def test_the_trigger_is_narrow(self, monkeypatch):
+        """It was loosened to "when in doubt, look" and then fired on greetings.
+
+        Over-firing does not just cost tokens: the transcript lands in front of
+        the model and the reply answers *it* instead of the actual message.
+        """
         from config import Config
         from prompt_builder import build_system_prompt
 
@@ -258,25 +263,34 @@ class TestContextDefaults:
         prompt = build_system_prompt(self._Robot())
         assert "群聊语境" in prompt
         assert "read_context" in prompt
-        assert "一丝不确定" in prompt, "the trigger should be deliberately loose"
-        assert "宁可多查一次" in prompt
+        assert "只有**一种**情况需要调用" in prompt
 
-    def test_the_prompt_lists_concrete_triggers(self, monkeypatch):
+    def test_it_names_what_not_to_look_up(self, monkeypatch):
         from config import Config
         from prompt_builder import build_system_prompt
 
         monkeypatch.setattr(Config, "GROUP_CONTEXT_ENABLED", False)
         prompt = build_system_prompt(self._Robot())
-        for trigger in ("指代不明", "接着别人的话说", "你完全没参与的讨论", "拿不准"):
-            assert trigger in prompt, f"missing trigger: {trigger}"
+        for dont in ("打招呼", "骂你", "夸你", "收到", "图片"):
+            assert dont in prompt, f"missing do-not-call case: {dont}"
 
-    def test_the_prompt_says_what_not_to_look_up(self, monkeypatch):
+    def test_it_reverses_the_old_doubt_rule(self, monkeypatch):
         from config import Config
         from prompt_builder import build_system_prompt
 
         monkeypatch.setattr(Config, "GROUP_CONTEXT_ENABLED", False)
         prompt = build_system_prompt(self._Robot())
-        assert "一对一闲聊" in prompt, "otherwise it would call the tool every time"
+        assert "拿不准的时候不要查" in prompt
+        assert "宁可先问一句" in prompt
+
+    def test_it_explains_why_over_looking_hurts(self, monkeypatch):
+        from config import Config
+        from prompt_builder import build_system_prompt
+
+        monkeypatch.setattr(Config, "GROUP_CONTEXT_ENABLED", False)
+        prompt = build_system_prompt(self._Robot())
+        assert "淹掉" in prompt
+        assert "答非所问" in prompt
 
     def test_opting_in_describes_the_attached_background(self, monkeypatch):
         from config import Config
@@ -346,3 +360,178 @@ class TestReplySegmentParsing:
         from llbot_client import IncomingMessage
 
         assert IncomingMessage._extract_reply([{"type": "text", "data": {"text": "hi"}}]) is None
+
+
+class TestContextToolDoesNotHijack:
+    """The transcript must be framed as background, not as the thing to answer.
+
+    Live symptom: someone said "唱秋妈妈给我听" and the bot replied to a line
+    from the transcript it had just fetched instead. The tool caused that, not
+    the history.
+    """
+
+    class _Robot:
+        msg_type, group_id, user_id, user_name = "group", "g1", "u1", "小明"
+
+        class incoming:
+            message_id = 1
+
+    class _AI:
+        def __init__(self):
+            self.ai_message = {"tool_calls": [{"id": "c1", "function": {
+                "name": "read_context", "arguments": "{}"}}]}
+            self.tool_result_text = ""
+            self.user_text = ""
+
+    def _rows(self, n=12):
+        return [{"user_name": f"u{i}", "content": f"消息{i}", "timestamp": "2026-09-18 18:0%d" % i,
+                 "is_bot": False} for i in range(n)]
+
+    def _run(self, db, monkeypatch, rows=None):
+        import ai_tools
+
+        tool = ai_tools.ReadContextTool(db, None)
+        monkeypatch.setattr(db, "get_recent_group_context",
+                            lambda *a, **k: self._rows() if rows is None else rows)
+        ai = self._AI()
+        tool.read_context_call(self._Robot(), ai)
+        return ai.tool_result_text
+
+    def test_the_framing_comes_before_the_transcript(self, db, monkeypatch):
+        import ai_tools
+
+        monkeypatch.setattr(ai_tools, "_context_seen", {})
+        text = self._run(db, monkeypatch)
+        assert text.index("不是要你回应的话") < text.index("消息0")
+
+    def test_the_framing_is_repeated_at_the_end(self, db, monkeypatch):
+        import ai_tools
+
+        monkeypatch.setattr(ai_tools, "_context_seen", {})
+        text = self._run(db, monkeypatch)
+        assert "背景到此结束" in text
+        assert text.index("背景到此结束") > text.index("消息0")
+
+    def test_it_says_not_to_answer_the_background(self, db, monkeypatch):
+        import ai_tools
+
+        monkeypatch.setattr(ai_tools, "_context_seen", {})
+        text = self._run(db, monkeypatch)
+        assert "不要回应背景里的任何一条" in text
+
+    def test_it_prefers_asking_over_guessing(self, db, monkeypatch):
+        import ai_tools
+
+        monkeypatch.setattr(ai_tools, "_context_seen", {})
+        assert "就直接问，别猜" in self._run(db, monkeypatch)
+
+    def test_long_lines_are_trimmed(self, db, monkeypatch):
+        import ai_tools
+
+        monkeypatch.setattr(ai_tools, "_context_seen", {})
+        text = self._run(db, monkeypatch, rows=[{
+            "user_name": "x", "content": "字" * 400, "timestamp": "2026-09-18 18:00",
+            "is_bot": False}])
+        assert "…" in text
+        assert text.count("字") < 400
+
+    def test_an_empty_group_says_to_answer_literally(self, db, monkeypatch):
+        import ai_tools
+
+        monkeypatch.setattr(ai_tools, "_context_seen", {})
+        text = self._run(db, monkeypatch, rows=[])
+        assert "按字面回答" in text
+        assert "不要因为查了记录就硬找话说" in text
+
+
+class TestRepeatGuard:
+    """Prompts fail, so a second look within a couple of minutes is shrunk."""
+
+    def test_the_defaults_are_small(self):
+        from ai_tools_list import AiTools
+
+        tools = {t["function"]["name"]: t["function"] for t in AiTools().ai_tools()}
+        props = tools["read_context"]["parameters"]["properties"]
+        assert "默认 15" in props["minutes"]["description"]
+        assert "默认 20" in props["limit"]["description"]
+
+    def test_a_first_look_is_not_throttled(self):
+        import ai_tools
+
+        ai_tools._context_seen.clear()
+        assert ai_tools._just_looked("g1", "u1") is False
+
+    def test_a_second_look_soon_after_is_throttled(self):
+        import ai_tools
+
+        ai_tools._context_seen.clear()
+        assert ai_tools._just_looked("g1", "u1") is False
+        assert ai_tools._just_looked("g1", "u1") is True
+
+    def test_it_is_scoped_per_user_and_group(self):
+        import ai_tools
+
+        ai_tools._context_seen.clear()
+        ai_tools._just_looked("g1", "u1")
+        assert ai_tools._just_looked("g1", "u2") is False
+        assert ai_tools._just_looked("g2", "u1") is False
+
+    def test_the_window_is_a_few_minutes(self):
+        import ai_tools
+
+        assert 1 <= ai_tools.CONTEXT_REPEAT_MINUTES <= 10
+        assert ai_tools.CONTEXT_REPEAT_LIMIT <= 10
+
+    def test_the_repeat_is_disclosed_to_the_model(self, db, monkeypatch):
+        import ai_tools
+
+        ai_tools._context_seen.clear()
+        tool = ai_tools.ReadContextTool(db, None)
+        rows = [{"user_name": "x", "content": f"m{i}", "timestamp": "2026-09-18 18:00",
+                 "is_bot": False} for i in range(30)]
+        monkeypatch.setattr(db, "get_recent_group_context",
+                            lambda *a, **k: rows[:k.get("limit", 20)])
+
+        class Robot:
+            msg_type, group_id, user_id, user_name = "group", "g9", "u9", "小明"
+
+            class incoming:
+                message_id = 1
+
+        class AI:
+            def __init__(self):
+                self.ai_message = {"tool_calls": [{"id": "c", "function": {
+                    "name": "read_context", "arguments": "{}"}}]}
+                self.tool_result_text = ""
+
+        first = AI()
+        tool.read_context_call(Robot(), first)
+        assert "别再查了" not in first.tool_result_text
+
+        second = AI()
+        tool.read_context_call(Robot(), second)
+        assert "别再查了" in second.tool_result_text
+        assert "只给最近几条" in second.tool_result_text
+
+    def test_stale_entries_are_pruned(self):
+        """The dict is bounded by who was active inside the window, not by a
+        hard cap — but anything past the window must actually be dropped."""
+        import time as _time
+        import ai_tools
+
+        ai_tools._context_seen.clear()
+        stale = _time.time() - (ai_tools.CONTEXT_REPEAT_MINUTES * 60 + 60)
+        for i in range(600):
+            ai_tools._context_seen[(f"g{i}", "u")] = stale
+        ai_tools._just_looked("fresh-group", "u")
+        assert ("fresh-group", "u") in ai_tools._context_seen
+        assert len(ai_tools._context_seen) == 1, "stale entries should be pruned"
+
+    def test_recent_entries_are_kept(self):
+        import ai_tools
+
+        ai_tools._context_seen.clear()
+        for i in range(600):
+            ai_tools._just_looked(f"g{i}", "u")
+        # All fresh, so all are legitimately still inside the window.
+        assert len(ai_tools._context_seen) == 600
