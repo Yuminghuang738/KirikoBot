@@ -4,11 +4,16 @@ import json
 import logging
 import os
 import random
+import threading
+import time
 from typing import Any
 
 from config import Config
 
 logger = logging.getLogger(__name__)
+
+# One long message must not crowd out the rest of the transcript.
+_CONTEXT_LINE_LIMIT = 100
 
 
 # ── Helper ──────────────────────────────────────────────
@@ -1438,6 +1443,34 @@ class GroupStatsTool:
 #  Read group context (AI 自决获取整体语境)
 # ══════════════════════════════════════════════════════════
 
+# Repeat guard. The prompt asks the model to look only when it is genuinely
+# lost, but prompts fail — measured on a live group, read_context fired on
+# "收到", "[图片消息]" and "你好，死傲娇". Each call dumps a transcript in
+# front of the model and the reply then answers the transcript instead of the
+# person, so a second look within a couple of minutes gets a *much* smaller
+# slice. Keyed per (group, user) because that is the scope of "did I just look
+# at this conversation".
+_context_seen: dict[tuple[str, str], float] = {}
+_context_lock = threading.Lock()
+CONTEXT_REPEAT_MINUTES = 3
+CONTEXT_REPEAT_LIMIT = 5
+
+
+def _just_looked(group_id: str, user_id: str) -> bool:
+    """True if this user already pulled the transcript very recently."""
+    key = (group_id or "", user_id or "")
+    now = time.time()
+    with _context_lock:
+        last = _context_seen.get(key, 0.0)
+        _context_seen[key] = now
+        # Keep the dict from growing without bound on a busy bot.
+        if len(_context_seen) > 500:
+            cutoff = now - CONTEXT_REPEAT_MINUTES * 60
+            for k in [k for k, v in _context_seen.items() if v < cutoff]:
+                _context_seen.pop(k, None)
+    return (now - last) < CONTEXT_REPEAT_MINUTES * 60
+
+
 class ReadContextTool:
     """FOLLOW_UP tool: pull the recent group transcript when the model asks.
 
@@ -1461,13 +1494,21 @@ class ReadContextTool:
             except (json.JSONDecodeError, TypeError):
                 args = {}
 
-        minutes = args.get("minutes", 30)
-        limit = args.get("limit", 40)
+        # Small by default. A big transcript does not just cost tokens — it
+        # pushes the actual message out of the model's attention, and the
+        # replies then answer the transcript instead of the person.
+        minutes = args.get("minutes", 15)
+        limit = args.get("limit", 20)
 
         if not robot.group_id:
             ai.tool_result_text = "只有在群里才需要读群聊记录。"
             ai.user_text = ai.tool_result_text
             return
+
+        repeated = _just_looked(robot.group_id or "", robot.user_id)
+        if repeated:
+            logger.info("read_context 短时间内重复调用，只给最近几条：%s", robot.user_name)
+            limit = min(limit, CONTEXT_REPEAT_LIMIT)
 
         try:
             rows = self.db.get_recent_group_context(
@@ -1483,20 +1524,36 @@ class ReadContextTool:
         if not rows:
             ai.tool_result_text = (
                 f"最近 {minutes} 分钟群里没有别的消息（当前这条已经排除）。"
-                "就按你已有的信息正常回应即可。"
+                "也就是说这句话没有可供参考的前文——**直接按字面回答，或者问对方指的是什么**，"
+                "不要因为查了记录就硬找话说。"
             )
             ai.user_text = ai.tool_result_text
             return
 
-        lines = [f"本群最近 {minutes} 分钟的聊天记录（已排除当前这条，按时间正序）："]
+        # The framing comes FIRST as well as last. Without it the model treats
+        # the transcript as the thing to answer — which is exactly the "replied
+        # to an old message" bug, caused by the tool rather than by history.
+        lines = [
+            "【以下只是背景，不是要你回应的话。你唯一要回应的是当前这一条消息。】",
+            f"本群最近 {minutes} 分钟的聊天记录（已排除当前这条，按时间正序）：",
+        ]
         for r in rows:
             hhmm = str(r.get("timestamp") or "")[11:16]
             who = self.db.BOT_DISPLAY_NAME if r.get("is_bot") else r.get("user_name", "?")
-            lines.append(f"[{hhmm}] {who}：{r.get('content', '')}")
+            text = " ".join(str(r.get("content") or "").split())
+            if len(text) > _CONTEXT_LINE_LIMIT:
+                text = text[:_CONTEXT_LINE_LIMIT] + "…"
+            lines.append(f"[{hhmm}] {who}：{text}")
         lines.append(
-            "这些只是背景信息，用来理解对方在说什么；"
-            "回复时不要逐条复述，也不要提「我看了聊天记录」这种话。"
+            "【背景到此结束。】以上内容只用来理解当前那句话在说什么："
+            "不要回应背景里的任何一条，不要复述，也不要提「我看了聊天记录」。"
+            "如果看完还是不知道对方指什么，就直接问，别猜。"
         )
+        if repeated:
+            lines.append(
+                "（你刚刚已经看过更长的版本了，所以这里只给最近几条。"
+                "别再查了，直接回答当前这条。）"
+            )
 
         ai.tool_result_text = "\n".join(lines)
         ai.user_text = ai.tool_result_text
