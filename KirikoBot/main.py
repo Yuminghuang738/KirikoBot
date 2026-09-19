@@ -307,7 +307,8 @@ def _reply_note(robot: RobotServer) -> str:
         is_own = False
 
     note = resolve_quote(reply, is_own,
-                         lambda mid: db.find_quoted(robot.group_id, mid))
+                         lambda mid: db.find_quoted(robot.group_id, mid),
+                         current_user=robot.user_name or "")
     # Quote awareness is otherwise invisible: if the lookup misses, the bot just
     # answers as though nothing were quoted, and there is no error to notice.
     if note:

@@ -275,6 +275,7 @@ class DatabaseManager:
                     """CREATE TABLE IF NOT EXISTS bot_messages(
                         id         INTEGER PRIMARY KEY AUTOINCREMENT,
                         group_id   TEXT NOT NULL,
+                        target_user_id TEXT DEFAULT '',
                         message_id INTEGER,
                         text       TEXT DEFAULT '',
                         recalled   INTEGER DEFAULT 0,
@@ -282,6 +283,12 @@ class DatabaseManager:
                         created_at DATETIME DEFAULT (datetime('now', 'localtime'))
                     )"""
                 )
+                # Older databases predate the addressee column.
+                bot_cols = {r[1] for r in connect.execute("PRAGMA table_info(bot_messages)")}
+                if "target_user_id" not in bot_cols:
+                    connect.execute(
+                        "ALTER TABLE bot_messages ADD COLUMN target_user_id TEXT DEFAULT ''"
+                    )
                 connect.execute(
                     """CREATE TABLE IF NOT EXISTS user_profiles(
                         id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -614,13 +621,20 @@ class DatabaseManager:
     _BOT_SORT = "IFNULL(ts_exact, (julianday(created_at) - 2440587.5) * 86400.0)"
 
     def record_bot_message(self, group_id: str, message_id: int | None,
-                           text: str = "") -> None:
+                           text: str = "", target_user_id: str = "") -> None:
+        """Record one of our own messages, and who it was addressed to.
+
+        `target_user_id` is the person being replied to (from the outgoing
+        `at` segment). Without it there is no way to tell "B quoting what I
+        said to A" from "A quoting what I said to A", and the bot treats the
+        new speaker as the old one.
+        """
         if message_id is None:
             return
         self.execute_action(
-            "INSERT INTO bot_messages (group_id, message_id, text, ts_exact) "
-            "VALUES (?, ?, ?, ?)",
-            (group_id, message_id, text[:500], time.time()),
+            "INSERT INTO bot_messages (group_id, message_id, text, ts_exact, target_user_id) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (group_id, message_id, text[:500], time.time(), str(target_user_id or "")),
         )
 
     def get_last_bot_message(self, group_id: str, max_age_seconds: int = 110) -> dict[str, Any] | None:
@@ -923,9 +937,9 @@ class DatabaseManager:
         # had been quoted. QQ message ids are unique account-wide, so the
         # fallback is safe and turns a silent miss into a hit.
         lookups = (
-            ("SELECT text FROM bot_messages WHERE message_id = ? AND group_id = ?"
-             " ORDER BY id DESC LIMIT 1", True, True),
-            ("SELECT text FROM bot_messages WHERE message_id = ?"
+            ("SELECT text, target_user_id FROM bot_messages WHERE message_id = ?"
+             " AND group_id = ? ORDER BY id DESC LIMIT 1", True, True),
+            ("SELECT text, target_user_id FROM bot_messages WHERE message_id = ?"
              " ORDER BY id DESC LIMIT 1", True, False),
             ("SELECT content, user_name FROM group_messages WHERE message_id = ?"
              " AND group_id = ? ORDER BY id DESC LIMIT 1", False, True),
@@ -944,10 +958,41 @@ class DatabaseManager:
             if not rows:
                 continue
             if own:
-                return {"text": rows[0][0] or "", "user_name": "", "is_own": True}
+                target_id = str(rows[0][1] or "") if len(rows[0]) > 1 else ""
+                return {"text": rows[0][0] or "", "user_name": "", "is_own": True,
+                        "target_name": self._resolve_user_name(group_id, target_id)}
             return {"text": rows[0][0] or "", "user_name": rows[0][1] or "",
-                    "is_own": False}
+                    "is_own": False, "target_name": ""}
         return None
+
+    def fetch_quoted_target(self, group_id: str | None, message_id: Any) -> str:
+        """Raw addressee id recorded for one of our own messages (debug/tests)."""
+        try:
+            mid = int(message_id)
+        except (TypeError, ValueError):
+            return ""
+        try:
+            rows = self.fetch_data(
+                "SELECT target_user_id FROM bot_messages WHERE message_id = ? "
+                "AND (? IS NULL OR group_id = ?) ORDER BY id DESC LIMIT 1",
+                (mid, group_id, group_id))
+        except Exception:
+            return ""
+        return str(rows[0][0] or "") if rows else ""
+
+    def _resolve_user_name(self, group_id: str | None, user_id: str) -> str:
+        """Best-effort display name for a QQ number, from what we have seen."""
+        if not user_id:
+            return ""
+        try:
+            rows = self.fetch_data(
+                "SELECT user_name FROM group_messages WHERE user_id = ? "
+                "AND (? IS NULL OR group_id = ?) ORDER BY id DESC LIMIT 1",
+                (user_id, group_id, group_id))
+        except Exception:
+            logger.debug("user name lookup failed", exc_info=True)
+            return ""
+        return str(rows[0][0] or "") if rows else ""
 
     def get_recent_group_context(
         self, group_id: str, minutes: int = 30, limit: int = 40,

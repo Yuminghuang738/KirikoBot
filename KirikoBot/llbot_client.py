@@ -37,6 +37,11 @@ class ReplyInfo:
     text: str = ""
     time: int | None = None
     has_images: bool = False
+    # Who the quoted message was addressed to, when it was the bot's own.
+    # Filled in from our records (see DatabaseManager.find_quoted); LLBot
+    # never sends it. Without it the bot cannot tell "B is quoting what I said
+    # to A" from "A is quoting what I said to A".
+    target_name: str = ""
 
 
 @dataclass
@@ -322,9 +327,20 @@ class LLBotClient:
             return
 
         text = ""
+        target_user_id = ""
         for seg in payload.get("message") or []:
-            if isinstance(seg, dict) and seg.get("type") == "text":
-                text += str((seg.get("data") or {}).get("text") or "")
+            if not isinstance(seg, dict):
+                continue
+            kind = seg.get("type")
+            data = seg.get("data") or {}
+            if kind == "text":
+                text += str(data.get("text") or "")
+            elif kind == "at":
+                # Group replies carry `reply` + `at(user)` + text, so the `at`
+                # segment is *who this reply was addressed to*. Recording it is
+                # what lets the bot notice later that a different person is now
+                # quoting a message it said to someone else.
+                target_user_id = str(data.get("qq") or data.get("user_id") or "")
         text = text.strip()
         group_id = str(payload.get("group_id") or "")
         self._recent_sent.append({
@@ -336,7 +352,7 @@ class LLBotClient:
         })
         if self._recorder and group_id:
             try:
-                self._recorder(group_id, int(message_id), text)
+                self._recorder(group_id, int(message_id), text, target_user_id)
             except Exception:
                 logger.debug("sent-message recorder failed", exc_info=True)
 
