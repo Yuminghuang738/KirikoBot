@@ -220,12 +220,17 @@ def deflection_for(text: str) -> str:
 _REPLY_TEXT_LIMIT = 160
 
 
-def describe_reply(reply: Any, is_own: bool) -> str:
+def describe_reply(reply: Any, is_own: bool, current_user: str = "") -> str:
     """Describe what the current message is quoting, in one compact line.
 
-    This is the fix for the most common "答非所问" case: user B replies to a
-    message the bot sent to user A, and the bot — which never saw the quote —
-    answers as if B had raised a brand new topic.
+    Two distinct failures are handled here:
+
+    * user B replies to a message the bot sent to user A, and the bot — which
+      never saw the quote — answers as if B had raised a brand new topic
+    * …and even once the quoted text is available, the bot does not notice
+      that **the speaker changed**: it keeps treating B as A, recycling the
+      tone and assumptions it had for A. So when the quoted line was said to
+      somebody else, that is stated outright.
     """
     if reply is None:
         return ""
@@ -236,15 +241,27 @@ def describe_reply(reply: Any, is_own: bool) -> str:
         text = "[图片/表情]" if getattr(reply, "has_images", False) else "[空消息]"
 
     if is_own:
+        target = str(getattr(reply, "target_name", "") or "")
+        if target and current_user and target != current_user:
+            return (
+                f"【引用回复·注意换了个人】这条消息引用的是**你自己（Kiriko）"
+                f"之前对「{target}」说的话**：「{text}」。"
+                f"**现在说话的是「{current_user}」，不是 {target}**——这是两个人。"
+                f"别把对方当成 {target}，也别把跟 {target} 的熟络程度、"
+                "刚才聊的话题和情绪直接套到他身上。"
+                "他是在插话或者接着这句说，按「当前这个人」来回应。"
+            )
+        said_to = f"（就是对这个用户「{current_user}」说的）" if current_user else ""
         return (
-            f"【引用回复】这条消息引用的是**你自己（Kiriko）之前说过的话**：「{text}」。"
-            "对方是在接着你这句往下说，顺着这个语境回应即可，不要当成新话题。"
+            f"【引用回复】这条消息引用的是**你自己（Kiriko）之前说过的话**{said_to}："
+            f"「{text}」。对方是在接着你这句往下说，顺着这个语境回应即可，不要当成新话题。"
         )
     who = getattr(reply, "sender_name", "") or "群里的某个人"
     return f"【引用回复】这条消息引用的是 {who} 说过的话：「{text}」。"
 
 
-def resolve_quote(reply: Any, is_own: bool, lookup: Any = None) -> str:
+def resolve_quote(reply: Any, is_own: bool, lookup: Any = None,
+                  current_user: str = "") -> str:
     """Turn a reply segment into a usable note, filling in what LLBot omits.
 
     LLBot (as deployed) sends only `{"id": ...}` for a quote — no text and no
@@ -260,7 +277,8 @@ def resolve_quote(reply: Any, is_own: bool, lookup: Any = None) -> str:
     text = (reply.text or "").strip()
     sender = reply.sender_name or ""
 
-    if (not text or not sender) and lookup is not None:
+    target = str(getattr(reply, "target_name", "") or "")
+    if (not text or not sender or (not target and is_own)) and lookup is not None:
         found = None
         try:
             found = lookup(reply.message_seq)
@@ -269,11 +287,14 @@ def resolve_quote(reply: Any, is_own: bool, lookup: Any = None) -> str:
         if found:
             text = text or (found.get("text") or "")
             sender = sender or (found.get("user_name") or "")
+            target = target or (found.get("target_name") or "")
             is_own = is_own or bool(found.get("is_own"))
 
     if not text and not getattr(reply, "has_images", False):
         return ""
-    return describe_reply(replace(reply, text=text, sender_name=sender), is_own)
+    return describe_reply(
+        replace(reply, text=text, sender_name=sender, target_name=target),
+        is_own, current_user=current_user)
 
 
 def build_role_prompt(extra: str = "") -> str:

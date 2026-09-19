@@ -30,6 +30,7 @@ class _Reply:
     sender_name: str = ""
     text: str = ""
     has_images: bool = False
+    target_name: str = ""   # who the bot said it to; filled in by our lookup
 
 
 class TestLLBotSendsOnlyAnId:
@@ -79,10 +80,21 @@ class TestLLBotSendsOnlyAnId:
         assert "晚上吃啥" in note and "小明" in note
 
     def test_inline_content_skips_the_lookup(self):
+        """For someone else's message we already have everything we need.
+
+        (For the bot's *own* message we still have to look up who it was said
+        to, so that case always hits the lookup.)
+        """
         called = []
         resolve_quote(_Reply(text="晚上吃啥", sender_name="小明"), is_own=False,
                       lookup=lambda mid: called.append(mid))
         assert not called
+
+    def test_an_own_message_still_looks_up_the_addressee(self):
+        called = []
+        resolve_quote(_Reply(text="晚上吃啥"), is_own=True,
+                      lookup=lambda mid: called.append(mid))
+        assert called, "we need to know who it was said to"
 
     def test_an_image_quote_is_described(self):
         assert "图片" in resolve_quote(_Reply(has_images=True), is_own=False)
@@ -535,3 +547,159 @@ class TestRepeatGuard:
             ai_tools._just_looked(f"g{i}", "u")
         # All fresh, so all are legitimately still inside the window.
         assert len(ai_tools._context_seen) == 600
+
+
+class TestSpeakerChangeAwareness:
+    """B quoting what the bot said to A must not be answered as if B were A.
+
+    The quoted text alone was not enough: the bot had the words but not the
+    fact that they were addressed to somebody else, so it recycled A's tone and
+    assumptions for B.
+    """
+
+    def test_the_addressee_is_recorded_with_the_bots_message(self, db):
+        db.record_bot_message("g1", 555, "给你看看这个", target_user_id="2002")
+        assert db.fetch_quoted_target("g1", 555) == "2002"
+
+    def test_the_addressee_is_resolved_to_a_name(self, db):
+        db.record_group_message("g1", "2002", "小红", "我先问的", message_id=1)
+        db.record_bot_message("g1", 555, "给你看看这个", target_user_id="2002")
+        assert db.find_quoted("g1", 555)["target_name"] == "小红"
+
+    def test_an_unresolvable_addressee_is_blank_not_wrong(self, db):
+        db.record_bot_message("g1", 556, "给谁的呢", target_user_id="9999")
+        assert db.find_quoted("g1", 556)["target_name"] == ""
+
+    def test_the_column_is_migrated_onto_old_dbs(self, tmp_path):
+        import sqlite3
+
+        from database_manager import DatabaseManager
+
+        path = str(tmp_path / "legacy.db")
+        conn = sqlite3.connect(path)
+        conn.execute(
+            """CREATE TABLE bot_messages(
+                id INTEGER PRIMARY KEY AUTOINCREMENT, group_id TEXT,
+                message_id INTEGER, text TEXT DEFAULT '',
+                recalled INTEGER DEFAULT 0, ts_exact REAL, created_at DATETIME)"""
+        )
+        conn.execute("INSERT INTO bot_messages (group_id, message_id, text)"
+                     " VALUES ('g1', 1, '老消息')")
+        conn.commit()
+        conn.close()
+
+        db = DatabaseManager(path)
+        cols = {r[1] for r in db.fetch_data("PRAGMA table_info(bot_messages)")}
+        assert "target_user_id" in cols
+        kept = db.fetch_data("SELECT text FROM bot_messages WHERE message_id=1")
+        assert kept[0][0] == "老消息", "migration must not lose rows"
+
+    def test_the_note_says_the_speaker_changed(self):
+        from prompt_builder import describe_reply
+
+        note = describe_reply(
+            _Reply(message_seq=1, text="给你看看这个", target_name="小红"),
+            is_own=True, current_user="小明")
+        assert "换了个人" in note
+        assert "对「小红」说的话" in note
+        assert "现在说话的是「小明」" in note
+        assert "不是 小红" in note
+
+    def test_the_note_warns_against_recycling_tone(self):
+        from prompt_builder import describe_reply
+
+        note = describe_reply(
+            _Reply(message_seq=1, text="x", target_name="小红"),
+            is_own=True, current_user="小明")
+        assert "别把对方当成 小红" in note
+        assert "熟络程度" in note
+
+    def test_the_same_person_quoting_gets_the_plain_note(self):
+        from prompt_builder import describe_reply
+
+        note = describe_reply(
+            _Reply(message_seq=1, text="给你看看这个", target_name="小明"),
+            is_own=True, current_user="小明")
+        assert "换了个人" not in note
+        assert "就是对这个用户「小明」说的" in note
+
+    def test_an_unknown_addressee_gets_the_plain_note(self):
+        from prompt_builder import describe_reply
+
+        note = describe_reply(
+            _Reply(message_seq=1, text="x"), is_own=True, current_user="小明")
+        assert "换了个人" not in note
+        assert "不要当成新话题" in note
+
+    def test_quoting_someone_else_is_unaffected(self):
+        from prompt_builder import describe_reply
+
+        note = describe_reply(
+            _Reply(message_seq=1, text="x", sender_name="波奇"),
+            is_own=False, current_user="小明")
+        assert "波奇" in note
+        assert "换了个人" not in note
+
+    def test_resolve_quote_passes_the_speaker_through(self):
+        from prompt_builder import resolve_quote
+
+        note = resolve_quote(
+            _Reply(message_seq=7), is_own=False,
+            lookup=lambda mid: {"text": "给你看看这个", "user_name": "",
+                                "is_own": True, "target_name": "小红"},
+            current_user="小明")
+        assert "换了个人" in note
+
+    def test_the_client_records_who_a_group_reply_was_at(self, db, monkeypatch):
+        """The `at` segment in the outgoing payload is the addressee."""
+        from llbot_client import LLBotClient
+
+        recorded = []
+        client = LLBotClient("http://x", "t")
+        client.set_recorder(lambda *a: recorded.append(a))
+        client._remember_sent(
+            "send_group_msg",
+            {"group_id": "g1", "message": [
+                {"type": "reply", "data": {"id": "1"}},
+                {"type": "at", "data": {"qq": "2002"}},
+                {"type": "text", "data": {"text": " 给你看看这个"}},
+            ]},
+            type("R", (), {"json": lambda self: {"data": {"message_id": 999}}})(),
+        )
+        assert recorded == [("g1", 999, "给你看看这个", "2002")]
+
+    def test_private_sends_are_not_recorded_at_all(self):
+        """Known limitation: recording is group-scoped, so private bot
+        messages are not stored and a quote of one cannot be resolved.
+
+        That is pre-existing (bot_messages is keyed by group) and out of scope
+        here — this test exists so the limitation is visible rather than
+        looking like an oversight.
+        """
+        from llbot_client import LLBotClient
+
+        recorded = []
+        client = LLBotClient("http://x", "t")
+        client.set_recorder(lambda *a: recorded.append(a))
+        client._remember_sent(
+            "send_private_msg",
+            {"user_id": "3003", "message": [
+                {"type": "text", "data": {"text": "在的"}}]},
+            type("R", (), {"json": lambda self: {"data": {"message_id": 1000}}})(),
+        )
+        assert recorded == []
+
+    def test_a_group_send_without_an_at_has_no_addressee(self):
+        """Stickers and tool output aren't addressed to anyone in particular."""
+        from llbot_client import LLBotClient
+
+        recorded = []
+        client = LLBotClient("http://x", "t")
+        client.set_recorder(lambda *a: recorded.append(a))
+        client._remember_sent(
+            "send_group_msg",
+            {"group_id": "g1", "message": [
+                {"type": "text", "data": {"text": "哈哈哈"}}]},
+            type("R", (), {"json": lambda self: {"data": {"message_id": 1001}}})(),
+        )
+        assert recorded == [("g1", 1001, "哈哈哈", "")]
