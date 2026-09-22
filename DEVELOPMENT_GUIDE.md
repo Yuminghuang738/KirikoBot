@@ -44,7 +44,7 @@ QQRobot/
 |------|------|------|
 | `kirikorobot_claudecode-pmhq-1` | PMHQ | QQ 协议层（登录/收发消息） |
 | `kirikorobot_claudecode-llbot-1` | LLBot | OneBot HTTP API + WebUI（端口 3080） |
-| `kiriko_robot` | 自建 | Flask 机器人核心（端口 5000） |
+| `kirikobot` | 自建 | Flask 机器人核心（端口 5000） |
 
 **关键通信链路**：
 ```
@@ -241,11 +241,11 @@ docker compose -f /home/bosak/Documents/ClaudeCode_Projects/KirikoRobot_ClaudeCo
 docker ps --format "table {{.Names}}\t{{.Status}}"
 
 # 查看日志
-docker logs kiriko_robot --tail 50
+docker logs kirikobot --tail 50
 docker logs kirikorobot_claudecode-llbot-1 --tail 50
 
 # 重启单个服务
-docker restart kiriko_robot
+docker restart kirikobot
 ```
 
 ### 5.2 修改 .env 后
@@ -254,7 +254,7 @@ docker restart kiriko_robot
 
 ```bash
 # ❌ 错误 — 环境变量不会更新
-docker restart kiriko_robot
+docker restart kirikobot
 
 # ✅ 正确 — 重建容器以加载新的 env_file
 docker compose -f /home/bosak/Documents/ClaudeCode_Projects/KirikoRobot_ClaudeCode/docker-compose.yml up -d --force-recreate my-robot
@@ -273,7 +273,7 @@ docker compose -f /home/bosak/Documents/ClaudeCode_Projects/KirikoRobot_ClaudeCo
 ### 5.4 测试 API 时注意代理
 
 主机的 `http_proxy=127.0.0.1:7890` 会导致 `curl http://llbot:3000` 走代理返回 502。
-- 在 Docker **内部**测试：`docker exec kiriko_robot curl http://llbot:3000/...`
+- 在 Docker **内部**测试：`docker exec kirikobot curl http://llbot:3000/...`
 - 从主机测试 Flask API：`curl http://localhost:5000/...`（Flask 端口已暴露）
 
 ---
@@ -332,7 +332,7 @@ $$('selector')           // querySelectorAll
 | LLBot WebUI(3080) 502 | 容器挂了 | `docker compose up -d` |
 | 容器 exit code 137 | OOM/SIGKILL | 检查内存，重启容器 |
 | QQ 消息收发失效 | QQ 会话过期需重新登录 | 打开 WebUI(3080) 扫码 |
-| Flask 500 错误 | 数据库表缺失或代码 bug | `docker logs kiriko_robot` 查看堆栈 |
+| Flask 500 错误 | 数据库表缺失或代码 bug | `docker logs kirikobot` 查看堆栈 |
 | curl 访问 llbot:3000 返回 502 | 主机代理拦截 | 在 Docker 内测试，或用 localhost:5000 API |
 
 ---
@@ -366,7 +366,7 @@ WebUI 密码: /home/bosak/Documents/ClaudeCode_Projects/KirikoRobot_ClaudeCode/l
   docker compose -f /home/bosak/Documents/ClaudeCode_Projects/KirikoRobot_ClaudeCode/docker-compose.yml up -d --force-recreate my-robot
   ```
 - [ ] 新功能在群聊和私聊中均测试通过
-- [ ] 没有引入新的 ERROR 级别日志（检查 `docker logs kiriko_robot --tail 50`）
+- [ ] 没有引入新的 ERROR 级别日志（检查 `docker logs kirikobot --tail 50`）
 - [ ] 管理面板（`http://localhost:5000`）各页面加载正常
 
 ### 10.2 推送到 GitHub
@@ -509,8 +509,8 @@ mkdir -p /tmp/shot && cd /tmp/shot && npm i playwright && npx playwright install
   WSGI 会直接抛 `AssertionError` 导致 500。
 - 只读原则：面板只做状态展示与日志，不做写操作；需要改 LLBot 配置时走「WebQQ」页内嵌的原版 WebUI。
 
-**排查**：面板提示读不到密码时，先 `docker exec kiriko_robot cat /app/llbot_config/webui_token.txt`，
-再 `docker exec kiriko_robot curl -s -o /dev/null -w '%{http_code}' http://llbot:3080/`。
+**排查**：面板提示读不到密码时，先 `docker exec kirikobot cat /app/llbot_config/webui_token.txt`，
+再 `docker exec kirikobot curl -s -o /dev/null -w '%{http_code}' http://llbot:3080/`。
 注意 LLBot 有防爆破：**连续密码错误会锁定 WebUI 一小时**（状态在内存里，重启 llbot 容器即可解除）。
 
 ### 10.8 表情包自动分类
@@ -1458,3 +1458,70 @@ builder.reply(msg.message_id).at(msg.user_id).text(...)
 
 这个能力**从部署那一刻开始生效**——历史 `bot_messages` 行的
 `target_user_id` 是空的（当时没记），所以老消息引用时只能退回普通措辞。
+
+### 10.30 容器改名与"换设备"排查 QQ 风控
+
+#### 结论先说：root 不是 QQ 登录被拦的原因
+
+排查过一次"QQ 登不上、疯狂拦截"，一度怀疑是容器以 root 运行。**证据否定了这个方向**：
+
+- **同一个容器里换一个号能正常登录** —— 如果 root 有问题，所有号都该登不上
+- 这个栈以 root 跑了数周，期间一直是好的
+- 如果真是 root，QQ 会是**启动即拒绝**（"请勿以 root 运行"），而不是挑号
+
+`linyuchen/llbot`、`napcat-docker` 这些镜像默认就是 root，这不是异常配置。
+
+真正的原因是**账号/设备维度的风控**。而且**反复重试会延长封禁**——
+"疯狂拦截"往往就是重试循环本身造成的。
+
+#### 换项目名 ≠ 换设备（这个坑很隐蔽）
+
+想验证"是不是设备进了黑名单"时，直觉是"换个项目名重建一次"。但：
+
+```
+当前项目名            kirikobot
+卷名                  kirikobot_qq_volume      ← 已经有 685MB 登录态
+把项目名改成          kirikobot             ← 卷名不变！
+```
+
+**项目名不变 → 卷名不变 → 复用同一个设备 → 实验等于没做。**
+（`<project>_<volume>` 是命名规则，项目名已存在时卷会被直接复用。）
+
+要真正换设备，必须让 `qq_volume` 是**全新的**。做法二选一：
+
+1. 换一个**没用过的**项目名（本项目用的 `name: kirikobot2`）
+2. 或者显式给卷起个新名字：`volumes: { qq_volume: { name: kirikobot_qq_volume_v2 } }`
+
+判断依据很简单：
+
+```bash
+docker exec <llbot> du -sh /root/.config/QQ
+# 3MB 左右 = 全新设备（只有应用缓存）
+# 数百 MB  = 复用了旧登录态
+```
+
+#### 改名时的注意点
+
+- `container_name` 改成了 `kirikobot`（原来是 `kiriko_robot`）。
+  **所有 `docker exec/logs/restart` 命令都要跟着改**，文档里已同步
+- **旧栈必须显式停掉**：compose 文件里加了 `name:` 之后，
+  直接 `docker compose down` 会去找新项目、**碰不到旧栈**，
+  结果两个栈抢 5000/3080 端口。要 `docker compose -p <旧项目名> down`
+- `down` **不要加 `-v`**，否则旧卷一起删掉就没法回滚了
+- 只有 `qq_volume` 是命名卷（登录态）；`llbot_config`、`KirikoBot/`（含 `robot.db`、
+  贴图、`.dashboard_password`、备份）都是 bind mount，**不受项目名影响**
+
+#### 回滚
+
+```bash
+docker compose -p kirikobot2 down          # 停新栈，保留其卷
+# 把 docker-compose.yml 的 name: 改回 kirikobot、container_name 改回 kiriko_robot
+docker compose up -d
+```
+
+旧卷 `kirikobot_qq_volume` 里的登录态还在，能直接恢复。
+
+#### 一个额外的坑：同一个号不能同时登两个客户端
+
+当时机器上还有一个 `napcat` 容器。**如果两个客户端登同一个 QQ 号，
+它们会互相踢下线**，表现和"登录被拦"几乎一样。排查前先确认没有第二个客户端在跑同一个号。
