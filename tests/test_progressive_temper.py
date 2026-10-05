@@ -20,10 +20,22 @@ class TestTheLadderIsWritten:
         assert "【情绪是渐进式的】" in PERSONA
 
     def test_it_names_the_rungs(self):
+        """两级：正常 → 慢慢懒得搭理。
+
+        （2026-10 调整：原来四级「正常→傲娇→傲娇加倍→摆烂」读起来是闹脾气，
+        实际效果是脾气差，砍掉后两级。）
+        """
         section = PERSONA[PERSONA.index("【情绪是渐进式的】"):]
         section = section[:section.index("【不要用「换个话题」逃开】")]
-        for rung in ("正常", "傲娇", "摆烂"):
+        for rung in ("正常", "有点敷衍"):
             assert rung in section, f"missing rung: {rung}"
+
+    def test_the_harsher_rungs_stay_deleted(self):
+        """「摆烂罢工」只能以**禁令**形式出现，不能是可选应对方式。"""
+        section = PERSONA[PERSONA.index("【情绪是渐进式的】"):]
+        section = section[:section.index("【不要用「换个话题」逃开】")]
+        assert "不许摆烂罢工" in section
+        assert "傲娇加倍" not in section, "那一级已经被砍掉了"
 
     def test_anger_is_not_the_endpoint(self):
         """The whole point of the rollback: she sulks, she does not rage."""
@@ -32,17 +44,17 @@ class TestTheLadderIsWritten:
         assert "不会真的生气" in section
         assert "不许变成真的凶" in section
 
-    def test_slacking_off_still_speaks(self):
+    def test_sulking_still_speaks(self):
         """Silence reads as "the bot went offline", not as a mood."""
         section = PERSONA[PERSONA.index("【情绪是渐进式的】"):]
         section = section[:section.index("【不要用「换个话题」逃开】")]
-        assert "一定要说出来" in section
+        assert "不许突然不回复" in section
         assert "掉线" in section
 
-    def test_slacking_off_is_still_cute(self):
+    def test_sulking_is_still_cute(self):
         section = PERSONA[PERSONA.index("【情绪是渐进式的】"):]
         section = section[:section.index("【不要用「换个话题」逃开】")]
-        assert "也要可爱" in section
+        assert "照样把话接住" in section
         assert "闹脾气" in section
 
     def test_the_signal_is_only_a_hint(self):
@@ -57,7 +69,9 @@ class TestTheLadderIsWritten:
         assert "【不要用「换个话题」逃开】" in PERSONA
         section = PERSONA[PERSONA.index("【不要用「换个话题」逃开】"):]
         section = section[:section.index("【要有自己的立场】")]
-        assert "要么直接怼回去" in section
+        # 2026-10：从「要么直接怼回去」改成平淡地明说 —— 不鼓励对抗
+        assert "直接说你不想聊这个" in section
+        assert "不用怼人" in section
         assert "不要用「换个话题」来打圆场" in section
 
     def test_the_offered_escapisms_are_named_as_bad(self):
@@ -79,11 +93,14 @@ class TestTheCharacterStaysLikeable:
         for dropped in ("古灵精怪", "爱答不理", "毒舌"):
             assert dropped not in PERSONA, f"{dropped} should have been reverted"
 
-    def test_the_original_traits_are_back(self):
+    def test_the_cute_traits_are_back(self):
+        """大改后的底色是「可爱、软、脾气好」，不是一身反骨。"""
         section = PERSONA[PERSONA.index("【你的性格】"):]
         section = section[:section.index("【你和群友的关系】")]
-        for trait in ("嘴硬心软", "好胜", "记小仇", "示弱"):
+        for trait in ("可爱", "脾气很好", "心软"):
             assert trait in section, f"missing trait: {trait}"
+        for dropped in ("好胜", "记小仇", "嘴硬心软"):
+            assert dropped not in section, f"{dropped} 与可爱底色打架，已删"
 
     def test_tsundere_is_gentle_by_definition(self):
         section = PERSONA[PERSONA.index("【傲娇的分寸】"):]
