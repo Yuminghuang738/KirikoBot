@@ -114,6 +114,42 @@ class Config:
     VISION_ENABLED: Final[bool] = os.getenv("VISION_ENABLED", "1") == "1"
     VISION_MODEL: Final[str] = os.getenv("VISION_MODEL") or DEEPSEEK_MODEL
 
+    # ── Ambient group context (OFF by default) ────────
+    # Reading the room is meant to be a *decision*: the model calls
+    # `read_context` when it judges that it needs to. Attaching a transcript
+    # to every message instead was tried and reverted — it made the bot's
+    # awareness unconditional and blanketed, when what was actually wanted was
+    # a looser trigger for the tool.
+    #
+    # What IS always on is quote awareness: if a message quotes something, the
+    # quoted content is always resolved and attached (see _reply_note). That is
+    # a fact about the current message, not a judgement call.
+    #
+    # Set GROUP_CONTEXT_ENABLED=1 to attach the transcript to every group
+    # message as well. When on, it goes in the user message rather than the
+    # system prompt so the large stable system prompt keeps hitting
+    # DeepSeek's prefix cache.
+    GROUP_CONTEXT_ENABLED: Final[bool] = os.getenv("GROUP_CONTEXT_ENABLED", "0") == "1"
+    GROUP_CONTEXT_MINUTES: Final[int] = int(os.getenv("GROUP_CONTEXT_MINUTES") or 15)
+    GROUP_CONTEXT_LIMIT: Final[int] = int(os.getenv("GROUP_CONTEXT_LIMIT") or 20)
+
+    # How far back to count "how many times has this user pestered me" — the
+    # signal behind the persona's escalating temper. Larger = slower to anger.
+    PATIENCE_WINDOW_MINUTES: Final[int] = int(os.getenv("PATIENCE_WINDOW_MINUTES") or 10)
+    # A temper that never subsides is worse than no temper at all, and one
+    # that resets the instant the counting window rolls over isn't human
+    # either. The mood decays to normal over this many minutes.
+    MOOD_COOLDOWN_MINUTES: Final[int] = int(os.getenv("MOOD_COOLDOWN_MINUTES") or 30)
+
+    # ── AI voice (QQ's own synthesis, via LLOneBot) ────
+    # The model decides on its own whether to speak instead of type. Voice is
+    # group-only (the LLOneBot endpoint is send_group_ai_record) and needs QQ's
+    # AI voice feature to be available, so every failure falls back to text.
+    VOICE_ENABLED: Final[bool] = os.getenv("VOICE_ENABLED", "1") == "1"
+    # Kiriko is an 18-year-old tsundere girl, so this is the default timbre.
+    # Verified present via get_ai_characters: lucy-voice-f38 = 傲娇少女.
+    VOICE_DEFAULT_CHARACTER: Final[str] = os.getenv("VOICE_DEFAULT_CHARACTER") or "lucy-voice-f38"
+
     @classmethod
     def validate(cls) -> None:
         required: dict[str, str | None] = {

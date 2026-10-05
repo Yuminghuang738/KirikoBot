@@ -4,11 +4,16 @@ import json
 import logging
 import os
 import random
+import threading
+import time
 from typing import Any
 
 from config import Config
 
 logger = logging.getLogger(__name__)
+
+# One long message must not crowd out the rest of the transcript.
+_CONTEXT_LINE_LIMIT = 100
 
 
 # ── Helper ──────────────────────────────────────────────
@@ -51,6 +56,43 @@ class Tarot:
         except Exception:
             return None
 
+    def _resend_today(self, robot: Any, ai: Any, card: dict[str, Any],
+                      display_name: str, is_for_self: bool) -> None:
+        """Tell them they already drew today, and show that same card again."""
+        from llbot_client import MessageBuilder
+
+        builder = MessageBuilder()
+        if not is_for_self:
+            builder.text(f"🔮 {display_name}的牌今天已经抽过了。\n\n")
+        if card.get("card_path"):
+            builder.image(card["card_path"])
+        builder.text(f"\n🎴 {display_name}今天抽到的还是这张：{card['card_name']}")
+        if card.get("card_text"):
+            builder.text(f"\n{card['card_text']}")
+        if robot.msg_type == "group":
+            robot.llbot.send_group_msg(robot.group_id or "", builder.build())
+        else:
+            robot.llbot.send_private_msg(robot.user_id, builder.build())
+
+        ai.model_type = Config.DEEPSEEK_MODEL
+        ai.thinking_type = "disabled"
+        from prompt_builder import build_role_prompt
+        ai.system_text = build_role_prompt(Config.TAROT_ROLE)
+        ai.user_text = (
+            f"{display_name}今天已经抽过牌了，抽到的是「{card['card_name']}」，"
+            f"牌面：{card.get('card_text') or ''}。"
+            "牌已经发出去了。请告诉对方今天只能抽一次，一天一张，"
+            "并且用这句话把这张牌再解读一遍——不管这牌是好是坏，抽到什么就是什么，"
+            "不要因为对方想要别的结果就重抽或者改口。"
+        )
+        ai.ai_request()
+        if ai.ai_text:
+            reply = MessageBuilder().text(ai.ai_text.strip())
+            if robot.msg_type == "group":
+                robot.llbot.send_group_msg(robot.group_id or "", reply.build())
+            else:
+                robot.llbot.send_private_msg(robot.user_id, reply.build())
+
     def tarot_call(self, robot: Any, ai: Any) -> None:
         tool_calls = ai.ai_message.get("tool_calls")
         _set_tool_meta(ai, tool_calls)
@@ -68,6 +110,20 @@ class Tarot:
         is_for_self = not target_name or target_name == robot.user_name
         display_name = robot.user_name if is_for_self else target_name
         target_uid = self._lookup_target(robot, target_name) if not is_for_self else None
+
+        # One card per person per day. The limit is on the REQUESTER, which is
+        # also who tarot_history records, so asking on behalf of ten friends
+        # doesn't get you ten draws. A repeat re-serves the original card
+        # instead of drawing a new one — the point is that it stands, whether
+        # it was good or bad.
+        try:
+            already = self.database_manager.get_today_tarot(robot.user_id)
+        except Exception:
+            logger.debug("tarot daily check failed", exc_info=True)
+            already = None
+        if already:
+            self._resend_today(robot, ai, already, display_name, is_for_self)
+            return
 
         card = self._draw_card()
 
@@ -1387,6 +1443,34 @@ class GroupStatsTool:
 #  Read group context (AI 自决获取整体语境)
 # ══════════════════════════════════════════════════════════
 
+# Repeat guard. The prompt asks the model to look only when it is genuinely
+# lost, but prompts fail — measured on a live group, read_context fired on
+# "收到", "[图片消息]" and "你好，死傲娇". Each call dumps a transcript in
+# front of the model and the reply then answers the transcript instead of the
+# person, so a second look within a couple of minutes gets a *much* smaller
+# slice. Keyed per (group, user) because that is the scope of "did I just look
+# at this conversation".
+_context_seen: dict[tuple[str, str], float] = {}
+_context_lock = threading.Lock()
+CONTEXT_REPEAT_MINUTES = 3
+CONTEXT_REPEAT_LIMIT = 5
+
+
+def _just_looked(group_id: str, user_id: str) -> bool:
+    """True if this user already pulled the transcript very recently."""
+    key = (group_id or "", user_id or "")
+    now = time.time()
+    with _context_lock:
+        last = _context_seen.get(key, 0.0)
+        _context_seen[key] = now
+        # Keep the dict from growing without bound on a busy bot.
+        if len(_context_seen) > 500:
+            cutoff = now - CONTEXT_REPEAT_MINUTES * 60
+            for k in [k for k, v in _context_seen.items() if v < cutoff]:
+                _context_seen.pop(k, None)
+    return (now - last) < CONTEXT_REPEAT_MINUTES * 60
+
+
 class ReadContextTool:
     """FOLLOW_UP tool: pull the recent group transcript when the model asks.
 
@@ -1410,18 +1494,26 @@ class ReadContextTool:
             except (json.JSONDecodeError, TypeError):
                 args = {}
 
-        minutes = args.get("minutes", 30)
-        limit = args.get("limit", 40)
+        # Small by default. A big transcript does not just cost tokens — it
+        # pushes the actual message out of the model's attention, and the
+        # replies then answer the transcript instead of the person.
+        minutes = args.get("minutes", 15)
+        limit = args.get("limit", 20)
 
         if not robot.group_id:
             ai.tool_result_text = "只有在群里才需要读群聊记录。"
             ai.user_text = ai.tool_result_text
             return
 
+        repeated = _just_looked(robot.group_id or "", robot.user_id)
+        if repeated:
+            logger.info("read_context 短时间内重复调用，只给最近几条：%s", robot.user_name)
+            limit = min(limit, CONTEXT_REPEAT_LIMIT)
+
         try:
             rows = self.db.get_recent_group_context(
                 robot.group_id, minutes=minutes, limit=limit,
-                exclude_user=robot.user_id,
+                exclude_message_id=robot.incoming.message_id,
             )
         except Exception:
             logger.exception("read_context failed")
@@ -1432,20 +1524,36 @@ class ReadContextTool:
         if not rows:
             ai.tool_result_text = (
                 f"最近 {minutes} 分钟群里没有别的消息（当前这条已经排除）。"
-                "就按你已有的信息正常回应即可。"
+                "也就是说这句话没有可供参考的前文——**直接按字面回答，或者问对方指的是什么**，"
+                "不要因为查了记录就硬找话说。"
             )
             ai.user_text = ai.tool_result_text
             return
 
-        lines = [f"本群最近 {minutes} 分钟的聊天记录（已排除当前这条，按时间正序）："]
+        # The framing comes FIRST as well as last. Without it the model treats
+        # the transcript as the thing to answer — which is exactly the "replied
+        # to an old message" bug, caused by the tool rather than by history.
+        lines = [
+            "【以下只是背景，不是要你回应的话。你唯一要回应的是当前这一条消息。】",
+            f"本群最近 {minutes} 分钟的聊天记录（已排除当前这条，按时间正序）：",
+        ]
         for r in rows:
             hhmm = str(r.get("timestamp") or "")[11:16]
             who = self.db.BOT_DISPLAY_NAME if r.get("is_bot") else r.get("user_name", "?")
-            lines.append(f"[{hhmm}] {who}：{r.get('content', '')}")
+            text = " ".join(str(r.get("content") or "").split())
+            if len(text) > _CONTEXT_LINE_LIMIT:
+                text = text[:_CONTEXT_LINE_LIMIT] + "…"
+            lines.append(f"[{hhmm}] {who}：{text}")
         lines.append(
-            "这些只是背景信息，用来理解对方在说什么；"
-            "回复时不要逐条复述，也不要提「我看了聊天记录」这种话。"
+            "【背景到此结束。】以上内容只用来理解当前那句话在说什么："
+            "不要回应背景里的任何一条，不要复述，也不要提「我看了聊天记录」。"
+            "如果看完还是不知道对方指什么，就直接问，别猜。"
         )
+        if repeated:
+            lines.append(
+                "（你刚刚已经看过更长的版本了，所以这里只给最近几条。"
+                "别再查了，直接回答当前这条。）"
+            )
 
         ai.tool_result_text = "\n".join(lines)
         ai.user_text = ai.tool_result_text
@@ -1511,13 +1619,20 @@ class FeatureListTool:
 # ══════════════════════════════════════════════════════════
 
 class ExplainSelfTool:
-    """FOLLOW_UP tool: replay the PREVIOUS reply's tool chain and thinking.
+    """DEBUG tool: dump the PREVIOUS reply's raw record straight into the chat.
 
     The current turn is not saved until after the reply is sent, so the newest
     assistant row in `history` is exactly the message the user is asking about.
+
+    This is a *debugging* aid, so it deliberately bypasses the model: feeding
+    the chain back through the AI made it re-tell its own thoughts in its own
+    words, which is a lossy second pass over the very text we are trying to
+    inspect. Instead the reasoning is reproduced verbatim — newlines kept, no
+    summarising, no rewording — and sent directly, with no follow-up turn.
     """
 
-    MAX_REASONING = 1200
+    MAX_TOTAL = 8000      # matches the history.reasoning storage cap
+    CHUNK = 1200          # keep each QQ text segment comfortably small
 
     def __init__(self, database_manager: Any, msg_package: Any) -> None:
         self.db = database_manager
@@ -1534,47 +1649,191 @@ class ExplainSelfTool:
             last = None
 
         if not last:
-            ai.tool_result_text = (
-                "你还没有回复过这个人，没有可查阅的记录。如实说明即可，不要编造。"
-            )
+            self._send(robot, "【执行回放】还没有上一轮的记录，无从查阅。")
+            ai.tool_result_text = "已直接告知用户没有上一轮记录。本轮不要再回复任何内容。"
             ai.user_text = ai.tool_result_text
             return
 
-        lines = ["你上一次回复的真实记录（用户要求查阅，可以如实展示）："]
-        reply = " ".join((last["content"] or "").split())
-        if reply:
-            lines.append(f"上次回复的内容：{reply[:200]}")
+        self._send(robot, self._render(last))
+        # Self-contained: main_logic sends no follow-up, so the model never
+        # gets a chance to paraphrase what we just dumped.
+        ai.tool_result_text = (
+            "已把上一轮的原始记录直接发到对话里（原文照录）。"
+            "本轮不要再说任何话，也不要复述其中的内容。"
+        )
+        ai.user_text = ai.tool_result_text
+
+    def _render(self, last: dict[str, Any]) -> str:
+        lines = ["【上一轮原始记录 · 调试输出】"]
+        if last.get("timestamp"):
+            lines.append(f"时间：{last['timestamp']}")
+
+        reasoning = (last.get("reasoning") or "").strip()
+        lines.append("")
+        lines.append("── 思维链原文 ──")
+        lines.append(reasoning or "（这一轮没有思维链：思考模式可能被关掉了）")
 
         chain: list[dict[str, Any]] = []
-        if last["tool_calls"]:
+        if last.get("tool_calls"):
             try:
                 chain = json.loads(last["tool_calls"])
             except (json.JSONDecodeError, TypeError):
                 chain = []
+        lines.append("")
+        lines.append("── 工具调用 ──")
         if chain:
-            parts = []
-            for c in chain:
+            for i, c in enumerate(chain, 1):
                 name = c.get("name", "?")
                 args = (c.get("arguments") or "").strip()
-                parts.append(f"{name}({args})" if args and args != "{}" else name)
-            lines.append("上次调用过的工具：" + "、".join(parts))
+                lines.append(f"{i}. {name}({args})")
         else:
-            lines.append("上次没有调用工具，是直接回答的。")
+            lines.append("（无，直接回答的）")
 
-        reasoning = " ".join((last["reasoning"] or "").split())
-        if reasoning:
-            if len(reasoning) > self.MAX_REASONING:
-                reasoning = reasoning[:self.MAX_REASONING] + "…"
-            lines.append(f"上次的思维链：{reasoning}")
+        reply = (last.get("content") or "").strip()
+        lines.append("")
+        lines.append("── 最终回复 ──")
+        lines.append(reply or "（空）")
+
+        text = "\n".join(lines)
+        if len(text) > self.MAX_TOTAL:
+            text = text[:self.MAX_TOTAL] + "\n…（超出 8000 字，已截断）"
+        return text
+
+    def _split(self, text: str) -> list[str]:
+        """Chunk on line boundaries so raw reasoning stays readable.
+
+        A thinking chain is often one enormous unbroken paragraph, so lines
+        longer than CHUNK are hard-wrapped too — otherwise the whole point of
+        chunking (QQ rejects oversized text segments) is lost.
+        """
+        chunks: list[str] = []
+        current = ""
+        for line in text.split("\n"):
+            while len(line) > self.CHUNK:
+                if current:
+                    chunks.append(current)
+                    current = ""
+                chunks.append(line[:self.CHUNK])
+                line = line[self.CHUNK:]
+            candidate = line if not current else current + "\n" + line
+            if len(candidate) > self.CHUNK:
+                chunks.append(current)
+                current = line
+            else:
+                current = candidate
+        if current:
+            chunks.append(current)
+        return chunks or [text]
+
+    def _send(self, robot: Any, text: str) -> None:
+        from llbot_client import MessageBuilder
+
+        chunks = self._split(text)
+        total = len(chunks)
+        for idx, chunk in enumerate(chunks, 1):
+            body = f"({idx}/{total})\n{chunk}" if total > 1 else chunk
+            builder = MessageBuilder()
+            # Quote the request once so the dump is anchored in a busy group.
+            if idx == 1 and robot.incoming.message_id:
+                builder.reply(robot.incoming.message_id)
+            builder.text(body)
+            try:
+                if robot.msg_type == "group":
+                    robot.llbot.send_group_msg(robot.group_id or "", builder.build())
+                else:
+                    robot.llbot.send_private_msg(robot.user_id, builder.build())
+            except Exception:
+                logger.exception("explain_self send failed")
+                return
+
+
+# ══════════════════════════════════════════════════════════
+#  Voice (直接说话，而不是打字)
+# ══════════════════════════════════════════════════════════
+
+class VoiceTool:
+    """SELF-CONTAINED tool: speak the reply with QQ's AI voice.
+
+    The model decides whether speaking fits the moment and which timbre to use.
+    It is self-contained because the voice *is* the reply — a follow-up turn
+    would only add a typed duplicate on top of it.
+
+    Character ids are validated against `get_ai_characters` rather than trusted:
+    the endpoint happily accepts an unknown id and then silently fails to
+    deliver, which would look like the bot ignoring people.
+    """
+
+    def __init__(self, database_manager: Any, msg_package: Any, llbot: Any = None) -> None:
+        self.db = database_manager
+        self.msg_package = msg_package
+        self.llbot = llbot
+
+    def voice_call(self, robot: Any, ai: Any) -> None:
+        tool_calls = ai.ai_message.get("tool_calls")
+        _set_tool_meta(ai, tool_calls)
+
+        args: dict[str, Any] = {}
+        if tool_calls:
+            try:
+                args = json.loads(tool_calls[0]["function"].get("arguments", "{}"))
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+
+        text = str(args.get("text") or "").strip()
+        character = str(args.get("voice") or "").strip() or Config.VOICE_DEFAULT_CHARACTER
+
+        if robot.msg_type != "group" or not robot.group_id:
+            ai.tool_result_text = (
+                "私聊里发不了语音（这个功能只支持群）。"
+                "直接用文字把刚才想说的话说出来即可，不要提这件事。"
+            )
+            ai.user_text = ai.tool_result_text
+            return
+
+        if not text:
+            ai.tool_result_text = "要说的内容为空，没发出去。用文字回答即可。"
+            ai.user_text = ai.tool_result_text
+            return
+
+        character = self._validated_character(character)
+
+        try:
+            ok = bool(self.llbot and self.llbot.send_ai_voice(
+                robot.group_id, character, text))
+        except Exception:
+            logger.exception("voice send failed")
+            ok = False
+
+        if ok:
+            logger.info("语音已发送（%s）：%s", character, text[:40])
+            ai.tool_result_text = (
+                "语音已经发出去了，本轮不要再打字重复一遍，也不要说明你发了语音。"
+            )
         else:
-            lines.append("上次没有留下思维链记录。")
-
-        lines.append(
-            "用第一人称把这些讲给对方听，像在回忆自己刚才的想法，"
-            "不要提「记录」「数据库」这类词。思维链可以照实说，但不要逐字复读整段。"
-        )
-        ai.tool_result_text = "\n".join(lines)
+            logger.info("语音发送失败，回退文字：%s", text[:40])
+            # Falling back to text is the whole point of not trusting the API:
+            # a silent failure would look like the bot ignoring the message.
+            ai.tool_result_text = (
+                "语音没发出去（功能不可用）。请直接用文字把刚才那句话正常说出来，"
+                "不要提语音、也不要道歉。"
+            )
         ai.user_text = ai.tool_result_text
+
+    def _validated_character(self, wanted: str) -> str:
+        """Return `wanted` if QQ offers it, else the configured default."""
+        try:
+            available = {c["id"] for c in (self.llbot.get_ai_characters() if self.llbot else [])}
+        except Exception:
+            logger.debug("character list unavailable", exc_info=True)
+            return wanted or Config.VOICE_DEFAULT_CHARACTER
+        if not available:
+            return wanted or Config.VOICE_DEFAULT_CHARACTER
+        if wanted in available:
+            return wanted
+        logger.info("未知音色 %r，回退默认", wanted)
+        if Config.VOICE_DEFAULT_CHARACTER in available:
+            return Config.VOICE_DEFAULT_CHARACTER
+        return sorted(available)[0]
 
 
 # ══════════════════════════════════════════════════════════

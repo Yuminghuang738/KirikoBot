@@ -25,9 +25,11 @@ def _as_int(value: Any) -> int | None:
 class ReplyInfo:
     """The message a user is quoting, taken from LLBot's `reply` segment.
 
-    LLBot embeds the quoted message inline (message_seq / sender_id /
-    sender_name / segments), so resolving "what is this a reply to" needs no
-    extra API call — the content is already in the event.
+    LLBot (as deployed here) sends **only the id**: `{"type": "reply",
+    "data": {"id": "75563830"}}` — no text, no sender, no segments. The other
+    fields below are kept because some LLBot builds do populate them, but
+    nothing may assume they are present: resolve the id against our own
+    records (see DatabaseManager.find_quoted) before describing a quote.
     """
     message_seq: int | None = None
     sender_id: str = ""
@@ -35,6 +37,11 @@ class ReplyInfo:
     text: str = ""
     time: int | None = None
     has_images: bool = False
+    # Who the quoted message was addressed to, when it was the bot's own.
+    # Filled in from our records (see DatabaseManager.find_quoted); LLBot
+    # never sends it. Without it the bot cannot tell "B is quoting what I said
+    # to A" from "A is quoting what I said to A".
+    target_name: str = ""
 
 
 @dataclass
@@ -52,9 +59,11 @@ class IncomingMessage:
     text: str = ""
     is_at_bot: bool = False
     message_id: int | None = None
-    # QQ-level sequence. LLBot sends BOTH: `message_id` is a short id usable
-    # with delete_msg/get_msg, while `message_seq` is what a `reply` segment
-    # references. Quote chains must be linked on message_seq.
+    # The quoted message's **id**, despite the name. Verified against a live
+    # LLBot: the reply segment is `{"type": "reply", "data": {"id": "75563830"}}`
+    # and that value matches `bot_messages.message_id` / `group_messages.
+    # message_id`, not the QQ sequence number. `_extract_reply` therefore
+    # prefers `id`; see its docstring.
     message_seq: int | None = None
     reply: ReplyInfo | None = None
 
@@ -106,7 +115,13 @@ class IncomingMessage:
             if not isinstance(quoted, list):
                 quoted = []
 
-            seq = data.get("message_seq", data.get("id"))
+            # Prefer `id`. Both fields exist in some LLBot builds, but they
+            # live in different number spaces: `id` is the message id (what our
+            # tables are keyed on), `message_seq` is the QQ sequence number.
+            # Taking `message_seq` first silently resolved to nothing.
+            seq = data.get("id")
+            if seq is None:
+                seq = data.get("message_seq")
             try:
                 seq = int(seq) if seq is not None else None
             except (TypeError, ValueError):
@@ -305,13 +320,27 @@ class LLBotClient:
         except (ValueError, AttributeError):
             return
         message_id = data.get("message_id")
-        if message_id is None:
+        # `send_group_ai_record` always reports 0 while still delivering, so a
+        # falsy id means "no usable id" — recording it would make recall try to
+        # delete message 0 and make quotes of that message unresolvable.
+        if not message_id:
             return
 
         text = ""
+        target_user_id = ""
         for seg in payload.get("message") or []:
-            if isinstance(seg, dict) and seg.get("type") == "text":
-                text += str((seg.get("data") or {}).get("text") or "")
+            if not isinstance(seg, dict):
+                continue
+            kind = seg.get("type")
+            data = seg.get("data") or {}
+            if kind == "text":
+                text += str(data.get("text") or "")
+            elif kind == "at":
+                # Group replies carry `reply` + `at(user)` + text, so the `at`
+                # segment is *who this reply was addressed to*. Recording it is
+                # what lets the bot notice later that a different person is now
+                # quoting a message it said to someone else.
+                target_user_id = str(data.get("qq") or data.get("user_id") or "")
         text = text.strip()
         group_id = str(payload.get("group_id") or "")
         self._recent_sent.append({
@@ -323,7 +352,7 @@ class LLBotClient:
         })
         if self._recorder and group_id:
             try:
-                self._recorder(group_id, int(message_id), text)
+                self._recorder(group_id, int(message_id), text, target_user_id)
             except Exception:
                 logger.debug("sent-message recorder failed", exc_info=True)
 
@@ -367,6 +396,51 @@ class LLBotClient:
         return self._post("send_group_msg", {
             "group_id": group_id,
             "message": message,
+        })
+
+    # ── AI voice (LLOneBot / NapCat extension) ───────────
+    # QQ's own AI voice synthesis: the text is spoken by a chosen 音色. The
+    # character ids are validated against get_ai_characters before use, because
+    # the API accepts an unknown id and simply fails to deliver.
+    VOICE_ENDPOINT = "send_group_ai_record"
+
+    def get_ai_characters(self) -> list[dict[str, Any]]:
+        """Available voices, flattened to [{id, name, category}]."""
+        try:
+            r = self._session.post(
+                f"{self.api_url}/get_ai_characters", json={}, timeout=self.timeout)
+            r.raise_for_status()
+            data = (r.json() or {}).get("data")
+        except Exception:
+            logger.debug("get_ai_characters failed", exc_info=True)
+            return []
+
+        groups = data if isinstance(data, list) else (data or {}).get("characters") or []
+        out: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for group in groups:
+            if not isinstance(group, dict):
+                continue
+            category = str(group.get("type") or group.get("name") or "")
+            for c in group.get("characters") or []:
+                if not isinstance(c, dict):
+                    continue
+                cid = str(c.get("character_id") or "")
+                if not cid or cid in seen:
+                    continue
+                seen.add(cid)
+                out.append({"id": cid, "name": str(c.get("character_name") or ""),
+                            "category": category})
+        return out
+
+    def send_ai_voice(self, group_id: str, character: str, text: str) -> bool:
+        """Speak `text` in the group using QQ's AI voice. Groups only."""
+        if not text.strip():
+            return False
+        return self._post(self.VOICE_ENDPOINT, {
+            "group_id": group_id,
+            "character": character,
+            "text": text,
         })
 
     def send_private_msg(

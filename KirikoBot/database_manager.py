@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import difflib
 import logging
+import re
 import sqlite3
 import threading
 import time
@@ -16,6 +18,7 @@ VALID_TABLES = {
     "app_versions", "changelog", "stickers",
     "user_affection", "user_affection_log",
     "feature_settings", "bot_messages", "ai_calls", "group_subscriptions", "profile_history",
+    "amp_heads", "app_state", "user_mood",
 }
 
 
@@ -149,6 +152,52 @@ class DatabaseManager:
                     )"""
                 )
                 connect.execute(
+                    """CREATE TABLE IF NOT EXISTS amp_heads(
+                        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                        brand      TEXT NOT NULL,
+                        model      TEXT NOT NULL,
+                        year       TEXT DEFAULT '',
+                        origin     TEXT DEFAULT '',
+                        kind       TEXT DEFAULT '',
+                        power      TEXT DEFAULT '',
+                        tubes      TEXT DEFAULT '',
+                        tone       TEXT DEFAULT '',
+                        price      TEXT DEFAULT '',
+                        famous     TEXT DEFAULT '',
+                        tip        TEXT DEFAULT '',
+                        source     TEXT DEFAULT 'manual',
+                        source_url TEXT DEFAULT '',
+                        fetched_at TEXT DEFAULT '',
+                        UNIQUE(brand, model)
+                    )"""
+                )
+                # Older databases predate the provenance columns.
+                existing = {
+                    r[1] for r in connect.execute("PRAGMA table_info(amp_heads)")
+                }
+                for col in ("source", "source_url", "fetched_at"):
+                    if col not in existing:
+                        default = "'manual'" if col == "source" else "''"
+                        connect.execute(
+                            f"ALTER TABLE amp_heads ADD COLUMN {col} TEXT DEFAULT {default}"
+                        )
+                self.seed_amp_heads(connect)
+                connect.execute(
+                    """CREATE TABLE IF NOT EXISTS app_state(
+                        key   TEXT PRIMARY KEY,
+                        value TEXT DEFAULT ''
+                    )"""
+                )
+                connect.execute(
+                    """CREATE TABLE IF NOT EXISTS user_mood(
+                        user_id    TEXT NOT NULL,
+                        group_id   TEXT NOT NULL DEFAULT '',
+                        level      INTEGER DEFAULT 0,
+                        updated_at DATETIME DEFAULT (datetime('now','localtime')),
+                        PRIMARY KEY (user_id, group_id)
+                    )"""
+                )
+                connect.execute(
                     """CREATE TABLE IF NOT EXISTS group_messages(
                         id         INTEGER PRIMARY KEY AUTOINCREMENT,
                         group_id   TEXT NOT NULL,
@@ -226,6 +275,7 @@ class DatabaseManager:
                     """CREATE TABLE IF NOT EXISTS bot_messages(
                         id         INTEGER PRIMARY KEY AUTOINCREMENT,
                         group_id   TEXT NOT NULL,
+                        target_user_id TEXT DEFAULT '',
                         message_id INTEGER,
                         text       TEXT DEFAULT '',
                         recalled   INTEGER DEFAULT 0,
@@ -233,6 +283,12 @@ class DatabaseManager:
                         created_at DATETIME DEFAULT (datetime('now', 'localtime'))
                     )"""
                 )
+                # Older databases predate the addressee column.
+                bot_cols = {r[1] for r in connect.execute("PRAGMA table_info(bot_messages)")}
+                if "target_user_id" not in bot_cols:
+                    connect.execute(
+                        "ALTER TABLE bot_messages ADD COLUMN target_user_id TEXT DEFAULT ''"
+                    )
                 connect.execute(
                     """CREATE TABLE IF NOT EXISTS user_profiles(
                         id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -565,13 +621,20 @@ class DatabaseManager:
     _BOT_SORT = "IFNULL(ts_exact, (julianday(created_at) - 2440587.5) * 86400.0)"
 
     def record_bot_message(self, group_id: str, message_id: int | None,
-                           text: str = "") -> None:
+                           text: str = "", target_user_id: str = "") -> None:
+        """Record one of our own messages, and who it was addressed to.
+
+        `target_user_id` is the person being replied to (from the outgoing
+        `at` segment). Without it there is no way to tell "B quoting what I
+        said to A" from "A quoting what I said to A", and the bot treats the
+        new speaker as the old one.
+        """
         if message_id is None:
             return
         self.execute_action(
-            "INSERT INTO bot_messages (group_id, message_id, text, ts_exact) "
-            "VALUES (?, ?, ?, ?)",
-            (group_id, message_id, text[:500], time.time()),
+            "INSERT INTO bot_messages (group_id, message_id, text, ts_exact, target_user_id) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (group_id, message_id, text[:500], time.time(), str(target_user_id or "")),
         )
 
     def get_last_bot_message(self, group_id: str, max_age_seconds: int = 110) -> dict[str, Any] | None:
@@ -668,14 +731,284 @@ class DatabaseManager:
             n = default
         return max(lo, min(n, hi))
 
+    # Patience ladder. Counts come from `history`, not `group_messages`:
+    # history only holds messages the bot actually processed (i.e. addressed to
+    # it), so a user chatting with other people does not count as pestering it.
+    # The escalation is tsundere, not anger: the bot gets more sulky and
+    # eventually slacks off, but never turns genuinely mean.
+    PESTER_LEVELS = (
+        (0, "正常"),
+        (2, "有点小情绪"),
+        (4, "开始傲娇"),
+        (6, "傲娇加倍"),
+        (9, "摆烂不干了"),
+    )
+    _REPEAT_RATIO = 0.8   # how similar a message must be to count as "the same"
+
+    def get_recent_pestering(self, user_id: str, group_id: str | None,
+                             minutes: int = 10, text: str = "") -> dict[str, Any]:
+        """How hard this user has been leaning on the bot lately.
+
+        Progressive emotion needs a *memory of how many times* it has been
+        asked, and each request is otherwise independent — the model cannot
+        count what it cannot see. So the count and the repeat count are
+        computed here and handed to the model as a fact.
+
+        Returns {"count", "repeats", "level", "label"}. `count` excludes the
+        message being answered (it is not saved yet).
+        """
+        minutes = self._clamp_int(minutes, 10, 1, 24 * 60)
+        try:
+            rows = self.fetch_data(
+                "SELECT content FROM history "
+                "WHERE role = 'user' AND user_id = ? AND IFNULL(group_id,'') = ? "
+                "AND timestamp >= datetime('now','localtime',?) "
+                "ORDER BY id DESC LIMIT 20",
+                (user_id, group_id or "", f"-{minutes} minutes"),
+            )
+        except Exception:
+            # Best-effort: a mood signal that fails must not make the bot angry,
+            # nor break the reply it was only decorating.
+            logger.debug("pestering query failed", exc_info=True)
+            return {"count": 0, "repeats": 0, "level": 0, "label": "正常"}
+
+        past = [str(r[0] or "") for r in rows]
+        count = len(past)
+
+        needle = self._squeeze(text)
+        repeats = 0
+        if needle:
+            for old in past:
+                old_n = self._squeeze(old)
+                if old_n and difflib.SequenceMatcher(None, needle, old_n).ratio() >= self._REPEAT_RATIO:
+                    repeats += 1
+
+        level = 0
+        for idx, (threshold, _label) in enumerate(self.PESTER_LEVELS):
+            if count >= threshold:
+                level = idx
+        # Repeats are the stronger signal: asking the same thing again is more
+        # annoying than merely talking a lot.
+        level = max(level, min(repeats, len(self.PESTER_LEVELS) - 1))
+        return {"count": count, "repeats": repeats, "level": level,
+                "label": self.PESTER_LEVELS[level][1]}
+
+    @staticmethod
+    def _squeeze(text: str) -> str:
+        """Lowercase, punctuation-free — so "在吗？" and "在吗" are the same."""
+        return re.sub(r"[\s\W_]+", "", (text or "").lower())
+
+    # ── Mood with a cooldown ──────────────────────────────
+    MAX_MOOD_LEVEL = 4
+
+    def _read_mood(self, user_id: str, group_id: str | None) -> tuple[int, str]:
+        try:
+            rows = self.fetch_data(
+                "SELECT level, updated_at FROM user_mood "
+                "WHERE user_id = ? AND group_id = ?", (user_id, group_id or ""))
+        except Exception:
+            return 0, ""
+        if not rows:
+            return 0, ""
+        return int(rows[0][0] or 0), str(rows[0][1] or "")
+
+    def _write_mood(self, user_id: str, group_id: str | None, level: int) -> None:
+        try:
+            if level <= 0:
+                self.execute_action(
+                    "DELETE FROM user_mood WHERE user_id = ? AND group_id = ?",
+                    (user_id, group_id or ""))
+                return
+            self.execute_action(
+                "INSERT INTO user_mood (user_id, group_id, level, updated_at) "
+                "VALUES (?, ?, ?, datetime('now','localtime')) "
+                "ON CONFLICT(user_id, group_id) DO UPDATE SET "
+                "level = excluded.level, updated_at = excluded.updated_at",
+                (user_id, group_id or "", level))
+        except Exception:
+            logger.debug("mood write failed", exc_info=True)
+
+    def get_today_tarot(self, user_id: str) -> dict[str, Any] | None:
+        """The card this user already drew today, with its text and image.
+
+        One card per person per day: drawing again would make the reading
+        meaningless ("the cards said X, now they say Y"), so a repeat shows
+        the *original* card rather than a fresh one — good or bad, it stands.
+        """
+        try:
+            rows = self.fetch_data(
+                "SELECT card_name, timestamp FROM tarot_history "
+                "WHERE user_id = ? AND date(timestamp) = date('now','localtime') "
+                "ORDER BY id DESC LIMIT 1",
+                (user_id,),
+            )
+        except Exception:
+            # Best-effort by design: if this fails we fall through to drawing a
+            # card. That is the wrong side of the daily limit to err on, but
+            # refusing every reading because of a transient DB error is worse.
+            logger.exception("today's tarot query failed")
+            return None
+        if not rows:
+            return None
+
+        name = str(rows[0][0] or "").strip()
+        card = {"card_name": name, "timestamp": rows[0][1],
+                "card_text": "", "card_path": ""}
+        try:
+            detail = self.fetch_data(
+                "SELECT card_text, card_path FROM tarot_content "
+                "WHERE TRIM(card_name) = ? LIMIT 1", (name,))
+        except sqlite3.Error:
+            logger.debug("tarot card lookup failed", exc_info=True)
+            detail = []
+        if detail:
+            card["card_text"] = detail[0][0] or ""
+            card["card_path"] = detail[0][1] or ""
+        return card
+
+    def get_mood(self, user_id: str, group_id: str | None, text: str = "",
+                 pressure_minutes: int = 10, cooldown_minutes: int = 30) -> dict[str, Any]:
+        """The bot's current temper toward this user, and how it is cooling.
+
+        Mood has to be *state*, not just a property of the last few messages.
+        Otherwise someone who has just been driven up the wall is instantly
+        pleasant again the moment the counting window rolls over, which is not
+        how a person works — and a temper that never subsides is worse.
+
+        So the stored level decays linearly to zero over `cooldown_minutes`,
+        and the current message's pressure sets a floor. Both directions are
+        modelled: quick to rise, slow-ish to forgive.
+        """
+        pressure = self.get_recent_pestering(
+            user_id, group_id, minutes=pressure_minutes, text=text)
+
+        stored, updated = self._read_mood(user_id, group_id)
+        cooldown = max(1, int(cooldown_minutes or 30))
+        decayed = 0
+        cooling = False
+        if stored > 0 and updated:
+            try:
+                elapsed = (datetime.now() - datetime.strptime(
+                    updated, "%Y-%m-%d %H:%M:%S")).total_seconds() / 60.0
+            except ValueError:
+                elapsed = 0.0
+            # Decay in whole steps. Truncating the remaining level instead
+            # would shave a level off the moment a second had passed, so a
+            # freshly-earned 4 read back as a 3.
+            step = cooldown / float(self.MAX_MOOD_LEVEL)
+            steps = int(elapsed // step)
+            decayed = max(0, min(stored, stored - steps))
+            cooling = decayed < stored
+
+        level = max(decayed, int(pressure["level"]))
+        level = max(0, min(level, self.MAX_MOOD_LEVEL))
+        self._write_mood(user_id, group_id, level)
+
+        return {
+            "level": level,
+            "label": self.PESTER_LEVELS[level][1],
+            "cooling": cooling and level > 0,
+            "count": pressure["count"],
+            "repeats": pressure["repeats"],
+        }
+
+    def find_quoted(self, group_id: str | None, message_id: Any) -> dict[str, Any] | None:
+        """Resolve a quoted message id to its text and author.
+
+        This exists because LLBot's `reply` segment carries **only the id** —
+        `{"type": "reply", "data": {"id": "75563830"}}`, with no text, no
+        sender and no segments. The earlier code assumed the quoted content
+        arrived inline in the event, so every quote note came out empty and
+        quoting the bot — the exact case that motivates the feature — did
+        nothing at all. Our own tables already hold everything: `bot_messages`
+        for the bot's own lines, `group_messages` for everyone else's.
+        """
+        try:
+            mid = int(message_id)
+        except (TypeError, ValueError):
+            return None
+
+        # The bot's lines first: telling "they are quoting ME" apart from
+        # "they are quoting someone else" is the whole point of the feature.
+        #
+        # Group-scoped first, then a global fallback. Scoping alone fails
+        # *silently* whenever the group id does not match byte-for-byte, and a
+        # dropped quote note is invisible — the bot just answers as if nothing
+        # had been quoted. QQ message ids are unique account-wide, so the
+        # fallback is safe and turns a silent miss into a hit.
+        lookups = (
+            ("SELECT text, target_user_id FROM bot_messages WHERE message_id = ?"
+             " AND group_id = ? ORDER BY id DESC LIMIT 1", True, True),
+            ("SELECT text, target_user_id FROM bot_messages WHERE message_id = ?"
+             " ORDER BY id DESC LIMIT 1", True, False),
+            ("SELECT content, user_name FROM group_messages WHERE message_id = ?"
+             " AND group_id = ? ORDER BY id DESC LIMIT 1", False, True),
+            ("SELECT content, user_name FROM group_messages WHERE message_id = ?"
+             " ORDER BY id DESC LIMIT 1", False, False),
+        )
+        for sql, own, scoped in lookups:
+            if scoped and group_id is None:
+                continue
+            params = (mid, group_id) if scoped else (mid,)
+            try:
+                rows = self.fetch_data(sql, params)
+            except sqlite3.Error:
+                logger.debug("find_quoted lookup failed", exc_info=True)
+                continue
+            if not rows:
+                continue
+            if own:
+                target_id = str(rows[0][1] or "") if len(rows[0]) > 1 else ""
+                return {"text": rows[0][0] or "", "user_name": "", "is_own": True,
+                        "target_name": self._resolve_user_name(group_id, target_id)}
+            return {"text": rows[0][0] or "", "user_name": rows[0][1] or "",
+                    "is_own": False, "target_name": ""}
+        return None
+
+    def fetch_quoted_target(self, group_id: str | None, message_id: Any) -> str:
+        """Raw addressee id recorded for one of our own messages (debug/tests)."""
+        try:
+            mid = int(message_id)
+        except (TypeError, ValueError):
+            return ""
+        try:
+            rows = self.fetch_data(
+                "SELECT target_user_id FROM bot_messages WHERE message_id = ? "
+                "AND (? IS NULL OR group_id = ?) ORDER BY id DESC LIMIT 1",
+                (mid, group_id, group_id))
+        except Exception:
+            return ""
+        return str(rows[0][0] or "") if rows else ""
+
+    def _resolve_user_name(self, group_id: str | None, user_id: str) -> str:
+        """Best-effort display name for a QQ number, from what we have seen."""
+        if not user_id:
+            return ""
+        try:
+            rows = self.fetch_data(
+                "SELECT user_name FROM group_messages WHERE user_id = ? "
+                "AND (? IS NULL OR group_id = ?) ORDER BY id DESC LIMIT 1",
+                (user_id, group_id, group_id))
+        except Exception:
+            logger.debug("user name lookup failed", exc_info=True)
+            return ""
+        return str(rows[0][0] or "") if rows else ""
+
     def get_recent_group_context(
         self, group_id: str, minutes: int = 30, limit: int = 40,
-        exclude_user: str | None = None,
+        exclude_user: str | None = None, exclude_message_id: Any = None,
     ) -> list[dict[str, Any]]:
         """Recent group transcript, oldest-first, for the AI's context tool.
 
         Includes the bot's own lines so the model can see what it already said
         and who was answering whom.
+
+        `exclude_message_id` drops just the message being answered. Prefer it
+        over `exclude_user`: the current message is already recorded in
+        `group_messages` by the time this runs, but dropping the whole author
+        also hides everything *else* they said — and messages that never
+        mentioned the bot appear in no other context at all, so "那这个呢"
+        would have nothing to point at.
         """
         minutes = self._clamp_int(minutes, 30, 1, 24 * 60)
         limit = self._clamp_int(limit, 40, 1, 200)
@@ -691,10 +1024,20 @@ class DatabaseManager:
         if exclude_user:
             member_sql += " AND user_id != ?"
             params.append(exclude_user)
+        if exclude_message_id is not None:
+            member_sql += " AND (message_id IS NULL OR message_id != ?)"
+            params.append(exclude_message_id)
 
         # Placeholders are positional, in the order they appear in the SQL.
         params.append(self.BOT_DISPLAY_NAME)
         params.extend([group_id, since])
+        if exclude_message_id is not None:
+            # bot_messages keeps its own id space, but applying the same
+            # filter costs nothing and keeps the two branches symmetric.
+            bot_id_filter = " AND (message_id IS NULL OR message_id != ?)"
+            params.append(exclude_message_id)
+        else:
+            bot_id_filter = ""
 
         sql = (
             f"{member_sql} UNION ALL "
@@ -702,7 +1045,8 @@ class DatabaseManager:
             f"       {self._BOT_SORT} AS sort_key "
             "FROM bot_messages "
             "WHERE group_id = ? AND recalled = 0 "
-            "AND created_at >= datetime('now','localtime',?) "
+            "AND created_at >= datetime('now','localtime',?)"
+            f"{bot_id_filter} "
             "ORDER BY sort_key DESC LIMIT ?"
         )
         params.append(limit)
@@ -804,7 +1148,8 @@ class DatabaseManager:
 
     # ── Group push subscriptions ─────────────────────────
 
-    SUBSCRIPTION_TOPICS = ("morning_news", "gaming_news", "hitokoto", "daily_roll_call")
+    SUBSCRIPTION_TOPICS = ("morning_news", "gaming_news", "hitokoto", "daily_roll_call",
+                           "amp_head")
 
     def get_subscriptions(self, group_id: str | None = None) -> list[dict[str, Any]]:
         """Per-group push subscriptions, optionally for one group."""
@@ -1456,6 +1801,164 @@ class DatabaseManager:
             "user_profiles": profiles,
             "tarot_cards": stickers,
         }
+
+    # ── Generic key/value state ────────────────────────────
+    def get_state(self, key: str, default: str = "") -> str:
+        try:
+            rows = self.fetch_data("SELECT value FROM app_state WHERE key = ?", (key,))
+        except sqlite3.Error:
+            return default
+        return rows[0][0] if rows else default
+
+    def set_state(self, key: str, value: str) -> None:
+        try:
+            self.execute_action(
+                "INSERT INTO app_state (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+        except sqlite3.Error:
+            logger.exception("app_state write failed for %s", key)
+
+    # ── Amp heads (箱头库) ─────────────────────────────────    # `source` records where a row came from: 'manual' (the curated file) or
+    # 'wikipedia' (crawled). It matters because the two have very different
+    # reliability, and the push says which one you are looking at.
+    AMP_HEAD_FIELDS = (
+        "brand", "model", "year", "origin", "kind", "power", "tubes",
+        "tone", "price", "famous", "tip", "source", "source_url", "fetched_at",
+    )
+
+    def seed_amp_heads(self, connect: sqlite3.Connection | None = None) -> int:
+        """Load the curated amp-head list, idempotently.
+
+        Keyed on (brand, model), so restarting after editing
+        ``amp_heads_data.py`` *updates* the row rather than duplicating it.
+        That is the intended way to fix a wrong year or a stale price.
+
+        The curated file always wins: a hand-written row overwrites anything a
+        crawl produced for the same amp, and is re-marked as 'manual' so the
+        push stops attributing it to Wikipedia.
+        """
+        try:
+            from amp_heads_data import AMP_HEADS, COLUMNS
+        except ImportError:
+            logger.exception("amp_heads dataset unavailable")
+            return 0
+
+        placeholders = ", ".join("?" for _ in COLUMNS)
+        updates = ", ".join(
+            f"{c}=excluded.{c}" for c in COLUMNS if c not in ("brand", "model")
+        )
+        sql = (
+            f"INSERT INTO amp_heads ({', '.join(COLUMNS)}, source) "
+            f"VALUES ({placeholders}, 'manual') "
+            f"ON CONFLICT(brand, model) DO UPDATE SET {updates}, source='manual'"
+        )
+        own = connect is None
+        if own:
+            connect = self.get_connect()
+        try:
+            connect.executemany(sql, AMP_HEADS)
+            if own:
+                connect.commit()
+            return len(AMP_HEADS)
+        except sqlite3.Error:
+            logger.exception("amp_heads seeding failed")
+            return 0
+
+    def count_amp_heads(self, source: str = "") -> int:
+        sql = "SELECT COUNT(*) FROM amp_heads"
+        params: tuple[Any, ...] = ()
+        if source:
+            sql += " WHERE source = ?"
+            params = (source,)
+        try:
+            return int(self.fetch_data(sql, params)[0][0])
+        except (sqlite3.Error, IndexError, TypeError, ValueError):
+            return 0
+
+    def amp_head_exists(self, brand: str, model: str) -> bool:
+        try:
+            rows = self.fetch_data(
+                "SELECT 1 FROM amp_heads WHERE brand = ? AND model = ? LIMIT 1",
+                (brand, model),
+            )
+        except sqlite3.Error:
+            return False
+        return bool(rows)
+
+    def add_amp_head(self, data: dict[str, Any], source: str,
+                     source_url: str = "") -> bool:
+        """Insert one row (crawl path). Returns False if it already exists.
+
+        Deliberately does *not* update on conflict: a crawl must never clobber
+        a curated row or overwrite a previous crawl's better text.
+        """
+        cols = [c for c in self.AMP_HEAD_FIELDS if c not in ("source", "source_url",
+                                                             "fetched_at")]
+        values = [str(data.get(c) or "").strip() for c in cols]
+        if not values[0] or not values[1]:
+            return False
+        if self.amp_head_exists(values[0], values[1]):
+            return False
+        cols += ["source", "source_url", "fetched_at"]
+        values += [source, source_url, datetime.now().strftime("%Y-%m-%d %H:%M:%S")]
+        placeholders = ", ".join("?" for _ in cols)
+        try:
+            self.execute_action(
+                f"INSERT INTO amp_heads ({', '.join(cols)}) VALUES ({placeholders})",
+                tuple(values),
+            )
+        except sqlite3.Error:
+            logger.exception("amp_head insert failed")
+            return False
+        return True
+
+    def get_amp_heads(self, limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
+        """The whole library for the dashboard, newest/manual first."""
+        limit = self._clamp_int(limit, 200, 1, 500)
+        offset = self._clamp_int(offset, 0, 0, 100000)
+        fields = ", ".join(["id"] + list(self.AMP_HEAD_FIELDS))
+        try:
+            rows = self.fetch_data(
+                f"SELECT {fields} FROM amp_heads "
+                "ORDER BY CASE source WHEN 'manual' THEN 0 ELSE 1 END, brand, model "
+                "LIMIT ? OFFSET ?",
+                (limit, offset),
+            )
+        except sqlite3.Error:
+            logger.exception("amp_heads query failed")
+            return []
+        keys = ["id"] + list(self.AMP_HEAD_FIELDS)
+        return [dict(zip(keys, r)) for r in rows]
+
+    def delete_amp_head(self, head_id: int) -> None:
+        self.execute_action("DELETE FROM amp_heads WHERE id = ?", (head_id,))
+
+    def get_amp_head_of_the_day(self) -> dict[str, Any] | None:
+        """Today's amp head, rotating through the whole library once per cycle.
+
+        Deliberately *not* ``ORDER BY RANDOM()``: with a daily push that
+        repeats the same amp back-to-back far too easily, which reads as a
+        bug. Walking the list by day-of-year guarantees every entry is shown
+        before any repeats, with no per-group bookkeeping. Side effect worth
+        keeping: every group gets the same amp on the same day, so people can
+        actually talk about it.
+        """
+        fields = ", ".join(self.AMP_HEAD_FIELDS)
+        sql = (
+            f"SELECT {fields} FROM amp_heads ORDER BY id LIMIT 1 OFFSET ("
+            "  CAST(strftime('%j','now','localtime') AS INTEGER) "
+            "  % MAX((SELECT COUNT(*) FROM amp_heads), 1))"
+        )
+        try:
+            rows = self.fetch_data(sql)
+        except sqlite3.Error:
+            logger.exception("amp_head query failed")
+            return None
+        if not rows:
+            return None
+        return dict(zip(self.AMP_HEAD_FIELDS, rows[0]))
 
     def get_all_history(self, limit: int = 50) -> list[dict[str, Any]]:
         rows = self.fetch_data(

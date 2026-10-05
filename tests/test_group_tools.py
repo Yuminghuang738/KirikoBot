@@ -276,3 +276,137 @@ class TestTurnChainRecording:
             assert conn.execute("SELECT COUNT(*) FROM history").fetchone()[0] == 1
         finally:
             conn.close()
+
+
+class TestExplainSelfRawDump:
+    """explain_self is a DEBUG tool: it must show the chain, not re-tell it.
+
+    An earlier version handed the record back to the model and asked it to
+    narrate in first person, so the user got a paraphrase of the thinking
+    chain instead of the chain itself. Since the whole point is inspecting
+    what the model actually thought, the dump is now reproduced verbatim.
+    """
+
+    RAW = "第一步：先看用户问了什么\n第二步：翻一下群里的记录\n  这里缩进也要保留\n第三步：决定回答"
+
+    class _Incoming:
+        message_id = 42
+
+    class _Robot:
+        msg_type, group_id, user_id, user_name = "group", "g1", "u1", "小明"
+
+        def __init__(self, llbot):
+            self.llbot = llbot
+            self.incoming = TestExplainSelfRawDump._Incoming()
+
+    class _AI:
+        def __init__(self):
+            self.ai_message = {
+                "tool_calls": [{"id": "call_1", "function": {"name": "explain_self"}}],
+            }
+            self.tool_result_text = ""
+            self.user_text = ""
+
+    class _LLBot:
+        def __init__(self):
+            self.sent = []
+
+        def send_group_msg(self, group_id, message):
+            self.sent.append((group_id, message))
+            return True
+
+        def send_private_msg(self, user_id, message):
+            self.sent.append((user_id, message))
+            return True
+
+    def _run(self, db, reasoning=RAW, chain="", content="回复内容"):
+        from ai_tools import ExplainSelfTool
+
+        db.deposit_chat_history("assistant", "u1", "g1", content, chain, "",
+                                reasoning=reasoning)
+        llbot = self._LLBot()
+        ai = self._AI()
+        ExplainSelfTool(db, None).explain_self_call(self._Robot(llbot), ai)
+        text = "\n".join(
+            seg["data"]["text"]
+            for _, segments in llbot.sent
+            for seg in segments
+            if seg["type"] == "text"
+        )
+        return llbot.sent, text, ai
+
+    def test_reasoning_is_reproduced_verbatim(self, db):
+        """Newlines and indentation survive — this is the raw text, not a summary."""
+        _, text, _ = self._run(db)
+        assert self.RAW in text
+
+    def test_whitespace_is_not_collapsed(self, db):
+        """" ".join(split()) would have flattened the chain into one line."""
+        _, text, _ = self._run(db)
+        assert "翻一下群里的记录\n  这里缩进也要保留" in text
+
+    def test_dump_is_sent_directly_not_left_to_the_model(self, db):
+        sent, _, ai = self._run(db)
+        assert sent, "the dump must actually be sent to the chat"
+        assert "思维链原文" in sent[0][1][-1]["data"]["text"]
+
+    def test_model_is_told_to_stay_silent(self, db):
+        """Otherwise the follow-up turn paraphrases what we just dumped."""
+        _, _, ai = self._run(db)
+        assert "不要再说" in ai.tool_result_text
+
+    def test_tool_chain_and_reply_are_included(self, db):
+        chain = '[{"name": "dice", "arguments": "{\\"n\\": 6}"}]'
+        _, text, _ = self._run(db, chain=chain, content="我掷了个 6")
+        assert "dice" in text
+        assert "我掷了个 6" in text
+
+    def test_missing_reasoning_says_so_instead_of_inventing(self, db):
+        _, text, _ = self._run(db, reasoning="")
+        assert "没有思维链" in text
+
+    def test_no_previous_turn_is_reported_plainly(self, db):
+        from ai_tools import ExplainSelfTool
+
+        llbot = self._LLBot()
+        ExplainSelfTool(db, None).explain_self_call(self._Robot(llbot), self._AI())
+        assert "没有上一轮" in llbot.sent[0][1][-1]["data"]["text"]
+
+    def test_long_dumps_are_chunked_not_truncated(self, db):
+        """QQ text limits are per-message, so split rather than lose the tail.
+
+        A thinking chain is often one unbroken paragraph, so this uses no
+        newlines at all — line-based chunking alone would emit one huge
+        segment and the tail would be dropped by the platform.
+        """
+        sent, text, _ = self._run(db, reasoning="x" * 5000)
+        assert sent, "nothing was sent"
+        texts = [
+            seg["data"]["text"]
+            for _, segments in sent
+            for seg in segments
+            if seg["type"] == "text"
+        ]
+        assert all(len(t) <= 1300 for t in texts), "chunk over QQ's limit"
+        assert text.count("x") == 5000, "the tail must survive chunking"
+        assert "(1/" in text and "5/" in text
+
+    def test_runs_without_a_follow_up_turn(self):
+        """Registered self-contained, so the model never re-narrates the dump."""
+        import ast
+        import os
+
+        path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "KirikoBot", "main.py",
+        )
+        with open(path, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
+                if "SELF_CONTAINED_TOOLS" in targets:
+                    names = {e.value for e in node.value.elts}
+                    assert "explain_self" in names
+                    return
+        raise AssertionError("SELF_CONTAINED_TOOLS not found")

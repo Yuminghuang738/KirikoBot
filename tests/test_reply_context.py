@@ -191,8 +191,14 @@ class TestUserMessageWithQuote:
 
     def test_without_note_output_is_unchanged(self):
         text = build_user_message(self._robot())
-        assert text.startswith("群「测试群」中")
+        assert "群「测试群」中" in text
         assert "引用回复" not in text
+
+    def test_the_time_line_leads_the_user_message(self):
+        """It lives here, not in the system prompt — see test_prompt_and_frontend."""
+        text = build_user_message(self._robot())
+        assert text.startswith("当前时间：")
+        assert text.index("当前时间：") < text.index("群「测试群」中")
 
 
 class TestMessageIdStorage:

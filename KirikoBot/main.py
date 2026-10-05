@@ -25,7 +25,7 @@ from ai_tools import (
     StickerBattleTool, BATTLE_DEFAULT_ROUNDS,
     AffectionTool, AffectionLeaderboardTool,
     RecallMessageTool, GroupStatsTool, ReadContextTool,
-    FeatureListTool, ExplainSelfTool, SimilarStickerTool,
+    FeatureListTool, ExplainSelfTool, SimilarStickerTool, VoiceTool,
 )
 from affection_service import AffectionService
 from balance_service import BalanceService
@@ -33,9 +33,15 @@ from ai_tools_list import AiTools
 from config import Config
 import ai_metrics
 import dashboard_auth
+from chat_history import load_history, save_turn
 import webhook_auth
 from prompt_builder import (
     build_role_prompt,
+    deflection_for,
+    filler_for,
+    format_group_context,
+    leaked_persona,
+    resolve_quote,
     build_system_prompt as _build_system_prompt,
     build_user_message as _context,
     describe_reply,
@@ -51,6 +57,7 @@ from judge_service import JudgeService
 from llbot_client import LLBotClient, MessageBuilder
 from llbot_webui import llbot_bp
 from msg_package import MsgPackage
+from amp_head_crawler import AmpHeadCrawler
 from news_crawler import NewsCrawler
 from log_stream import sse_handler, setup_sse_logging
 from learning_service import LearningService
@@ -109,6 +116,7 @@ weather_tool = WeatherTool(WeatherService(), pkg)
 sticker_tool = StickerTool(pkg)
 sticker_battle_tool = StickerBattleTool(pkg, llbot, sticker_tool, _battle_state)
 hitokoto_service = HitokotoService()
+amp_head_crawler = AmpHeadCrawler(db)
 hitokoto_tool = HitokotoTool(hitokoto_service, pkg)
 food_picker_tool = FoodPickerTool(pkg)
 dice_tool = DiceTool(pkg)
@@ -127,7 +135,8 @@ music_service = MusicService()
 music_tool = MusicTool(music_service, pkg)
 hot_news_scraper = HotNewsScraper()
 
-scheduler = BotScheduler(db, llbot, political_news_scraper, news_crawler, hitokoto_service, feature_gate)
+scheduler = BotScheduler(db, llbot, political_news_scraper, news_crawler, hitokoto_service, feature_gate,
+                         amp_crawler=amp_head_crawler)
 scheduler.start()
 sticker_collector = StickerCollector(db=db)
 profile_service = ProfileService()
@@ -141,6 +150,7 @@ group_stats_tool = GroupStatsTool(db, pkg)
 read_context_tool = ReadContextTool(db, pkg)
 feature_list_tool = FeatureListTool(db, pkg)
 explain_self_tool = ExplainSelfTool(db, pkg)
+voice_tool = VoiceTool(db, pkg, llbot)
 similar_sticker_tool = SimilarStickerTool(sticker_collector, pkg)
 
 # Persist the bot's own outgoing messages so transcripts are complete and
@@ -214,6 +224,7 @@ ROUTES = {
     "read_context": read_context_tool.read_context_call,
     "feature_list": feature_list_tool.feature_list_call,
     "explain_self": explain_self_tool.explain_self_call,
+    "send_voice": voice_tool.voice_call,
     "similar_sticker": similar_sticker_tool.similar_sticker_call,
 }
 
@@ -222,44 +233,24 @@ SELF_CONTAINED_TOOLS = {
     "tarot", "sticker", "web_search", "at_member",
     "political_news", "gaming_news", "bilibili_trending",
     "hitokoto", "tarot_history", "music_search", "sticker_battle",
+    # explain_self sends the raw debug dump itself; a follow-up turn would only
+    # add the model's paraphrase on top of the text we want verbatim.
+    "explain_self",
+    # send_voice *is* the reply; a follow-up would add a typed duplicate.
+    "send_voice",
 }
 
 # ── History (only recent context, filtered for clarity) ──
-MAX_HISTORY = 8  # fewer turns = less noise, more focus on current message
-
+# History storage/replay lives in chat_history.py so it can be unit-tested
+# (importing main would start the scheduler). These stay as thin wrappers so
+# call sites keep working against the process-wide db.
 def _load_history(uid: str, gid: str | None) -> list[dict[str, Any]]:
-    try:
-        rows = db.takeout_chat_history(uid, gid)
-    except Exception:
-        return []
-    history: list[dict[str, Any]] = []
-    for role, content, tool_calls, _ in rows:
-        if role == "user":
-            history.append({"role": "user", "content": content or ""})
-        elif role == "assistant":
-            # Skip assistant messages that only contain tool calls (no text)
-            if content and content.strip():
-                history.append({"role": "assistant", "content": content.strip()})
-            elif tool_calls:
-                # Assistant only called tools, no text — summarize instead of raw JSON
-                history.append({"role": "assistant", "content": "[已调用工具处理]"})
-    return history[-MAX_HISTORY:]
+    return load_history(db, uid, gid)
 
 def _save_turn(uid: str, gid: str | None, user_msg: str, ai_text: str,
-               reasoning: str = "", tool_chain: str = "") -> None:
-    """Persist one conversation turn.
-
-    The assistant row carries this turn's thinking chain and tool chain, so
-    the user can later ask "what were you thinking" about this reply (and the
-    dashboard's conversation log can show the chain).
-    """
-    try:
-        db.deposit_chat_history("user", uid, gid, user_msg, "", "")
-        if ai_text:
-            db.deposit_chat_history("assistant", uid, gid, ai_text,
-                                    tool_chain, "", reasoning)
-    except Exception:
-        logger.debug("main._save_turn 忽略了异常", exc_info=True)
+               reasoning: str = "", tool_chain: str = "",
+               handled: bool = False) -> None:
+    save_turn(db, uid, gid, user_msg, ai_text, reasoning, tool_chain, handled)
 
 # ── Group seeding ───────────────────────────────────────
 def _seed_group(gid: str) -> None:
@@ -300,19 +291,99 @@ def _tool_chain_json(tool_calls: Any) -> str:
 def _reply_note(robot: RobotServer) -> str:
     """Describe the quoted message when the incoming one is a reply.
 
-    LLBot embeds the quoted content in the event, so this costs nothing extra.
+    LLBot's reply segment is only `{"id": ...}` — no text, no sender — so the
+    quoted message is resolved from our own records (bot_messages /
+    group_messages). That lookup is what makes "another user quotes the reply
+    the bot just gave someone else" work at all.
     """
     reply = getattr(robot.incoming, "reply", None)
     if reply is None:
         return ""
-    if not reply.text and not reply.has_images:
-        return ""
+
     try:
         is_own = llbot.is_own_message(reply.message_seq, reply.text)
     except Exception:
         logger.debug("is_own_message failed", exc_info=True)
         is_own = False
-    return describe_reply(reply, is_own)
+
+    note = resolve_quote(reply, is_own,
+                         lambda mid: db.find_quoted(robot.group_id, mid),
+                         current_user=robot.user_name or "")
+    # Quote awareness is otherwise invisible: if the lookup misses, the bot just
+    # answers as though nothing were quoted, and there is no error to notice.
+    if note:
+        logger.info("引用感知命中（id=%s）：%s", reply.message_seq, note[:100])
+    elif reply.message_seq is not None:
+        logger.info("引用感知未命中：id=%s 不在库里（无法还原被引用的内容）",
+                    reply.message_seq)
+    return note
+
+def _mood_signal(robot: RobotServer) -> str:
+    """Tell the model how hard this user has been leaning on it.
+
+    The persona's temper is meant to escalate across a *conversation*, but
+    every request is independent: the model sees only the last few turns, so
+    it cannot tell "first question today" from "the sixth time in five
+    minutes". The count is computed here and handed over as a fact, which is
+    what makes the escalation actually advance instead of restarting at polite
+    every turn.
+    """
+    if not robot.user_id:
+        return ""
+    try:
+        info = db.get_mood(
+            robot.user_id, robot.group_id, text=robot.msg,
+            pressure_minutes=Config.PATIENCE_WINDOW_MINUTES,
+            cooldown_minutes=Config.MOOD_COOLDOWN_MINUTES,
+        )
+    except Exception:
+        logger.debug("mood signal failed", exc_info=True)
+        return ""
+    if info["level"] <= 0:
+        return ""
+    detail = f"最近 {Config.PATIENCE_WINDOW_MINUTES} 分钟这个用户找了你 {info['count']} 次"
+    if info["repeats"]:
+        detail += f"，其中 {info['repeats']} 次是同一件事"
+    # Deliberately advisory. Spelling out "you are now at level 3, act like it"
+    # made the bot recite the count back instead of just having a mood, which
+    # read as mechanical.
+    line = (f"【你现在的状态】{detail}（仅供参考：可能会有点「{info['label']}」）。"
+            "这只是让你知道自己被磨了多久，**别刻意照着演，也别把这个次数说出来**。")
+    if info.get("cooling"):
+        line += f"而且你气已经消得差不多了（大约 {Config.MOOD_COOLDOWN_MINUTES} 分钟回到正常），别翻旧账。"
+    return line
+
+
+def _ambient_group_context(robot: RobotServer, disabled: set[str]) -> str:
+    """The recent group transcript attached to every group message.
+
+    On by default: the bot only receives messages addressed to it, and leaving
+    the "go read the room" decision to the model meant it almost never
+    happened (read_context: 12 calls vs 1000+ for other tools), so replies
+    kept answering the wrong thing. A person in a group follows the
+    conversation continuously — this is the cheap version of that.
+
+    Reuses the same feature key as the read_context tool, so turning 语境读取
+    off in the panel disables both the background and the tool.
+    """
+    if not Config.GROUP_CONTEXT_ENABLED or robot.msg_type != "group":
+        return ""
+    if "context_read" in disabled or not robot.group_id:
+        return ""
+    try:
+        rows = db.get_recent_group_context(
+            robot.group_id,
+            minutes=Config.GROUP_CONTEXT_MINUTES,
+            limit=Config.GROUP_CONTEXT_LIMIT,
+            # Drop only the message being answered: the author's own earlier
+            # lines are context too, and non-@ messages reach the model no
+            # other way.
+            exclude_message_id=robot.incoming.message_id,
+        )
+    except Exception:
+        logger.debug("ambient group context failed", exc_info=True)
+        return ""
+    return format_group_context(rows, Config.GROUP_CONTEXT_MINUTES)
 
 def _log_thinking(user_name: str, reasoning: str) -> None:
     """Log thinking chain to dedicated logger (visible in logs + frontend)."""
@@ -748,11 +819,13 @@ def main_logic(robot: RobotServer) -> None:
         _trigger_profile_update(robot, disabled)
 
         history = _load_history(robot.user_id, robot.group_id)
-        user_text = _context(robot, _reply_note(robot))
+        is_private = robot.msg_type == "private"
+        user_text = _context(robot, _reply_note(robot),
+                             _ambient_group_context(robot, disabled),
+                             mood=_mood_signal(robot))
         system_prompt = _build_system_prompt(
             robot, db, profile_service, learning_service, affection_service, disabled,
         )
-        is_private = robot.msg_type == "private"
 
         # Every enabled tool is offered — the AI picks via native function calling
         active_tools = _enabled_tools(disabled)
@@ -822,9 +895,30 @@ def main_logic(robot: RobotServer) -> None:
         # Persist BEFORE sending. Delivery can block (slow or failing send),
         # and a user who immediately asks "what were you thinking" must not
         # race an unwritten record.
+        # The persona forbids reciting the prompt, but that is just text in a
+        # prompt and it failed once under repeated pressure ("好吧好吧，别刷屏
+        # 了，贴就贴"). Check the outgoing reply too, and record what was
+        # actually sent so the model's own history shows the firm stance.
+        if final_text and leaked_persona(final_text):
+            logger.warning("Blocked a system-prompt leak: %s", final_text[:150])
+            final_text = deflection_for(final_text)
+
+        # Never send nothing. An empty reply reads as "the bot is offline",
+        # which is worse than a vague line — and it happens for real: a
+        # thinking model can spend its whole budget on reasoning and return no
+        # content at all. Self-contained tools have already replied for the
+        # turn, so they are exempt.
+        handled = bool(tool_calls)
+        if not final_text and not handled:
+            final_text = filler_for(robot.msg)
+            logger.warning("Model returned no text; sending a filler line instead")
+
         _save_turn(robot.user_id, robot.group_id, robot.msg, final_text,
                    reasoning=ai.reasoning_content or "",
-                   tool_chain=_tool_chain_json(tool_calls))
+                   tool_chain=_tool_chain_json(tool_calls),
+                   # A self-contained tool replied on its own, so this turn is
+                   # answered even though final_text stayed empty.
+                   handled=handled)
         if final_text:
             robot.reply(final_text)
 
@@ -1825,6 +1919,65 @@ def api_subscription_set():
 def api_subscription_delete(group_id: str, topic: str):
     db.delete_subscription(group_id, topic)
     return jsonify({"ok": True, "subscriptions": db.get_subscriptions(group_id)})
+
+
+@app.route("/api/amp-heads")
+def api_amp_heads():
+    """The amp-head library: hand-written rows plus anything crawled."""
+    try:
+        limit = int(request.args.get("limit", 200))
+        offset = int(request.args.get("offset", 0))
+    except ValueError:
+        limit, offset = 200, 0
+    return jsonify({
+        "ok": True,
+        "heads": db.get_amp_heads(limit, offset),
+        "total": db.count_amp_heads(),
+        "manual": db.count_amp_heads("manual"),
+        "crawled": db.count_amp_heads("wikipedia"),
+        "last_crawl": db.get_state("amp_crawl_last") or "",
+        "crawl_running": db.get_state("amp_crawl_running") == "1",
+    })
+
+
+@app.route("/api/amp-heads/<int:head_id>", methods=["DELETE"])
+def api_amp_head_delete(head_id: int):
+    try:
+        db.delete_amp_head(head_id)
+        return jsonify({"ok": True, "deleted": head_id})
+    except Exception:
+        logger.exception("Failed to delete amp head #%d", head_id)
+        return jsonify({"ok": False, "error": "Database delete failed"}), 500
+
+
+@app.route("/api/amp-heads/crawl", methods=["POST"])
+def api_amp_head_crawl():
+    """Crawl Wikipedia now, in the background (it is throttled and slow)."""
+    if db.get_state("amp_crawl_running") == "1":
+        return jsonify({"ok": False, "error": "已有抓取任务在跑"}), 409
+    data = request.get_json(silent=True) or {}
+    try:
+        limit = max(1, min(int(data.get("limit", 8)), 30))
+    except (TypeError, ValueError):
+        limit = 8
+
+    def _run() -> None:
+        from datetime import datetime as _dt
+
+        from amp_head_crawler import AmpHeadCrawler
+
+        db.set_state("amp_crawl_running", "1")
+        try:
+            summary = AmpHeadCrawler(db).crawl(limit=limit)
+            db.set_state("amp_crawl_last", _dt.now().strftime("%Y-%m-%d %H:%M:%S"))
+            logger.info("Manual amp crawl finished: %s", summary)
+        except Exception:
+            logger.exception("Manual amp crawl failed")
+        finally:
+            db.set_state("amp_crawl_running", "0")
+
+    threading.Thread(target=_run, daemon=True, name="amp-crawl-manual").start()
+    return jsonify({"ok": True, "started": True, "limit": limit})
 
 
 @app.route("/api/ai/metrics")

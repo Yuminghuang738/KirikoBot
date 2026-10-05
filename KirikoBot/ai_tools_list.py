@@ -292,10 +292,48 @@ class AiTools:
         function_explain_self = {
             "name": "explain_self",
             "description": (
-                "回顾你上一轮做了什么：调用了哪些工具、参数是什么、结果如何，以及当时的思考。"
-                "当用户问「你刚才干了什么」「你调用什么工具了」「你刚才在想什么」「怎么做到的」时调用"
+                "调试用途：把上一轮的原始记录（思维链原文、工具调用、最终回复）原文照录地发到当前对话里。"
+                "当用户问「你刚才干了什么」「你调用什么工具了」「你刚才在想什么」「怎么做到的」时调用。"
+                "调用后会直接把原文发出去，你不需要再用自己的话复述或解释，也不要在后面补一句总结——"
+                "用户要看的就是未经转述的原文。"
             ),
             "parameters": empty_params,
+        }
+        function_send_voice = {
+            "name": "send_voice",
+            "description": (
+                "用语音把话直接说出来，而不是打字。撒娇、吐槽、情绪上来了、"
+                "或者一句话就能说完的时候可以用。"
+                "**先想清楚这句话念出来是什么效果**：要口语、短、不带颜文字和表情符号，"
+                "写完了自己念一遍顺不顺。"
+                "正经答题、内容里有数字/链接/代码、或者需要对方反复看着操作时就打字，别用这个。"
+                "也不要每条都用——偶尔说一次才显得自然。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "要念出来的话。口语化、简短，不要颜文字、不要表情符号、不要书面语",
+                    },
+                    "voice": {
+                        "type": "string",
+                        "description": (
+                            "音色。默认 lucy-voice-f38（傲娇少女，就是你平时说话的声音）。"
+                            "f38=傲娇少女，xueling=元气少女，female1=邻家小妹，f36=温柔妹妹，"
+                            "f37=文艺少女，f34=书香少女，female2=暖心姐姐，suxinjiejie=酥心御姐。"
+                            "搞怪时可以故意用 houge=猴哥 或 laibixiaoxin=小新（偶尔一次就好）"
+                        ),
+                        "enum": [
+                            "lucy-voice-f38", "lucy-voice-xueling", "lucy-voice-female1",
+                            "lucy-voice-f36", "lucy-voice-f37", "lucy-voice-f34",
+                            "lucy-voice-female2", "lucy-voice-suxinjiejie",
+                            "lucy-voice-houge", "lucy-voice-laibixiaoxin",
+                        ],
+                    },
+                },
+                "required": ["text"],
+            },
         }
         function_similar_sticker = {
             "name": "similar_sticker",
@@ -307,16 +345,18 @@ class AiTools:
         }
         function_read_context = {            "name": "read_context",
             "description": (
-                "读取本群最近一段时间的聊天记录，用来搞清楚群里正在聊什么。"
-                "当你觉得当前这句话指代不明（「那这个呢」「那个怎么办」）、"
-                "像是在接着别人的话题说、或者用户提到你没参与过的讨论时才调用。"
-                "闲聊和能直接回答的问题不要调用"
+                "读本群最近的聊天记录。**只有当前这句话单独看读不懂时才用**——"
+                "比如只有一个「那这个呢」「所以呢」，或者明显在接别人的话但你不知道前文。"
+                "打招呼、骂你、夸你、说「收到」「好的」、发图、以及问题本身自足的话"
+                "（「tail 是什么」「今天几号」）都**不要**调用。"
+                "**拿不准就别查**：查到的是几十条无关聊天，会把当前这句话淹掉，"
+                "更容易答非所问；宁可先问一句「你说的是哪个」。"
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "minutes": {"type": "integer", "description": "往前看多少分钟，默认 30"},
-                    "limit": {"type": "integer", "description": "最多读多少条，默认 40"},
+                    "minutes": {"type": "integer", "description": "往前看多少分钟，默认 15。越大越容易把注意力带跑"},
+                    "limit": {"type": "integer", "description": "最多读多少条，默认 20。别调大"},
                 },
                 "required": [],
             },
@@ -350,6 +390,7 @@ class AiTools:
         tool_read_context = {"type": "function", "function": function_read_context}
         tool_feature_list = {"type": "function", "function": function_feature_list}
         tool_explain_self = {"type": "function", "function": function_explain_self}
+        tool_send_voice = {"type": "function", "function": function_send_voice}
         tool_similar_sticker = {"type": "function", "function": function_similar_sticker}
 
         return [
@@ -381,5 +422,6 @@ class AiTools:
             tool_read_context,
             tool_feature_list,
             tool_explain_self,
+            tool_send_voice,
             tool_similar_sticker,
         ]

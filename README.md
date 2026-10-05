@@ -195,7 +195,7 @@ OneBot `set_group_leave` 让机器人退群（退群后需重新邀请）。
 所以默认启用 **HTTP Basic 鉴权**：
 
 - 首次启动自动生成口令，保存在 `KirikoBot/.dashboard_password`（已 gitignore），
-  同时打印在启动日志里：`docker logs kiriko_robot | grep 面板密码`
+  同时打印在启动日志里：`docker logs kirikobot | grep 面板密码`
 - 想自己指定就设 `DASHBOARD_USER` / `DASHBOARD_PASSWORD`
 - 浏览器只需登录一次，之后同源的图片、SSE 日志流都会自动带上凭据
 
