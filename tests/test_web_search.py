@@ -145,3 +145,49 @@ class TestSearchReasonContract:
     def test_wikipedia_is_in_the_chain(self):
         """scraping 系全被喂垃圾时，维基百科的 API 是唯一稳定的来源。"""
         assert "wikipedia" in WebSearch.PROVIDERS
+
+
+class TestWikipediaTitleRelevance:
+    """维基百科的全文搜索排序很松，必须按**标题**再过滤一道。
+
+    线上实例：问「IPv6 普及率 2026 最新」，它把「杜威十进分类法」排在第一位 ——
+    那篇文章只是正文里提到过一次 IPv6。这种结果如果排在前面，会占掉名额，
+    把真正相关的结果挤出去。
+    """
+
+    def test_the_actual_false_positive_is_filtered(self):
+        assert WebSearch._title_matches_query("杜威十进分类法", "IPv6 普及率 2026 最新") is False
+
+    def test_other_actual_false_positives_are_filtered(self):
+        for title in ("各国移动电话数目列表", "Firefox版本列表"):
+            assert WebSearch._title_matches_query(title, "IPv6 普及率 2026 最新") is False
+
+    def test_a_relevant_title_survives(self):
+        assert WebSearch._title_matches_query("IPv6", "IPv6 普及率 2026 最新") is True
+        assert WebSearch._title_matches_query("IPv6 deployment", "IPv6 penetration 2026") is True
+
+    def test_chinese_bigram_matching(self):
+        """中文按二字组近似切词 —— 「中国首都」要能匹配「中国的首都是哪里」。"""
+        assert WebSearch._title_matches_query("中国首都", "中国的首都是哪里") is True
+        assert WebSearch._title_matches_query("杜威十进分类法", "中国的首都是哪里") is False
+
+    def test_a_query_without_usable_tokens_keeps_everything(self):
+        """拆不出词就别过滤，宁可多给几条也别把结果清空。"""
+        assert WebSearch._title_matches_query("随便什么", "！？") is True
+
+
+class TestProviderOrderMatchesReality:
+    """顺序是按实测排的，不是按名气。留个测试免得以后被「改回常识顺序」。"""
+
+    def test_bing_is_first(self):
+        """换到住宅出口后，Bing 是唯一又稳又相关的源。"""
+        assert WebSearch.PROVIDERS[0] == "bing"
+
+    def test_bing_uses_the_cn_endpoint(self):
+        """必须用 cn.bing.com：www.bing.com 会跟随出口国家返回当地语言
+        （实测韩国出口返回整页韩语），而加 mkt/cc 参数反而让它返回 0 条。"""
+        assert WebSearch.BING_URL == "https://cn.bing.com/search"
+
+    def test_wikipedia_is_not_first(self):
+        """它的全文搜索太松，排前面会用「杜威十进分类法」占掉名额。"""
+        assert WebSearch.PROVIDERS.index("wikipedia") > 0
