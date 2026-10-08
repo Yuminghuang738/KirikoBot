@@ -143,7 +143,7 @@ KirikoBot/
 ├── Dockerfile             # Docker 镜像构建
 ├── docker-compose.yml     # Docker Compose 配置
 ├── stickers/              # 机器人表情包素材
-├── carside_picture/       # 汽车侧面图素材
+├── carside_picture/       # 塔罗牌面图素材
 ├── static/
 │   ├── css/app.css        # 面板设计系统（日夜主题）
 │   └── js/app.js          # 面板前端逻辑
