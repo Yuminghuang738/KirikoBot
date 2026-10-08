@@ -178,3 +178,56 @@ class TestMainStaysThin:
         assert "def _build_system_prompt" not in source
         assert "PERSONA = " not in source
         assert "persona" not in source.lower() or "build_role_prompt" in source
+
+
+class TestStickerIsAnExpressionNotAFunction:
+    """表情包必须和「功能类工具」分开讲。
+
+    曾经的提示词把两者混为一谈：
+
+        「普通聊天/打招呼/感谢/简单问答 → 直接回复，不调用任何工具。」
+        「只有当前消息明确要求某功能时才调用对应工具。」
+
+    而表情包**恰恰只在闲聊和搞怪时用** —— 这两句等于把它彻底锁死。实测五条
+    消息（含「草 笑死我了 你这什么鬼表情」这种典型整活）**一次都没触发过**，
+    全部走纯文字。
+
+    这个类锁住那次修复，免得以后有人「精简提示词」时又把它合并回去。
+    """
+
+    def _sticker_section(self) -> str:
+        assert "【表情包】" in PERSONA
+        section = PERSONA[PERSONA.index("【表情包】"):]
+        return section[:section.index("【不要用问句】")]
+
+    def test_the_persona_has_a_sticker_section(self):
+        assert "【表情包】" in PERSONA
+
+    def test_it_says_when_to_send(self):
+        section = self._sticker_section()
+        assert "搞怪" in section and "整活" in section
+
+    def test_serious_questions_must_be_answered_in_words(self):
+        """核心约束：问知识、要结果、求助时必须文字回答，不能拿一张图糊弄。"""
+        section = self._sticker_section()
+        assert "认真问问题" in section
+        assert "老老实实用文字回答" in section
+
+    def test_the_frequency_is_capped(self):
+        section = self._sticker_section()
+        assert "不是每条都发" in section
+
+    def test_the_tool_rule_exempts_stickers(self):
+        """规则里必须写明 sticker 是例外，否则它又会被「闲聊不调工具」锁死。"""
+        assert "sticker 是例外" in build_system_prompt(_Robot())
+
+    def test_the_functional_tools_are_still_fenced(self):
+        """给 sticker 开口子，不能顺手把功能类工具也放开。"""
+        prompt = build_system_prompt(_Robot())
+        assert "只在当前消息明确要求时才调用" in prompt
+        assert "不要为了用工具而用工具" in prompt
+
+    def test_sticker_header_counts_as_a_leak_marker(self):
+        """新章节标题也要进 LEAK_MARKERS，否则复述它不会被拦。"""
+        from prompt_builder import LEAK_MARKERS
+        assert "【表情包】" in LEAK_MARKERS

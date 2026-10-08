@@ -36,25 +36,26 @@ class ProfileService:
         """Check if a user_id is a known bot account."""
         return user_id in Config.BOT_QQ_LIST
 
-    def should_analyze(self, db: Any, user_id: str, group_id: str) -> bool:
-        """Check if user needs profile analysis."""
+    def should_analyze(self, db: Any, user_id: str) -> bool:
+        """Check if user needs profile analysis.
+
+        计数是**跨所有群 + 私聊**的：画像是这个人唯一的一份，所以「攒够消息
+        了没有」也得看他在所有地方一共说了多少。
+        """
         if user_id in self._analyzing:
             return False
         if self._is_bot(user_id):
             return False
-        existing = db.get_user_profile(user_id, group_id)
+        existing = db.get_user_profile(user_id)
         if not existing:
             return True
         # Re-analyze if enough new messages accumulated
-        total = db.fetch_data(
-            "SELECT COUNT(*) FROM group_messages WHERE user_id=? AND group_id=?",
-            (user_id, group_id),
-        )[0][0]
+        total = db.count_user_messages(user_id)
         old_count = existing.get("message_count", 0)
         return (total - old_count) >= self.REANALYZE_GAP
 
     def analyze_user(
-        self, db: Any, user_id: str, group_id: str, user_name: str,
+        self, db: Any, user_id: str, user_name: str, group_id: str = "",
     ) -> dict[str, Any] | None:
         """Analyze a user's messages and save profile. Non-blocking wrapper."""
         if user_id in self._analyzing:
@@ -63,14 +64,15 @@ class ProfileService:
             return None
         self._analyzing.add(user_id)
         try:
-            return self._do_analyze(db, user_id, group_id, user_name)
+            return self._do_analyze(db, user_id, user_name, group_id)
         finally:
             self._analyzing.discard(user_id)
 
     def _do_analyze(
-        self, db: Any, user_id: str, group_id: str, user_name: str,
+        self, db: Any, user_id: str, user_name: str, group_id: str = "",
     ) -> dict[str, Any] | None:
-        messages = db.get_user_messages(user_id, group_id, self.MAX_SAMPLE_MSGS)
+        # 跨群 + 私聊取样，画出来的才是「他这个人」而不是「他在这个群的样子」
+        messages = db.get_user_messages(user_id, self.MAX_SAMPLE_MSGS)
         if len(messages) < self.MIN_MESSAGES:
             logger.info(
                 "User %s has %d messages (<%d), skipping profile",
@@ -83,11 +85,8 @@ class ProfileService:
             f"[{ts}]: {content[:200]}" for content, ts in messages[:self.MAX_SAMPLE_MSGS]
         )
 
-        # Count total messages
-        total_count = db.fetch_data(
-            "SELECT COUNT(*) FROM group_messages WHERE user_id=? AND group_id=?",
-            (user_id, group_id),
-        )[0][0]
+        # Count total messages（跨所有群）
+        total_count = db.count_user_messages(user_id)
 
         result = quick_chat(
             self.SYSTEM_PROMPT,
@@ -112,8 +111,8 @@ class ProfileService:
         # Save to database
         try:
             db.save_user_profile(
-                user_id, group_id, user_name,
-                json.dumps(profile, ensure_ascii=False), total_count,
+                user_id, user_name,
+                json.dumps(profile, ensure_ascii=False), total_count, group_id,
             )
         except Exception:
             logger.exception("Failed to save profile for %s", user_name)
@@ -128,7 +127,11 @@ class ProfileService:
     def build_context_prompt(
         self, db: Any, group_id: str, current_user_id: str,
     ) -> str:
-        """Build a context string about group members for the AI."""
+        """Build a context string about group members for the AI.
+
+        列出的是**在本群露过面的人**，但每个人后面跟的是他的**全局画像**（跨群 +
+        私聊汇总）。换句话说：知道谁在这个屋子，也知道每个人的完整样子。
+        """
         profiles = db.get_group_profiles(group_id)
         if not profiles:
             return ""
@@ -149,7 +152,7 @@ class ProfileService:
                 lines.append(f"  （{pf['note']}）")
             # Long-term memory: a changed impression is worth remembering.
             try:
-                history = db.get_profile_history(p["user_id"], group_id, limit=1)
+                history = db.get_profile_history(p["user_id"], limit=1)
             except Exception:
                 history = []
             if history:

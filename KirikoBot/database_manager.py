@@ -71,45 +71,75 @@ class DatabaseManager:
 
     @staticmethod
     def _migrate_user_profiles(connect: sqlite3.Connection) -> None:
-        """Rebuild user_profiles with a composite (user_id, group_id) key.
+        """把画像收敛成「单一用户单一画像」。
 
-        The original schema was `user_id TEXT NOT NULL UNIQUE` plus a single
-        group_id column, so a user active in several groups could only ever
-        keep ONE profile — it was overwritten each time they spoke elsewhere,
-        and get_group_profiles() silently lost them in the other groups.
+        这里有一段来回改的历史，值得写下来：
 
-        SQLite cannot drop a UNIQUE constraint, so the table is rebuilt. The
-        index is dropped explicitly because renaming a table keeps its indexes
-        attached to the renamed table, which would make the later
-        `CREATE INDEX IF NOT EXISTS` a no-op.
+        最早的 schema 是 `user_id TEXT NOT NULL UNIQUE` + 一个 group_id 列。问题
+        是同一个用户在多个群活动时，画像会被**反复覆盖**——他在 A 群说的话算出来
+        的画像，一在 B 群说话就被 B 群的覆盖掉，于是 get_group_profiles() 在 A 群
+        就查不到他了。
+
+        当时的修法是改成复合键 `(user_id, group_id)`，确实解决了「画像丢失」，
+        但制造了更糟的问题：**同一个人变成了好几份互不相干的画像**，每个群一份，
+        私聊还单独一份 —— 结果「你了解我多少」取决于你在哪儿问他。画像的初衷是
+        全方位了解一个人，多群聊和私聊的消息本来就该汇总成一份。
+
+        这个迁移把每个用户的分散画像合并：**取消息数最多的那份**（它背后的样本
+        最多、描述最有依据），消息数按所有群**求和**（这样重新分析的节奏判断不会
+        失真），落选的那几份写进 profile_history 留档而不是直接丢掉 —— 它们会随
+        统一后的消息历史在下次分析时被重新生成。
         """
-        row = connect.execute(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='user_profiles'"
-        ).fetchone()
-        table_sql = (row[0] or "") if row else ""
-        if "(user_id, group_id)" in table_sql or "UNIQUE(user_id, group_id)" in table_sql:
-            return
+        cols = [r[1] for r in connect.execute("PRAGMA table_info(user_profiles)")]
+        if "group_id" not in cols:
+            return  # 已经是单画像结构
 
-        logger.info("Migrating user_profiles to UNIQUE(user_id, group_id)")
+        logger.info("Migrating user_profiles → 单一用户单一画像 (UNIQUE(user_id))")
+
         connect.execute("ALTER TABLE user_profiles RENAME TO user_profiles_old")
         connect.execute("DROP INDEX IF EXISTS idx_up_user")
+
+        # 落选的画像先留档，别让别的群的观察白丢。
+        # 注意顺序：必须在 RENAME **之后** —— 这里引用的就是 user_profiles_old。
+        try:
+            connect.execute(
+                """INSERT INTO profile_history
+                       (user_id, group_id, profile_json, message_count)
+                   SELECT o.user_id, o.group_id, o.profile_json, o.message_count
+                     FROM user_profiles_old o
+                    WHERE o.id NOT IN (
+                          SELECT id FROM user_profiles_old o2
+                           WHERE o2.user_id = o.user_id
+                           ORDER BY message_count DESC, last_updated DESC LIMIT 1)"""
+            )
+        except sqlite3.Error:
+            logger.debug("落选画像留档失败，继续迁移", exc_info=True)
+
         connect.execute(
             """CREATE TABLE user_profiles(
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id      TEXT NOT NULL,
-                group_id     TEXT NOT NULL,
-                user_name    TEXT NOT NULL,
-                profile_json TEXT NOT NULL DEFAULT '{}',
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id       TEXT NOT NULL UNIQUE,
+                user_name     TEXT NOT NULL,
+                profile_json  TEXT NOT NULL DEFAULT '{}',
                 message_count INTEGER DEFAULT 0,
-                last_updated DATETIME DEFAULT (datetime('now', 'localtime')),
-                UNIQUE(user_id, group_id)
+                last_updated  DATETIME DEFAULT (datetime('now', 'localtime'))
             )"""
         )
         connect.execute(
             """INSERT OR IGNORE INTO user_profiles
-                   (user_id, group_id, user_name, profile_json, message_count, last_updated)
-               SELECT user_id, group_id, user_name, profile_json, message_count, last_updated
-               FROM user_profiles_old"""
+                   (user_id, user_name, profile_json, message_count, last_updated)
+               SELECT o.user_id,
+                      o.user_name,
+                      o.profile_json,
+                      (SELECT SUM(message_count) FROM user_profiles_old
+                        WHERE user_id = o.user_id),
+                      (SELECT MAX(last_updated) FROM user_profiles_old
+                        WHERE user_id = o.user_id)
+                 FROM user_profiles_old o
+                WHERE o.id = (SELECT id FROM user_profiles_old
+                               WHERE user_id = o.user_id
+                               ORDER BY message_count DESC, last_updated DESC
+                               LIMIT 1)"""
         )
         connect.execute("DROP TABLE user_profiles_old")
         logger.info("user_profiles migration done")
@@ -292,13 +322,11 @@ class DatabaseManager:
                 connect.execute(
                     """CREATE TABLE IF NOT EXISTS user_profiles(
                         id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                        user_id      TEXT NOT NULL,
-                        group_id     TEXT NOT NULL,
+                        user_id      TEXT NOT NULL UNIQUE,
                         user_name    TEXT NOT NULL,
                         profile_json TEXT NOT NULL DEFAULT '{}',
                         message_count INTEGER DEFAULT 0,
-                        last_updated DATETIME DEFAULT (datetime('now', 'localtime')),
-                        UNIQUE(user_id, group_id)
+                        last_updated DATETIME DEFAULT (datetime('now', 'localtime'))
                     )"""
                 )
                 self._migrate_user_profiles(connect)
@@ -462,7 +490,7 @@ class DatabaseManager:
                     "CREATE INDEX IF NOT EXISTS idx_gm_user ON group_messages(user_id, group_id)"
                 )
                 connect.execute(
-                    "CREATE INDEX IF NOT EXISTS idx_up_user ON user_profiles(user_id, group_id)"
+                    "CREATE INDEX IF NOT EXISTS idx_up_user ON user_profiles(user_id)"
                 )
                 connect.execute(
                     "CREATE INDEX IF NOT EXISTS idx_ua_user ON user_affection(user_id, group_id)"
@@ -589,13 +617,25 @@ class DatabaseManager:
         )
 
     def get_user_messages(
-        self, user_id: str, group_id: str, limit: int = 50,
+        self, user_id: str, limit: int = 50,
     ) -> list[tuple[Any, ...]]:
+        """这个用户说过的话 —— **跨所有群 + 私聊**。
+
+        画像是全局一份，所以取样也必须跨群：只在当前群取样会让画像变成「他在这个
+        群的样子」，而不是「他这个人」。
+        """
         return self.fetch_data(
             "SELECT content, timestamp FROM group_messages "
-            "WHERE user_id = ? AND group_id = ? ORDER BY id DESC LIMIT ?",
-            (user_id, group_id, limit),
+            "WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+            (user_id, limit),
         )
+
+    def count_user_messages(self, user_id: str) -> int:
+        """这个用户一共说过多少话（跨所有群 + 私聊）。"""
+        rows = self.fetch_data(
+            "SELECT COUNT(*) FROM group_messages WHERE user_id = ?", (user_id,)
+        )
+        return rows[0][0] if rows else 0
 
     def get_recent_group_messages(
         self, group_id: str, limit: int = 100,
@@ -1216,15 +1256,18 @@ class DatabaseManager:
             (today, group_id, topic),
         )
 
-    def get_profile_history(self, user_id: str, group_id: str,
-                            limit: int = 3) -> list[dict[str, Any]]:
-        """Earlier profile snapshots, newest first."""
+    def get_profile_history(self, user_id: str, limit: int = 3) -> list[dict[str, Any]]:
+        """Earlier profile snapshots, newest first.
+
+        画像是全局一份，所以历史也按 user_id 取 —— 不再按群过滤（group_id 列
+        保留只是为了记录那条快照是从哪个群来的）。
+        """
         limit = self._clamp_int(limit, 3, 1, 10)
         try:
             rows = self.fetch_data(
                 "SELECT profile_json, message_count, recorded_at FROM profile_history "
-                "WHERE user_id = ? AND group_id = ? ORDER BY id DESC LIMIT ?",
-                (user_id, group_id, limit),
+                "WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+                (user_id, limit),
             )
         except sqlite3.Error:
             return []
@@ -1651,48 +1694,49 @@ class DatabaseManager:
     # ── User profiles ──────────────────────────────────
 
     def save_user_profile(
-        self, user_id: str, group_id: str, user_name: str,
-        profile_json: str, message_count: int,
+        self, user_id: str, user_name: str,
+        profile_json: str, message_count: int, group_id: str = "",
     ) -> None:
-        # Use the latest user_name from group_messages if available
-        latest = self.get_latest_user_name(user_id, group_id)
+        """保存这个用户**唯一**的那份画像。
+
+        `group_id` 只写进历史快照（记录上一次的印象是从哪个群来的），画像本身
+        不再按群区分 —— 同一个人在哪个群、私聊里说的话，都汇总到同一份。
+        """
+        # Use the latest user_name from group_messages if available（全局最新昵称）
+        latest = self.get_latest_user_name(user_id)
         effective_name = latest or user_name
         # Long-term memory: keep what we believed before, so the bot can say
         # "you mentioned X before" instead of only knowing the latest snapshot.
         try:
             previous = self.fetch_data(
-                "SELECT profile_json FROM user_profiles WHERE user_id = ? AND group_id = ?",
-                (user_id, group_id),
+                "SELECT profile_json FROM user_profiles WHERE user_id = ?",
+                (user_id,),
             )
             if previous and previous[0][0] and previous[0][0] != profile_json:
                 self.execute_action(
                     "INSERT INTO profile_history (user_id, group_id, profile_json, message_count) "
                     "VALUES (?, ?, ?, ?)",
-                    (user_id, group_id, previous[0][0], message_count),
+                    (user_id, group_id or "", previous[0][0], message_count),
                 )
         except sqlite3.Error:
             logger.debug("profile history snapshot failed", exc_info=True)
 
         self.execute_action(
-            "INSERT INTO user_profiles (user_id, group_id, user_name, profile_json, message_count, last_updated) "
-            "VALUES (?, ?, ?, ?, ?, datetime('now', 'localtime')) "
-            "ON CONFLICT(user_id, group_id) DO UPDATE SET "
+            "INSERT INTO user_profiles (user_id, user_name, profile_json, message_count, last_updated) "
+            "VALUES (?, ?, ?, ?, datetime('now', 'localtime')) "
+            "ON CONFLICT(user_id) DO UPDATE SET "
             "user_name=excluded.user_name, profile_json=excluded.profile_json, "
             "message_count=excluded.message_count, last_updated=datetime('now', 'localtime')",
-            (user_id, group_id, effective_name, profile_json, message_count),
+            (user_id, effective_name, profile_json, message_count),
         )
 
-    def get_user_profile(self, user_id: str, group_id: str | None = None) -> dict[str, Any] | None:
-        """Profile for a user — scoped to a group when one is given.
-
-        Profiles are per (user, group); omitting group_id falls back to the
-        most recently updated one for backwards compatibility.
-        """
-        cols = "SELECT profile_json, user_name, message_count, last_updated, group_id FROM user_profiles WHERE user_id = ?"
-        if group_id:
-            rows = self.fetch_data(cols + " AND group_id = ?", (user_id, group_id))
-        else:
-            rows = self.fetch_data(cols + " ORDER BY last_updated DESC LIMIT 1", (user_id,))
+    def get_user_profile(self, user_id: str) -> dict[str, Any] | None:
+        """这个用户的画像 —— 全局唯一一份，不按群区分。"""
+        rows = self.fetch_data(
+            "SELECT profile_json, user_name, message_count, last_updated "
+            "FROM user_profiles WHERE user_id = ?",
+            (user_id,),
+        )
         if not rows:
             return None
         import json
@@ -1701,7 +1745,7 @@ class DatabaseManager:
         except (json.JSONDecodeError, TypeError):
             profile = {}
         # Resolve current user name from group_messages (handles nick changes)
-        latest_name = self.get_latest_user_name(user_id, rows[0][4])
+        latest_name = self.get_latest_user_name(user_id)
         return {
             "profile": profile,
             "user_name": latest_name or rows[0][1],
@@ -1982,18 +2026,18 @@ class DatabaseManager:
 
     def get_all_profiles(self) -> list[dict[str, Any]]:
         rows = self.fetch_data(
-            "SELECT user_id, group_id, user_name, profile_json, message_count, last_updated FROM user_profiles ORDER BY message_count DESC"
+            "SELECT user_id, user_name, profile_json, message_count, last_updated FROM user_profiles ORDER BY message_count DESC"
         )
         import json
         result = []
         for r in rows:
             try:
-                p = json.loads(r[3])
+                p = json.loads(r[2])
             except (json.JSONDecodeError, TypeError):
                 p = {}
             result.append({
-                "user_id": r[0], "group_id": r[1], "user_name": r[2],
-                "profile": p, "msg_count": r[4], "updated": r[5],
+                "user_id": r[0], "user_name": r[1],
+                "profile": p, "msg_count": r[3], "updated": r[4],
             })
         return result
 
@@ -2037,9 +2081,22 @@ class DatabaseManager:
         )
 
     def get_group_profiles(self, group_id: str) -> list[dict[str, Any]]:
+        """本群成员的画像 —— **内容是那个人的全局统一画像**。
+
+        `group_id` 在这里只决定「谁在这个群露过面」，不再决定「用哪一份画像」。
+        所以同一个人在别的群说过的话、在私聊里说过的话，都会体现在他在这里呈现
+        出来的印象里 —— 那正是画像该有的样子：了解的是这个人，不是「这个人在本
+        群的样子」。
+
+        排序仍按**本群**的发言量，因为「群里这些人」的轻重缓急取决于他在这个群
+        有多活跃；`message_count` 返回的也是本群条数。
+        """
         rows = self.fetch_data(
-            "SELECT user_id, user_name, profile_json, message_count FROM user_profiles "
-            "WHERE group_id = ? ORDER BY message_count DESC LIMIT 20",
+            "SELECT m.user_id, p.user_name, p.profile_json, m.cnt "
+            "FROM (SELECT user_id, COUNT(*) AS cnt FROM group_messages "
+            "       WHERE group_id = ? GROUP BY user_id) m "
+            "JOIN user_profiles p ON p.user_id = m.user_id "
+            "ORDER BY m.cnt DESC LIMIT 20",
             (group_id,),
         )
         import json
@@ -2050,7 +2107,7 @@ class DatabaseManager:
             except (json.JSONDecodeError, TypeError):
                 p = {}
             # Resolve current user name from group_messages (handles nick changes)
-            latest_name = self.get_latest_user_name(user_id, group_id)
+            latest_name = self.get_latest_user_name(user_id)
             profiles.append({
                 "user_id": user_id,
                 "user_name": latest_name or user_name,
@@ -2084,11 +2141,40 @@ class DatabaseManager:
         ("history", "对话记录"),
         ("reminders", "提醒"),
         ("tool_usage", "工具调用"),
-        ("user_profiles", "用户画像"),
         ("user_affection", "好感度"),
         ("user_affection_log", "好感度流水"),
         ("feature_requests", "功能需求"),
     )
+    # 注意 user_profiles 不在上面：画像是**全局一份**，不再挂在某个群下。
+    # 直接按群删会连带抹掉他在别的群和私聊里积累的印象。只在这个群说过话的
+    # 人，删完之后画像成了无源之水，由 _orphaned_profiles 单独收拾。
+
+    def _would_orphan_profiles(self, gid: str, users: list[str]) -> list[str]:
+        """删掉本群消息后，画像会失去全部依据的用户（删除前预览用）。"""
+        out = []
+        for uid in users:
+            try:
+                total = self.count_user_messages(uid)
+                here = self.fetch_data(
+                    "SELECT COUNT(*) FROM group_messages WHERE user_id = ? AND group_id = ?",
+                    (uid, gid),
+                )[0][0]
+            except (sqlite3.Error, IndexError):
+                continue
+            if total and total == here:
+                out.append(uid)
+        return out
+
+    def _orphaned_profiles(self, users: list[str]) -> list[str]:
+        """这些用户里已经一条消息都不剩的（删除后收拾用）。"""
+        out = []
+        for uid in users:
+            try:
+                if not self.count_user_messages(uid):
+                    out.append(uid)
+            except (sqlite3.Error, IndexError):
+                continue
+        return out
 
     def _group_user_ids(self, group_id: str) -> list[str]:
         """Distinct users that ever spoke in this group."""
@@ -2126,6 +2212,8 @@ class DatabaseManager:
 
         users = self._group_user_ids(gid)
         counts["users"] = len(users)
+        # 画像不再按群删，只清掉「删完就没依据了」的那些人
+        counts["user_profiles"] = len(self._would_orphan_profiles(gid, users))
         counts["learning_log"] = 0
         counts["user_settings"] = 0
         if users:
@@ -2176,6 +2264,20 @@ class DatabaseManager:
             )
         except sqlite3.Error:
             logger.exception("purge_group: failed to clear group feature settings")
+
+        # 画像跟着「人」走，不跟着群走 —— 但删完本群消息后一条依据都不剩的人，
+        # 画像要一起清掉（否则就是拿已删数据留着他的画像）。
+        orphans = self._orphaned_profiles(users)
+        if orphans:
+            marks = ",".join("?" * len(orphans))
+            try:
+                self.execute_action(
+                    f"DELETE FROM user_profiles WHERE user_id IN ({marks})",
+                    tuple(orphans),
+                )
+                deleted["user_profiles"] = len(orphans)
+            except sqlite3.Error:
+                logger.exception("purge_group: failed to clear orphaned profiles")
 
         if users:
             marks = ",".join("?" * len(users))
