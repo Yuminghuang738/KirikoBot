@@ -16,24 +16,26 @@ logger = logging.getLogger(__name__)
 class WebSearch:
     """DeepSeek-style RAG search: search → fetch page content → feed to AI."""
 
-    # 先用谁、后用谁。
+    # 先用谁、后用谁。这个顺序是**按实测结果**排的，不是按名气。
     #
-    # **维基百科排第一**，这是被现实逼出来的：本机出口是机房 IP
-    # （AWS 54.238.142.156），scraping 系的引擎对它要么直接拦（DDG 返回 202 +
-    # CAPTCHA），要么**喂随机垃圾**——实测同一个「什么是 Docker」连查三次，
-    # Bing 依次给出 `MAC Address Vendor Lookup`、`中电科技（南京）电子信息发展
-    # 有限公司`，360 则三次全空。垃圾结果「非空」，所以只要排在前面就会把回退链
-    # 堵死，永远轮不到可靠的源。
+    # Bing 排第一：换到住宅出口之后它是唯一又稳又相关的源。但必须用
+    # **cn.bing.com** —— 用 www.bing.com 时，出口在哪个国家就返回哪个国家的
+    # 结果（实测韩国出口返回一整页韩语），加 `mkt=zh-CN`/`cc=CN` 反而会让它
+    # 返回 0 条。cn.bing.com 不受出口位置影响，稳定给中文结果。
     #
-    # 维基百科的 `api.php` 是明确给程序用的，不拦机房 IP，还自带摘要。
-    # 代价是只覆盖百科类内容（概念、事实、人物），所以新闻/天气这类再往
-    # 360 / Bing 兜。
-    PROVIDERS = ("wikipedia", "so360", "bing", "duckduckgo")
+    # 维基百科往后放：它的全文搜索匹配极松，问「IPv6 普及率」会返回
+    # 「杜威十进分类法」（那篇只是文中提了一次 IPv6），而且一旦排在前面就会
+    # 用这种结果把好结果挤出名额。现在加了标题相关性过滤兜着。
+    #
+    # 360 在住宅出口下实测 0 条，DDG 对非住宅 IP 之外的很多段也仍会扔
+    # CAPTCHA，两者都只作兜底。
+    PROVIDERS = ("bing", "so360", "wikipedia", "duckduckgo")
+
+    BING_URL = "https://cn.bing.com/search"
 
     WIKI_APIS = ("https://zh.wikipedia.org/w/api.php",
                  "https://en.wikipedia.org/w/api.php")
 
-    BING_URL = "https://www.bing.com/search"
     SO360_URL = "https://www.so.com/s"
     DDG_URL = "https://lite.duckduckgo.com/lite/"
 
@@ -98,12 +100,40 @@ class WebSearch:
 
         return "\n\n---\n\n".join(pages_text)
 
+    @staticmethod
+    def _query_tokens(query: str) -> tuple[list[str], list[str]]:
+        """把查询拆成「值得用来判断相关性的词」。
+
+        返回 (ASCII 词, 中文二字组)。中文没法像英文那样按空格切词，用二字组
+        近似：只要标题里出现查询的任意一个二字组，就认为沾边。
+        """
+        ascii_words = [w.lower() for w in re.findall(r"[A-Za-z0-9][A-Za-z0-9._+-]+", query)]
+        bigrams: list[str] = []
+        for run in re.findall(r"[\u4e00-\u9fff]{2,}", query):
+            bigrams.extend(run[i:i + 2] for i in range(len(run) - 1))
+        return ascii_words, bigrams
+
+    @classmethod
+    def _title_matches_query(cls, title: str, query: str) -> bool:
+        """标题是否真的和查询沾边。
+
+        维基百科的全文搜索匹配非常松：问「IPv6 普及率 2026 最新」，它会把
+        「杜威十进分类法」排在第一位 —— 那篇只是正文里提过一次 IPv6。这种
+        结果排在前面会占掉名额，把真正相关的挤出去，所以按**标题**过滤一道。
+        """
+        ascii_words, bigrams = cls._query_tokens(query)
+        if not ascii_words and not bigrams:
+            return True
+        low = title.lower()
+        return (any(w in low for w in ascii_words)
+                or any(b in title for b in bigrams))
+
     def _search_wikipedia(self, query: str) -> tuple[list[dict[str, str]], bool]:
         """维基百科的搜索 API（先中文，没命中再英文）。
 
-        这是唯一一个**不因机房 IP 而失效**的来源：它是官方给程序用的接口，
-        不会扔 CAPTCHA 也不喂垃圾结果。返回体里自带摘要，所以即使正文抓不到
-        也有内容可用。
+        它是官方给程序用的接口，不会扔 CAPTCHA 也不喂垃圾结果，而且返回体里
+        自带摘要 —— 但**全文搜索的排序很松**，所以结果要过一道标题相关性过滤
+        （见 `_title_matches_query`）。
         """
         for api in self.WIKI_APIS:
             try:
@@ -120,7 +150,7 @@ class WebSearch:
             results: list[dict[str, str]] = []
             for hit in (data.get("query", {}).get("search") or []):
                 title = (hit.get("title") or "").strip()
-                if not title:
+                if not title or not self._title_matches_query(title, query):
                     continue
                 snippet = re.sub(r"<[^>]+>", "", hit.get("snippet") or "").strip()
                 results.append({
