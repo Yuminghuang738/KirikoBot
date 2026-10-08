@@ -680,10 +680,10 @@ def _trigger_profile_update(robot: RobotServer, disabled: set[str] | None = None
     if disabled and "profiles" in disabled:
         return
     try:
-        if profile_service.should_analyze(db, robot.user_id, robot.group_id):
+        if profile_service.should_analyze(db, robot.user_id):
             executor.submit(
                 profile_service.analyze_user,
-                db, robot.user_id, robot.group_id, robot.user_name,
+                db, robot.user_id, robot.user_name, robot.group_id,
             )
     except Exception:
         logger.debug("main._trigger_profile_update 忽略了异常", exc_info=True)
