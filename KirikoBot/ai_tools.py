@@ -259,7 +259,13 @@ class WebSearchTool:
             return
 
         if not content:
-            robot.reply("抱歉，没有搜索到相关内容呢～换个关键词试试吧 (｡•́︿•̀｡)")
+            # 「被反爬拦了」和「真没搜到」是两件事。以前一律说「没有搜索到相关
+            # 内容」，于是搜索引擎把这边限流时，用户看到的是「搜不到」，会一直
+            # 换关键词重试 —— 而问题其实出在出口 IP 上，换词没用。
+            if getattr(self.web_search, "last_reason", "") == "blocked":
+                robot.reply("搜索引擎把我这边限流了，过一会儿再试试吧～")
+            else:
+                robot.reply("抱歉，没有搜索到相关内容呢～换个关键词试试吧 (｡•́︿•̀｡)")
             return
 
         # Feed search results to AI for synthesis
