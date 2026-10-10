@@ -75,7 +75,11 @@ class TestPersonaIsPresentAndWhole:
         fix): a longer persona costs almost nothing per message, but it still
         should not balloon silently.
         """
-        assert len(PERSONA) < 4200, "persona has grown too costly to send"
+        # 2026-10 从 4200 提到 4800：那轮补齐了年龄、乐器、游戏、番剧、小动物，
+        # 内容本身是有用的，但把余量压到了 200 字符以内 —— 以后再补任何设定都会
+        # 立刻超。提到 4800 是为了留出余量，不是允许它无限膨胀：加东西之前先
+        # 想清楚，别让这条测试变成"每次超了就再抬一次"。
+        assert len(PERSONA) < 4800, "persona has grown too costly to send"
 
 
 class TestLeakDetection:
@@ -222,3 +226,68 @@ class TestToneAndNoQuestions:
         section = self._section("【禁止的 AI 腔】", "【什么时候必须收起脾气】")
         for banned in ("作为一个AI", "希望对你有帮助", "总的来说", "加注脚"):
             assert banned in section, f"missing banned phrase: {banned}"
+
+
+class TestTheEnrichedBackground:
+    """2026-10 补齐的人设：年龄、乐器、游戏、番剧、小动物。
+
+    这批信息量很大（3 个乐队 + 2 把琴 + 7 个游戏 + 4 部番 + 2 个猫狗品种），
+    风险也集中在这里，两个都写进提示词了，这个类负责钉住：
+
+    ① **"游戏高手"会跟人设底色打架** —— 底色是「可爱、软、脾气很好／不跟人
+       较劲／被夸先否认」。高手设定很容易让模型变得爱炫技、看不起人，正好把
+       刚调好的讨喜感毁掉。所以写的是"有真本事但生活上照样迷糊"，并且明确
+       不许拿游戏水平炫技。
+    ② **模型会"报菜名"** —— 爱好一多，它就会一有机会把知道的全都倒出来，
+       那正是【别演过头】要防的"像在做自我介绍"。
+    """
+
+    def test_age_matches_a_third_year_student(self):
+        """18 岁读大三本来就不合理，改成 20 岁。"""
+        assert "20 岁" in PERSONA
+        assert "18 岁" not in PERSONA
+
+    def test_the_hobbies_section_exists(self):
+        assert "【你的爱好】" in PERSONA
+
+    def test_instruments_and_gear(self):
+        for item in ("Pink Floyd", "Nirvana", "Green Day",
+                     "电吉他弹了三年", "日芬", "Epiphone 黑卡", "Jazz III"):
+            assert item in PERSONA, f"missing: {item}"
+
+    def test_games(self):
+        for item in ("彩虹六号", "Apex", "CS", "s1mple",
+                     "怪物猎人", "使命召唤", "战地", "黑暗之魂"):
+            assert item in PERSONA, f"missing: {item}"
+
+    def test_linear_over_open_world(self):
+        """开放世界像罐头是个明确的个人观点，属于【要有自己的立场】那一类。"""
+        assert "开放世界不太感冒" in PERSONA
+
+    def test_anime(self):
+        for item in ("轻音少女", "孤独摇滚", "BanG Dream", "GBC"):
+            assert item in PERSONA, f"missing: {item}"
+
+    def test_animals(self):
+        for item in ("美短", "柴犬"):
+            assert item in PERSONA, f"missing: {item}"
+
+    def test_being_good_at_games_does_not_license_bragging(self):
+        """核心约束：高手设定不能推翻「可爱、软、不较劲」的底色。"""
+        assert "不许拿游戏水平炫技" in PERSONA
+        assert "生活上照样迷糊" in PERSONA
+
+    def test_reciting_hobbies_is_forbidden(self):
+        """「别报菜名」是这批爱好里最需要的一条硬规则。"""
+        assert "别报菜名" in PERSONA
+        assert "不是名片" in PERSONA
+
+    def test_the_hobbies_header_counts_as_a_leak_marker(self):
+        from prompt_builder import LEAK_MARKERS
+
+        assert "【你的爱好】" in LEAK_MARKERS
+
+    def test_the_plain_hobby_summary_moved_out_of_life_section(self):
+        """爱好细节挪进了【你的爱好】，【你的生活】不再重复一份，否则两处会打架。"""
+        life = PERSONA[PERSONA.index("【你的生活】"):PERSONA.index("【你的性格】")]
+        assert "听歌口味很杂" not in life
