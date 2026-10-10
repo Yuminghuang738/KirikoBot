@@ -545,54 +545,6 @@ class AiServer:
                                        max_tokens=500, temperature=0.85)
 
     @staticmethod
-    def vision_sticker_battle(
-        image_url_or_path: str,
-        role_prompt: str = "",
-        user_name: str = "",
-        round_num: int = 1,
-    ) -> dict | None:
-        """Vision API for sticker battle: rate opponent's sticker + generate counter-attack.
-
-        Returns dict: {score: int, comment: str, comeback: str} or None on failure.
-        score: 1-10 rating of the sticker's quality/humor/impact
-        comment: short witty remark about the sticker (≤10 chars)
-        comeback: Kiriko's counter-attack line (≤20 chars, cute/funny style)
-        """
-        parts: list[str] = []
-        if role_prompt:
-            parts.append(role_prompt)
-        parts.append(f"【斗图模式 第{round_num}回合】")
-        parts.append(f"用户 {user_name} 发了一张斗图表情包。")
-        parts.append(
-            "请做两件事：\n"
-            "1. 给这张表情包打分（1-10分），简短点评（10字以内）\n"
-            "2. 用Kiriko的风格给出反击回复（20字以内），可爱但有战斗力，可以带颜文字\n\n"
-            "以JSON格式输出（不要markdown代码块）：\n"
-            '{"score": 7, "comment": "你的点评", "comeback": "你的反击"}'
-        )
-        instruction = "\n".join(parts)
-        result = AiServer.vision_analyze(image_url_or_path, prompt=instruction, response_format="json", max_tokens=400)
-        if not result:
-            return None
-        try:
-            data = json.loads(result)
-        except (json.JSONDecodeError, ValueError):
-            # Try stripping markdown fences
-            cleaned = result.strip()
-            if cleaned.startswith("```"):
-                cleaned = cleaned.split("\n", 1)[-1].rsplit("\n", 1)[0]
-            try:
-                data = json.loads(cleaned)
-            except (json.JSONDecodeError, ValueError):
-                logger.warning("Battle vision returned non-JSON: %s", result[:100])
-                return None
-        return {
-            "score": max(0, min(10, int(data.get("score", 5)))),
-            "comment": str(data.get("comment", "") or "")[:20],
-            "comeback": str(data.get("comeback", "") or "")[:20],
-        }
-
-    @staticmethod
     def _format_for_qq(text: str) -> str:
         """Convert markdown to QQ-friendly plain text."""
         # Convert markdown to HTML then strip tags

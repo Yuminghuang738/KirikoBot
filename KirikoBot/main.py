@@ -18,14 +18,13 @@ from ai_server import AiServer
 from ai_tools import (
     Tarot, Tarot_History, GamingNews,
     WebSearchTool, WeatherTool, StickerTool,
-    HitokotoTool, FoodPickerTool, DiceTool, BilibiliTool,
+    HitokotoTool, BilibiliTool,
     AtMemberTool, ReminderTool, TimeTool, PoliticalNewsTool,
-    BalanceTool, FeatureRequestTool, MusicTool,
+    BalanceTool, MusicTool,
     ListRemindersTool, DeleteReminderTool,
-    StickerBattleTool, BATTLE_DEFAULT_ROUNDS,
     AffectionTool, AffectionLeaderboardTool,
     RecallMessageTool, GroupStatsTool, ReadContextTool,
-    FeatureListTool, ExplainSelfTool, SimilarStickerTool, VoiceTool,
+    ExplainSelfTool, VoiceTool,
 )
 from affection_service import AffectionService
 from balance_service import BalanceService
@@ -95,7 +94,6 @@ app.register_blueprint(llbot_bp)
 dashboard_auth.init_app(app)
 
 # ── Sticker battle state (must be before services that reference it) ──
-_battle_state: dict[str, dict] = {}  # "user_id:group_id" → battle info
 _battle_lock = threading.Lock()
 BATTLE_TIMEOUT = 60  # seconds before battle auto-ends
 
@@ -114,12 +112,9 @@ web_search = WebSearch()
 web_search_tool = WebSearchTool(web_search, pkg)
 weather_tool = WeatherTool(WeatherService(), pkg)
 sticker_tool = StickerTool(pkg)
-sticker_battle_tool = StickerBattleTool(pkg, llbot, sticker_tool, _battle_state)
 hitokoto_service = HitokotoService()
 amp_head_crawler = AmpHeadCrawler(db)
 hitokoto_tool = HitokotoTool(hitokoto_service, pkg)
-food_picker_tool = FoodPickerTool(pkg)
-dice_tool = DiceTool(pkg)
 bilibili_tool = BilibiliTool(BilibiliTrending(), pkg)
 at_member_tool = AtMemberTool(pkg, db, llbot)
 reminder_tool = ReminderTool(db, pkg)
@@ -130,7 +125,6 @@ political_news_scraper = PoliticalNewsScraper()
 political_news_tool = PoliticalNewsTool(political_news_scraper, pkg)
 balance_service = BalanceService()
 balance_tool = BalanceTool(balance_service, pkg)
-feature_request_tool = FeatureRequestTool(db, pkg)
 music_service = MusicService()
 music_tool = MusicTool(music_service, pkg)
 hot_news_scraper = HotNewsScraper()
@@ -148,10 +142,8 @@ affection_leaderboard_tool = AffectionLeaderboardTool(pkg, db)
 recall_tool = RecallMessageTool(db, llbot)
 group_stats_tool = GroupStatsTool(db, pkg)
 read_context_tool = ReadContextTool(db, pkg)
-feature_list_tool = FeatureListTool(db, pkg)
 explain_self_tool = ExplainSelfTool(db, pkg)
 voice_tool = VoiceTool(db, pkg, llbot)
-similar_sticker_tool = SimilarStickerTool(sticker_collector, pkg)
 
 # Persist the bot's own outgoing messages so transcripts are complete and
 # "recall the last thing I said" works across restarts.
@@ -182,57 +174,34 @@ sticker_collector.set_executor(executor)
 _seeded_groups: set[str] = set()
 _start_time = time.time()
 
-# ── Sticker understanding state ─────────────────────────
-_sticker_pending: dict[str, float] = {}  # "user_id:group_id" → timestamp
-_sticker_pending_lock = threading.Lock()
-STICKER_REQUEST_TIMEOUT = 30  # seconds
-
-def _request_sticker_call(robot: Any, ai: Any) -> None:
-    """request_sticker tool: arm the 2-step image flow.
-    Only registers pending state — the natural-language invite is written by the
-    AI follow-up turn (this tool is NOT in SELF_CONTAINED_TOOLS)."""
-    pending_key = f"{robot.user_id}:{robot.group_id or 'private'}"
-    with _sticker_pending_lock:
-        _sticker_pending[pending_key] = time.time()
-    ai.tool_result_text = (
-        "已进入等待图片状态（30秒内有效）。请用 Kiriko 的语气友好地请用户把图片/表情包发过来，"
-        "一句话即可（可带颜文字），不要编造图片内容。"
-    )
-    logger.info("🎯 Sticker flow: request_sticker armed for %s", robot.user_name)
-
 # ── Tool routing ────────────────────────────────────────
 ROUTES = {
     "tarot": tarot.tarot_call, "tarot_history": tarot_history.tarot_history_call,
     "gaming_news": gaming_news.gaming_news_call, "web_search": web_search_tool.web_search_call,
     "weather": weather_tool.weather_call, "sticker": sticker_tool.sticker_call,
-    "request_sticker": _request_sticker_call,
-    "hitokoto": hitokoto_tool.hitokoto_call, "food_picker": food_picker_tool.food_picker_call,
-    "dice": dice_tool.dice_call, "bilibili_trending": bilibili_tool.bilibili_call,
+    "hitokoto": hitokoto_tool.hitokoto_call,
+    "bilibili_trending": bilibili_tool.bilibili_call,
     "at_member": at_member_tool.at_member_call, "set_reminder": reminder_tool.set_reminder_call,
     "list_reminders": list_reminders_tool.list_reminders_call,
     "delete_reminder": delete_reminder_tool.delete_reminder_call,
     "get_current_time": time_tool.get_current_time_call,
     "political_news": political_news_tool.political_news_call,
     "check_balance": balance_tool.balance_call,
-    "submit_feature": feature_request_tool.feature_request_call,
     "music_search": music_tool.music_search_call,
-    "sticker_battle": sticker_battle_tool.sticker_battle_call,
     "check_affection": affection_tool.check_affection_call,
     "affection_leaderboard": affection_leaderboard_tool.affection_leaderboard_call,
     "recall_message": recall_tool.recall_message_call,
     "group_stats": group_stats_tool.group_stats_call,
     "read_context": read_context_tool.read_context_call,
-    "feature_list": feature_list_tool.feature_list_call,
     "explain_self": explain_self_tool.explain_self_call,
     "send_voice": voice_tool.voice_call,
-    "similar_sticker": similar_sticker_tool.similar_sticker_call,
 }
 
 # Self-contained tools format and send their own reply — no AI follow-up needed
 SELF_CONTAINED_TOOLS = {
     "tarot", "sticker", "web_search", "at_member",
     "political_news", "gaming_news", "bilibili_trending",
-    "hitokoto", "tarot_history", "music_search", "sticker_battle",
+    "hitokoto", "tarot_history", "music_search",
     # explain_self sends the raw debug dump itself; a follow-up turn would only
     # add the model's paraphrase on top of the text we want verbatim.
     "explain_self",
@@ -501,174 +470,6 @@ def _background_sticker_categorize(image_url: str) -> None:
         logger.debug("main._background_sticker_categorize 忽略了异常", exc_info=True)
 
 
-# ── Sticker battle handlers ──────────────────────────
-
-def _process_battle_round(robot: RobotServer, battle_key: str, battle: dict, image_url: str) -> None:
-    """Process one round of sticker battle.
-
-    Uses vision API to score the user's sticker, then either ends the battle
-    (last round — declare winner) or sends a counter-sticker with witty comeback.
-    """
-    try:
-        round_num = battle["round"]
-        max_rounds = battle["max_rounds"]
-        is_last = round_num >= max_rounds
-
-        # Call vision API to rate + generate comeback
-        role = Config.GROUP_ROLE if robot.msg_type == "group" else Config.PRIVATE_ROLE
-        battle_result = AiServer.vision_sticker_battle(
-            image_url_or_path=image_url,
-            role_prompt=role or "",
-            user_name=robot.user_name,
-            round_num=round_num,
-        )
-
-        score = battle_result["score"] if battle_result else 5
-        comment = (battle_result.get("comment", "") or "") if battle_result else ""
-        comeback = (battle_result.get("comeback", "") or "哼！看我的！") if battle_result else "哼！看我的！"
-
-        # Send evaluation of user's sticker
-        eval_parts = [f"第{round_num}轮：你的表情包得分 {score}/10！"]
-        if comment:
-            eval_parts.append(comment)
-        robot.reply("\n".join(eval_parts))
-
-        # Accumulate score
-        battle["total_score"] = battle.get("total_score", 0) + score
-
-        if is_last:
-            # ── Battle over — declare winner ──
-            total_score = battle["total_score"]
-            max_possible = max_rounds * 10
-            if total_score > max_rounds * 5:
-                winner_line = "你赢了！Kiriko甘拜下风～下次再来！(◕‿◕✿)"
-            elif total_score < max_rounds * 5:
-                winner_line = "哈哈哈还是我赢了！下次再来战！(๑•̀ㅂ•́)و✧"
-            else:
-                winner_line = "平局！棋逢对手啊～打得难分难解！"
-
-            summary = (
-                f"斗图结束！你的总得分：{total_score}/{max_possible}\n"
-                f"{winner_line}"
-            )
-            robot.send_text(summary)
-
-            with _battle_lock:
-                if battle_key in _battle_state:
-                    del _battle_state[battle_key]
-            logger.info("Battle ended for %s: score=%d/%d", robot.user_name, total_score, max_possible)
-        else:
-            # ── Bot sends counter-sticker ──
-            import os as _os
-            import random as _r
-            stickerdir = StickerTool.STICKER_DIR
-            chosen: str | None = None
-            try:
-                files = [
-                    f for f in _os.listdir(stickerdir)
-                    if f.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp"))
-                    and f not in battle.get("used_stickers", [])
-                ]
-                if files:
-                    chosen = _r.choice(files)
-                else:
-                    # All stickers used — pick any
-                    all_files = [
-                        f for f in _os.listdir(stickerdir)
-                        if f.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp"))
-                    ]
-                    if all_files:
-                        chosen = _r.choice(all_files)
-                        battle.setdefault("used_stickers", []).clear()
-
-                if chosen:
-                    battle.setdefault("used_stickers", []).append(chosen)
-                    from llbot_client import MessageBuilder
-                    builder = MessageBuilder()
-                    builder.image(f"{stickerdir}/{chosen}")
-                    builder.text(f"\n{comeback}")
-                    if robot.msg_type == "group":
-                        robot.llbot.send_group_msg(robot.group_id or "", builder.build())
-                    else:
-                        robot.llbot.send_private_msg(robot.user_id, builder.build())
-            except Exception:
-                logger.exception("Failed to send counter-sticker in battle")
-
-            # Advance round and refresh timeout
-            battle["round"] += 1
-            battle["started_at"] = time.time()
-
-    except Exception:
-        logger.exception("Battle round failed for %s", robot.user_name)
-        robot.reply("呜～斗图出了点问题，不过没关系，继续下一张吧！")
-        battle["round"] += 1
-        battle["started_at"] = time.time()
-
-
-def _check_and_handle_battle(robot: RobotServer, battle_key: str, has_images: bool, image_url: str, now: float, disabled: set[str] | None = None) -> bool:
-    """Check if this user has an active battle, and handle the incoming message.
-
-    Returns True if the battle consumed this message (caller should return from main_logic).
-    Returns False if no battle is active for this user.
-    """
-    with _battle_lock:
-        battle = _battle_state.get(battle_key)
-        if not battle or not battle.get("active"):
-            return False
-
-        # Feature gate: sticker battle turned off mid-battle → end it now.
-        # (Battle-round images are internal to sticker_battle and intentionally
-        #  unaffected by the sticker / vision toggles.)
-        if disabled and "sticker_battle" in disabled:
-            del _battle_state[battle_key]
-            robot.reply("本群已关闭斗图功能，本次对战到此结束～(◕‿◕✿)")
-            logger.info("Battle ended for %s: sticker_battle disabled", robot.user_name)
-            return True
-
-        # Check timeout
-        if now - battle.get("started_at", 0) > BATTLE_TIMEOUT:
-            battle["active"] = False
-            del _battle_state[battle_key]
-            robot.reply("斗图超时啦～下次再战吧！(◕‿◕✿)")
-            logger.info("Battle timed out for %s", robot.user_name)
-            return True
-
-    # Battle is active — determine how to handle this message
-    if not has_images:
-        # User sent text instead of image → surrender
-        total = battle.get("total_score", 0)
-        rounds_done = battle["round"] - 1
-        if rounds_done > 0:
-            robot.reply(
-                f"哼！这就认输了吗？坚持了{rounds_done}轮，得分{total}分！\n"
-                "下次再战～(◕‿◕✿)"
-            )
-        else:
-            robot.reply("欸？还没开始就认输了？下次准备好了再来哦～(◕‿◕✿)")
-        with _battle_lock:
-            if battle_key in _battle_state:
-                del _battle_state[battle_key]
-        logger.info("Battle ended by text for %s after %d rounds", robot.user_name, rounds_done)
-        return True
-
-    # User sent an image — process battle round
-    logger.info("Battle round %d for %s", battle["round"], robot.user_name)
-    _process_battle_round(robot, battle_key, battle, image_url)
-    return True
-
-
-def _clean_expired_battles(now: float) -> None:
-    """Remove expired battle states from memory."""
-    with _battle_lock:
-        expired = [
-            k for k, v in _battle_state.items()
-            if now - v.get("started_at", 0) > BATTLE_TIMEOUT
-        ]
-        for k in expired:
-            logger.info("Cleaning expired battle: %s", k)
-            del _battle_state[k]
-
-
 def _trigger_profile_update(robot: RobotServer, disabled: set[str] | None = None) -> None:
     """Check if user needs profile analysis and submit if so."""
     if robot.msg_type != "group" or not robot.group_id:
@@ -736,35 +537,8 @@ def main_logic(robot: RobotServer) -> None:
 
         # ── Sticker understanding flow ────────────────────
         now = time.time()
-        pending_key = f"{robot.user_id}:{robot.group_id or 'private'}"
         has_images = robot.incoming.has_images
         first_image_url = robot.incoming.image_urls[0] if robot.incoming.image_urls else ""
-
-        # Clean expired pending requests
-        with _sticker_pending_lock:
-            expired = [k for k, v in _sticker_pending.items() if now - v > STICKER_REQUEST_TIMEOUT]
-            for k in expired:
-                del _sticker_pending[k]
-
-        # ── Sticker battle check (highest priority) ──────
-        _clean_expired_battles(now)
-        if _check_and_handle_battle(robot, pending_key, has_images, first_image_url, now, disabled):
-            return
-
-        # ── Pending sticker request armed by the request_sticker AI tool ──
-        # Consume ONLY when this message actually carries an image, so an
-        # in-between text message does not silently cancel the request.
-        # Stale entries are removed by the lazy cleanup above (30s timeout).
-        has_pending = False
-        with _sticker_pending_lock:
-            if pending_key in _sticker_pending and has_images and vision_on:
-                has_pending = True
-                del _sticker_pending[pending_key]
-
-        if has_pending:
-            logger.info("🎯 Sticker flow: pending request consumed, analyzing image from %s", robot.user_name)
-            _process_sticker_analysis(robot, first_image_url)
-            return
 
         # ── @bot + image → analyze ──────────────────────
         if robot.at_judgement and robot.msg_type == "group":
@@ -1130,87 +904,6 @@ def api_affection_adjust():
         return jsonify({"ok": False, "error": "数据库更新失败"}), 500
 
 
-@app.route("/api/features")
-def api_features():
-    rows = db.fetch_data(
-        "SELECT id, user_name, request_text, category, priority, status, ai_summary, timestamp "
-        "FROM feature_requests ORDER BY id DESC LIMIT 100"
-    )
-    return jsonify({"features": [
-        {"id": r[0], "user_name": r[1], "request": r[2], "category": r[3],
-         "priority": r[4], "status": r[5], "summary": r[6], "time": r[7]}
-        for r in rows
-    ]})
-
-@app.route("/api/features/<int:feature_id>", methods=["PATCH"])
-def api_features_update(feature_id: int):
-    data = request.get_json(silent=True) or {}
-    allowed_fields = {"status", "priority", "category"}
-    updates = {k: v for k, v in data.items() if k in allowed_fields and v}
-    if not updates:
-        return jsonify({"ok": False, "error": "No valid fields to update"}), 400
-    valid_statuses = {"pending", "done", "rejected"}
-    if "status" in updates and updates["status"] not in valid_statuses:
-        return jsonify({"ok": False, "error": f"Invalid status. Must be one of: {valid_statuses}"}), 400
-    # Check current status before updating (to prevent duplicate changelog entries)
-    old_status = ""
-    if updates.get("status") == "done":
-        old_rows = db.fetch_data(
-            "SELECT status FROM feature_requests WHERE id = ?", (feature_id,)
-        )
-        if old_rows:
-            old_status = old_rows[0][0]
-    set_clause = ", ".join(f"{k} = ?" for k in updates)
-    values = list(updates.values()) + [feature_id]
-    try:
-        db.execute_action(f"UPDATE feature_requests SET {set_clause} WHERE id = ?", tuple(values))
-        # Auto-add changelog entry when a feature is newly marked as done (not re-done)
-        if updates.get("status") == "done" and old_status != "done":
-            fr_rows = db.fetch_data(
-                "SELECT request_text, ai_summary, user_name FROM feature_requests WHERE id = ?",
-                (feature_id,),
-            )
-            if fr_rows:
-                fr_request, fr_summary, fr_user = fr_rows[0]
-                version_manager.auto_changelog_for_feature(fr_request, fr_summary, fr_user)
-        return jsonify({"ok": True, "updated": updates})
-    except Exception:
-        logger.exception("Failed to update feature #%d", feature_id)
-        return jsonify({"ok": False, "error": "Database update failed"}), 500
-
-@app.route("/api/features/<int:feature_id>", methods=["DELETE"])
-def api_features_delete(feature_id: int):
-    try:
-        db.execute_action("DELETE FROM feature_requests WHERE id = ?", (feature_id,))
-        return jsonify({"ok": True, "deleted": feature_id})
-    except Exception:
-        logger.exception("Failed to delete feature #%d", feature_id)
-        return jsonify({"ok": False, "error": "Database delete failed"}), 500
-
-@app.route("/api/features", methods=["POST"])
-def api_features_create():
-    data = request.get_json(silent=True) or {}
-    request_text = (data.get("request") or "").strip()
-    if not request_text:
-        return jsonify({"ok": False, "error": "Request text is required"}), 400
-    category = data.get("category", "未分类")
-    priority = data.get("priority", "medium")
-    user_name = data.get("user_name", "dashboard")
-    user_id = data.get("user_id", "admin")
-    try:
-        db.deposit(
-            "feature_requests",
-            "(user_id, user_name, group_id, request_text, category, priority, status, ai_summary)",
-            "(?, ?, ?, ?, ?, ?, 'pending', ?)",
-            (user_id, user_name, None, request_text, category, priority, request_text[:20]),
-        )
-        return jsonify({"ok": True, "created": {"request": request_text, "category": category, "priority": priority}})
-    except Exception:
-        logger.exception("Failed to create feature request")
-        return jsonify({"ok": False, "error": "Database insert failed"}), 500
-
-# ── Version & Changelog API ──────────────────────────
-
 @app.route("/api/versions/bump", methods=["POST"])
 def api_versions_bump():
     """Bump version number and return the new version string (does not create it)."""
@@ -1356,20 +1049,6 @@ def api_digest_push():
 
     # Get feature-type changelogs from current version ONLY
     features = version_manager.get_changelogs(version_id=version_id, entry_type="feature")
-    # Get feature requests completed since this version
-    version_created_at = current.get("created_at", "")
-    try:
-        if version_created_at:
-            fr_rows = db.fetch_data(
-                "SELECT request_text, ai_summary, user_name FROM feature_requests "
-                "WHERE status='done' AND timestamp >= ? ORDER BY id DESC LIMIT 10",
-                (version_created_at,)
-            )
-        else:
-            fr_rows = []
-        completed_requests = [{"request": r[0], "summary": r[1], "user_name": r[2]} for r in fr_rows]
-    except Exception:
-        completed_requests = []
 
     # Build digest message
     lines = [
@@ -1397,14 +1076,7 @@ def api_digest_push():
             lines.append(line)
         lines.append("")
 
-    if completed_requests:
-        lines.append("✅ 近期完成的功能需求：")
-        for i, cr in enumerate(completed_requests[:5], 1):
-            lines.append(f"  {i}. {cr['summary'] or cr['request'][:20]}（来自 {cr['user_name'] or '群友'}）")
-        lines.append("")
-
     lines.append("感谢大家对 KirikoBot 的支持！(◕‿◕✿)")
-    lines.append("有什么想法欢迎 @ 我提建议哦～")
 
     message = "\n".join(lines)
 
@@ -1489,24 +1161,11 @@ def api_balance():
 
 @app.route("/api/scheduler")
 def api_scheduler():
-    from datetime import datetime
-    now = datetime.now()
-    next_morning = now.replace(hour=7, minute=0, second=0, microsecond=0)
-    if now >= next_morning:
-        next_morning = next_morning.replace(day=now.day + 1) if now.month == next_morning.month else now
+    # 曾经这里还有 last_morning / next_morning：那是一套**遗留的固定 7:00 早报**，
+    # 和推送页里的「早间新闻」订阅项重复，会各发一次。现在早间新闻只由订阅项
+    # 控制（时间和开关都在推送页），这套固定早报连同它的手动触发接口一起删掉了。
     return jsonify({"running": scheduler._running, "check_interval": scheduler.CHECK_INTERVAL,
-                    "last_morning": scheduler._last_morning,
-                    "active_groups": scheduler._get_active_groups(),
-                    "next_morning": next_morning.strftime("%Y-%m-%d %H:%M")})
-
-@app.route("/api/scheduler/morning", methods=["POST"])
-def api_scheduler_morning():
-    try:
-        executor.submit(scheduler._morning_greeting)
-        return jsonify({"ok": True, "msg": "Morning greeting triggered"})
-    except Exception:
-        logger.exception("Failed to trigger morning greeting")
-        return jsonify({"ok": False, "error": "Failed to trigger"}), 500
+                    "active_groups": scheduler._get_active_groups()})
 
 @app.route("/api/stickers")
 def api_stickers():

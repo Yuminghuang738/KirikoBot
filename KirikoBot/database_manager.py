@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 VALID_TABLES = {
     "history", "tarot_history", "tarot_content",
     "group_messages", "user_profiles", "tool_usage",
-    "reminders", "learning_log", "feature_requests",
+    "reminders", "learning_log",
     "app_versions", "changelog", "stickers",
     "user_affection", "user_affection_log",
     "feature_settings", "bot_messages", "ai_calls", "group_subscriptions", "profile_history",
@@ -387,20 +387,6 @@ class DatabaseManager:
                         connect.execute(f"ALTER TABLE learning_log ADD COLUMN {col} {col_type}")
                     except sqlite3.OperationalError:
                         pass  # Column already exists
-                connect.execute(
-                    """CREATE TABLE IF NOT EXISTS feature_requests(
-                        id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                        user_id      TEXT NOT NULL,
-                        user_name    TEXT NOT NULL,
-                        group_id     TEXT,
-                        request_text TEXT NOT NULL,
-                        category     TEXT DEFAULT '未分类',
-                        priority     TEXT DEFAULT 'normal',
-                        status       TEXT DEFAULT 'pending',
-                        ai_summary   TEXT DEFAULT '',
-                        timestamp    DATETIME DEFAULT (datetime('now', 'localtime'))
-                    )"""
-                )
                 connect.execute(
                     """CREATE TABLE IF NOT EXISTS app_versions(
                         id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1789,28 +1775,6 @@ class DatabaseManager:
             for r in reversed(rows)
         ]
 
-    def get_feature_requests(self, status: str = "", limit: int = 20) -> list[dict[str, Any]]:
-        """Feature requests, newest first (optionally filtered by status)."""
-        limit = self._clamp_int(limit, 20, 1, 100)
-        sql = ("SELECT id, summary_or_request, category, priority, status, timestamp "
-               "FROM (SELECT id, COALESCE(NULLIF(ai_summary,''), request_text) AS summary_or_request, "
-               "             category, priority, status, timestamp FROM feature_requests)")
-        params: tuple[Any, ...] = ()
-        if status:
-            sql += " WHERE status = ?"
-            params = (status,)
-        sql += " ORDER BY id DESC LIMIT ?"
-        params += (limit,)
-        try:
-            rows = self.fetch_data(sql, params)
-        except sqlite3.Error:
-            logger.exception("feature request query failed")
-            return []
-        return [
-            {"id": r[0], "summary": r[1], "category": r[2],
-             "priority": r[3], "status": r[4], "timestamp": r[5]}
-            for r in rows
-        ]
 
     def get_tool_stats(self) -> list[tuple[Any, ...]]:
         return self.fetch_data(
@@ -2143,7 +2107,6 @@ class DatabaseManager:
         ("tool_usage", "工具调用"),
         ("user_affection", "好感度"),
         ("user_affection_log", "好感度流水"),
-        ("feature_requests", "功能需求"),
     )
     # 注意 user_profiles 不在上面：画像是**全局一份**，不再挂在某个群下。
     # 直接按群删会连带抹掉他在别的群和私聊里积累的印象。只在这个群说过话的

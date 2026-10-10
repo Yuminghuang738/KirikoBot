@@ -33,7 +33,6 @@ class BotScheduler:
         self.amp_crawler = amp_crawler
         self._running = False
         self._thread: threading.Thread | None = None
-        self._last_morning: str = ""
 
     def _get_active_groups(self) -> list[str]:
         """Get all distinct group IDs from recorded messages."""
@@ -60,7 +59,6 @@ class BotScheduler:
         while self._running:
             try:
                 self._check_reminders()
-                self._check_greetings()
                 self._check_subscriptions()
                 self._check_amp_crawl()
                 # Retention + DB backup, self-guarded to run once per day
@@ -136,93 +134,6 @@ class BotScheduler:
                 "UPDATE reminders SET fired=1 WHERE id=?", (rid,),
             )
 
-    # ── Morning greeting ────────────────────────────────
-
-    def _check_greetings(self) -> None:
-        now = datetime.now()
-        today = now.strftime("%Y-%m-%d")
-
-        # Morning: 7:00-7:05
-        if now.hour == 7 and now.minute < 5 and self._last_morning != today:
-            self._last_morning = today
-            threading.Thread(target=self._morning_greeting, daemon=True).start()
-
-    def _morning_greeting(self) -> None:
-        groups = self._get_active_groups()
-        # Respect per-group feature toggles: skip groups with morning_news off
-        if self.feature_gate:
-            groups = [
-                g for g in groups
-                if self.feature_gate.is_enabled("group", g, "morning_news")
-            ]
-        if not groups:
-            return
-
-        # Fetch political news (once for all groups)
-        news_items: list[dict[str, str]] = []
-        try:
-            news_items = self.political_news.translate_news(
-                self.political_news.fetch_for_greeting()
-            )
-        except Exception:
-            logger.exception("Morning political news fetch failed")
-
-        gaming_items: list[dict[str, str]] = []
-        try:
-            gaming_items = self.news_crawler.fetch_gaming_news()
-        except Exception:
-            logger.debug("scheduler._morning_greeting 忽略了异常", exc_info=True)
-
-        for gid in groups:
-            lines = ["☀️ 早上好！新的一天开始啦～ (◕‿◕✿)", ""]
-
-            if news_items:
-                lines.append("📰 今日时政要闻：")
-                for i, n in enumerate(news_items, 1):
-                    src = f" [{n['source']}]" if n.get("source") else ""
-                    lines.append(f"  {i}. {n['title']}{src}")
-                lines.append("")
-
-            if gaming_items:
-                lines.append("🎮 游戏速递：")
-                for i, n in enumerate(gaming_items[:3], 1):
-                    lines.append(f"  {i}. {n['title']}")
-                lines.append("")
-
-            # Daily quote (hitokoto)
-            if self.hitokoto_service:
-                try:
-                    quote = self.hitokoto_service.get_quote()
-                    if quote and quote.get("text"):
-                        lines.append("💬 每日一言：")
-                        lines.append(f"  {quote['text']}")
-                        credit_parts = []
-                        if quote.get("source"):
-                            credit_parts.append(quote["source"])
-                            if quote.get("author"):
-                                credit_parts.append(quote["author"])
-                        if credit_parts:
-                            lines.append(f"  —— {' '.join(credit_parts)}")
-                        lines.append("")
-                except Exception:
-                    logger.exception("Hitokoto fetch in morning greeting failed")
-
-            lines.append("祝大家今天元气满满！💪✨")
-
-            from llbot_client import MessageBuilder
-            builder = MessageBuilder()
-            builder.text("\n".join(lines))
-            self.llbot.send_group_msg(gid, builder.build())
-            logger.info("Morning greeting sent to %s", gid)
-
-
-    # ── Per-group push subscriptions ────────────────────
-
-    # A push whose scheduled time has passed by more than this is skipped
-    # (and marked fired) — otherwise a bot restarted at night would blast
-    # the morning briefing to every group.
-    MAX_LATE_MINUTES = 120
-
     def _check_subscriptions(self) -> None:
         now = datetime.now()
         today = now.strftime("%Y-%m-%d")
@@ -234,9 +145,7 @@ class BotScheduler:
             # Always mark fired first: a failure must not retry on every tick.
             self.db.mark_subscription_fired(gid, topic, today)
 
-            if self.feature_gate and not self.feature_gate.is_enabled("group", gid, "subscription"):
-                continue
-
+            # 不再有「群推送订阅」总开关：推送页里每个订阅项自己的开关就是唯一控制。
             late = self._minutes_late(sub["push_time"], now)
             if late > self.MAX_LATE_MINUTES:
                 logger.info("Skipping stale %s push for %s (%d min late)", topic, gid, late)

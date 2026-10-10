@@ -26,7 +26,6 @@ const PAGE_META={
   tarot:['塔罗','塔罗抽牌记录'],
   stickers:['表情包','表情包库与整理'],
   amps:['箱头库','每日箱头推荐的资料库'],
-  features:['功能清单','群友提出的功能请求'],
   versions:['版本日志','版本与变更记录'],
   groups:['群管理','已接入的群'],
   activity:['群活跃','单日发言统计与时段分布'],
@@ -82,7 +81,6 @@ async function loadPage(name){
     case 'chat': mc.innerHTML=await chatHTML(); break;
     case 'profiles': mc.innerHTML=await profilesHTML(); break;
     case 'learning': mc.innerHTML=await learningHTML(); break;
-    case 'features': mc.innerHTML=await featuresHTML(); bindFeatures(); break;
     case 'versions': mc.innerHTML=await versionsHTML(); bindVersions(); break;
     case 'stickers': mc.innerHTML=await stickersHTML(); break;
     case 'amps': mc.innerHTML=await ampsHTML(); bindAmps(); break;
@@ -603,111 +601,6 @@ async function delLearningNote(id){
 }
 
 // ── Features ──
-let featureFilter={status:'all',priority:'all',category:'all'};
-async function featuresHTML(){
-  let d={features:[]};try{d=await fetch('/api/features').then(r=>r.json())}catch(_){}
-  if(!d.features.length)return `<div class="panel"><div class="panel-header">📋 功能需求清单</div><div class="panel-body"><div class="empty">暂无功能需求，群友可通过 @bot 提出建议 (◕‿◕✿)</div>
-    <div class="add-form" style="margin-top:12px"><input id="featInput" placeholder="输入新功能需求..."><select id="featCat"><option value="未分类">未分类</option><option value="新闻">新闻</option><option value="游戏">游戏</option><option value="AI对话">AI对话</option><option value="工具">工具</option><option value="通知">通知</option><option value="界面">界面</option><option value="其他">其他</option></select><select id="featPrio"><option value="medium">中优先级</option><option value="high">高优先级</option><option value="low">低优先级</option></select><button onclick="addFeature()">➕ 添加</button></div></div>`;
-  const prio={high:'🔥 高',medium:'◆ 中',low:' 低'};
-  const stat={pending:'⏳待处理',done:'✅已完成',rejected:'❌已拒绝'};
-  const catColor={新闻:'#58a6ff',游戏:'#3fb950',AI对话:'#f78166',工具:'#d2991d',通知:'#bc8cff',界面:'#ff7b72',其他:'#8b949e'};
-  // Filter counts
-  let allPending=0,allHigh=0;
-  d.features.forEach(f=>{if(f.status==='pending')allPending++;if(f.priority==='high')allHigh++});
-  // Categories from data
-  const cats=new Set(d.features.map(f=>f.category).filter(Boolean));
-  let h=`<div class="page-head">
-    <div><div class="ph-title">功能 <span class="em">清单</span></div>
-      <div class="ph-sub">群友提出的功能需求 · 处理进度一览</div></div>
-    <div class="ph-right"><button class="btn primary" onclick="loadPage('features')">🔄 刷新</button></div>
-  </div>
-  <div class="bento" id="featStats">
-    <div class="tile c2 b-4 reveal" style="--i:0"><div class="tico">📋</div><div class="tbody"><div class="num">${d.features.length}</div><div class="lbl">总需求</div></div></div>
-    <div class="tile c3 b-4 reveal" style="--i:1"><div class="tico">⏳</div><div class="tbody"><div class="num" id="featPending">${allPending}</div><div class="lbl">待处理</div></div></div>
-    <div class="tile c4 b-4 reveal" style="--i:2"><div class="tico">🔥</div><div class="tbody"><div class="num" id="featHigh">${allHigh}</div><div class="lbl">高优先级</div></div></div>
-  </div>
-  <div class="panel reveal" style="--i:3;margin-top:16px"><div class="panel-header"><span class="hicon">📋</span>需求列表
-    <span class="ph-right"><span class="tag u" id="featVisible">共 ${d.features.length} 条</span></span>
-  </div>
-  <div class="toolbar" style="padding:14px 18px;margin:0;border-bottom:1px solid var(--border)">
-    <span class="ph-sub">状态</span>
-    <button class="chip on" data-fs="all">全部</button><button class="chip" data-fs="pending">⏳ 待处理</button><button class="chip" data-fs="done">✅ 已完成</button><button class="chip" data-fs="rejected">❌ 已拒绝</button>
-    <span class="ph-sub" style="margin-left:10px">优先级</span>
-    <button class="chip on" data-fp="all">全部</button><button class="chip" data-fp="high">🔥 高</button><button class="chip" data-fp="medium">◆ 中</button><button class="chip" data-fp="low">低</button>
-    <span class="ph-sub" style="margin-left:10px">分类</span>
-    <button class="chip on" data-fc="all">全部</button>
-    ${Array.from(cats).map(c=>`<button class="chip" data-fc="${c}">${c}</button>`).join('')}
-  </div>
-  <div class="add-form" style="padding:8px 16px;border-bottom:1px solid var(--border)">
-    <input id="featInput" placeholder="输入新功能需求...">
-    <select id="featCat">
-      <option value="未分类">未分类</option><option value="新闻">新闻</option><option value="游戏">游戏</option><option value="AI对话">AI对话</option><option value="工具">工具</option><option value="通知">通知</option><option value="界面">界面</option><option value="其他">其他</option>
-    </select>
-    <select id="featPrio"><option value="medium">中优先级</option><option value="high">高优先级</option><option value="low">低优先级</option></select>
-    <button onclick="addFeature()">➕ 添加</button>
-  </div>
-  <div class="panel-body" style="max-height:50vh;overflow-y:auto" id="featList">`;
-  d.features.forEach(x=>{
-    const fcat=x.category||'未分类';
-    h+=`<div class="feature-item" data-fid="${x.id}" data-fstatus="${esc(x.status)}" data-fpriority="${esc(x.priority)}" data-fcategory="${esc(fcat)}">
-      <div class="f-top">
-        <b style="color:var(--accent)">${esc(x.summary||String(x.request||'').substr(0,20))}</b>
-        <span class="tag" style="background:${catColor[fcat]||'#8b949e'}22;color:${catColor[fcat]||'#8b949e'}">${esc(fcat)}</span>
-        <span class="tag" style="color:var(--yellow)">${esc(prio[x.priority]||x.priority)}</span>
-        <span class="tag ${x.status==='pending'?'warn':x.status==='done'?'ok':'err'}">${esc(stat[x.status]||x.status)}</span>
-        <span style="font-size:.68rem;color:var(--muted)">${esc(x.user_name)} · ${esc(x.time)}</span>
-        <span class="f-actions">
-          ${x.status!=='done'?`<button class="btn-done" title="标记完成" onclick="updateFeature(${x.id},'done')">✅</button>`:''}
-          ${x.status!=='rejected'?`<button class="btn-reject" title="拒绝" onclick="updateFeature(${x.id},'rejected')">❌</button>`:''}
-          ${x.status!=='pending'?`<button class="btn-done" title="重新打开" onclick="updateFeature(${x.id},'pending')">🔄</button>`:''}
-          <button class="btn-del" title="删除" onclick="delFeature(${x.id})">🗑️</button>
-        </span>
-      </div>
-      <div class="f-request">${esc(x.request)}</div>
-    </div>`;
-  });
-  return h+`</div></div>`;
-}
-function bindFeatures(){
-  // Filter buttons
-  document.querySelectorAll('button[data-fs]').forEach(b=>b.addEventListener('click',()=>{
-    document.querySelectorAll('button[data-fs]').forEach(x=>x.classList.remove('on'));b.classList.add('on');
-    featureFilter.status=b.dataset.fs;applyFeatFilter()
-  }));
-  document.querySelectorAll('button[data-fp]').forEach(b=>b.addEventListener('click',()=>{
-    document.querySelectorAll('button[data-fp]').forEach(x=>x.classList.remove('on'));b.classList.add('on');
-    featureFilter.priority=b.dataset.fp;applyFeatFilter()
-  }));
-  document.querySelectorAll('button[data-fc]').forEach(b=>b.addEventListener('click',()=>{
-    document.querySelectorAll('button[data-fc]').forEach(x=>x.classList.remove('on'));b.classList.add('on');
-    featureFilter.category=b.dataset.fc;applyFeatFilter()
-  }));
-}
-function applyFeatFilter(){
-  const items=document.querySelectorAll('.feature-item');
-  let visible=0;
-  items.forEach(el=>{
-    const s=el.dataset.fstatus, p=el.dataset.fpriority, c=el.dataset.fcategory||'未分类';
-    const match=(featureFilter.status==='all'||s===featureFilter.status)&&(featureFilter.priority==='all'||p===featureFilter.priority)&&(featureFilter.category==='all'||c===featureFilter.category);
-    el.style.display=match?'':'none';if(match)visible++
-  });
-  document.getElementById('featPending')&&(document.getElementById('featPending').textContent=visible)
-  const fv=document.getElementById('featVisible');if(fv)fv.textContent='共 '+visible+' 条'
-}
-async function updateFeature(id,status){
-  try{const r=await fetch('/api/features/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});const d=await r.json();if(d.ok){toast('状态已更新: '+status);loadPage('features')}else toast('更新失败: '+(d.error||'未知'),'err')}catch(_){toast('请求失败','err')}
-}
-async function delFeature(id){
-  if(!confirm('确定删除此功能需求？'))return;
-  try{const r=await fetch('/api/features/'+id,{method:'DELETE'});const d=await r.json();if(d.ok){toast('已删除');loadPage('features')}else toast('删除失败: '+(d.error||'未知'),'err')}catch(_){toast('请求失败','err')}
-}
-async function addFeature(){
-  const inp=$('featInput');if(!inp||!inp.value.trim()){toast('请输入功能需求','err');return}
-  const cat=$('featCat'),prio=$('featPrio');
-  try{const r=await fetch('/api/features',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({request:inp.value.trim(),category:cat?cat.value:'未分类',priority:prio?prio.value:'medium'})});const d=await r.json();if(d.ok){toast('已添加功能需求');inp.value='';loadPage('features')}else toast('添加失败: '+(d.error||'未知'),'err')}catch(_){toast('请求失败','err')}
-}
-
-// ── Versions & Changelog ──
 let versionFilter={type:'all'};
 async function versionsHTML(){
   let v={ok:true,versions:[]},cur={ok:false};
@@ -1237,7 +1130,7 @@ async function deleteGroup(groupId){
   const labels={
     users:'涉及用户', group_messages:'群消息', history:'对话记录', reminders:'提醒',
     tool_usage:'工具调用', user_profiles:'用户画像', user_affection:'好感度',
-    user_affection_log:'好感度流水', feature_requests:'功能需求',
+    user_affection_log:'好感度流水',
     group_settings:'群功能开关', learning_log:'学习笔记（按用户，跨群共享）',
     user_settings:'用户功能开关（按用户）',
   };
@@ -2274,7 +2167,7 @@ async function loadPush(){
     <div class="panel-header"><span class="hicon">🔔</span>订阅项
       <span class="ph-right"><span class="tag u">每天 ${subs.filter(s=>s.enabled).length} 项已开</span></span></div>
     <div class="panel-body tight">${rows}</div>
-    <div class="set-note">推送受「群设置 → 群推送订阅」总开关控制；群内关掉后这里即使打开也不会发。</div>
+    <div class="set-note">这里的勾选就是唯一开关 —— 关掉的项不会发，设置页里不再重复放一份。</div>
   </div>`;
 }
 

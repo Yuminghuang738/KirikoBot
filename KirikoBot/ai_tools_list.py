@@ -84,40 +84,10 @@ class AiTools:
                 "required": [],
             },
         }
-        function_request_sticker = {
-            "name": "request_sticker",
-            "description": (
-                "当用户想给你看一张图片/表情包、想让你看/评价某张图（例如说“帮我看看这个图”“这张图怎么样”"
-                "“我给你看个好东西”“看下我的表情包”），但当前这条消息并没有附带图片时，调用此函数。"
-                "调用后系统会进入等待图片状态（30秒），你随后要用 Kiriko 的语气请对方把图片发过来。"
-                "注意：这不是发送表情包给用户（那是 sticker 工具）；用户只是闲聊时提到“图片/表情包”这个词、"
-                "或当前消息已经带了图片时，都不要调用。"
-            ),
-            "parameters": empty_params,
-        }
         function_hitokoto = {
             "name": "hitokoto",
             "description": "当用户表示想听一句话、来句名言、励志语录、每日一句、一言时，调用此函数获取随机一言",
             "parameters": empty_params,
-        }
-        function_food = {
-            "name": "food_picker",
-            "description": "当用户询问吃什么、今天吃什么、推荐美食、不知道吃啥、帮忙选吃的时，调用此函数随机推荐食物",
-            "parameters": empty_params,
-        }
-        function_dice = {
-            "name": "dice",
-            "description": "当用户要求掷骰子、roll点、随机数、抽签决定时，调用此函数掷骰子",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "sides": {
-                        "type": "integer",
-                        "description": "骰子面数，默认6面，可选：6(默认), 20(D20), 100(D100)等",
-                    }
-                },
-                "required": [],
-            },
         }
         function_bilibili = {
             "name": "bilibili_trending",
@@ -156,20 +126,6 @@ class AiTools:
             "name": "get_current_time",
             "description": "获取当前精确时间（精确到秒），用于计算相对时间如'30秒后'、'5分钟后'。在设置提醒前如果不知道现在几点必须先调用此函数",
             "parameters": empty_params,
-        }
-        function_feature_request = {
-            "name": "submit_feature",
-            "description": "当用户提出功能建议、想要新功能、或者说'建议'、'希望能'、'能不能加'、'要是能'等时调用。记录群友的功能需求到待办清单",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "request": {
-                        "type": "string",
-                        "description": "用户的功能请求原文，保持用户原话",
-                    }
-                },
-                "required": ["request"],
-            },
         }
         function_reminder = {
             "name": "set_reminder",
@@ -222,11 +178,6 @@ class AiTools:
                 "required": ["keyword"],
             },
         }
-        function_sticker_battle = {
-            "name": "sticker_battle",
-            "description": "当用户表示想要斗图、表情包对战、贴纸大战、PK表情包、来互相伤害、发起表情包挑战时调用。启动斗图模式，机器人会先发一张表情包发起挑战，然后多轮回合对决",
-            "parameters": empty_params,
-        }
         function_check_affection = {
             "name": "check_affection",
             "description": "当用户询问好感度、查看好感、查好感、我的好感、谁最喜欢我、和我的关系、查看关系时调用。查询用户与机器人的好感度数值和关系评价",
@@ -267,23 +218,6 @@ class AiTools:
                     "day": {
                         "type": "string",
                         "description": "统计哪天：today（今天，默认）、yesterday（昨天）或 YYYY-MM-DD",
-                    },
-                },
-                "required": [],
-            },
-        }
-        function_feature_list = {
-            "name": "feature_list",
-            "description": (
-                "查询群友提交过的功能需求清单及其处理状态。"
-                "当用户问「还有什么功能没做」「之前提的需求怎么样了」「待完成的功能有哪些」时调用"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "status": {
-                        "type": "string",
-                        "description": "筛选状态：pending（待处理，默认）、done（已完成）、rejected（已拒绝）、all（全部）",
                     },
                 },
                 "required": [],
@@ -335,14 +269,6 @@ class AiTools:
                 "required": ["text"],
             },
         }
-        function_similar_sticker = {
-            "name": "similar_sticker",
-            "description": (
-                "当用户发了一张图/表情包并想找类似的时调用"
-                "（例如「有没有类似的」「来个同款表情」）。会从表情库里挑最像的一张发出来"
-            ),
-            "parameters": empty_params,
-        }
         function_read_context = {            "name": "read_context",
             "description": (
                 "读本群最近的聊天记录。**只有当前这句话单独看读不懂时才用**——"
@@ -368,30 +294,23 @@ class AiTools:
         tool_web_search = {"type": "function", "function": function_web_search}
         tool_weather = {"type": "function", "function": function_weather}
         tool_sticker = {"type": "function", "function": function_sticker}
-        tool_request_sticker = {"type": "function", "function": function_request_sticker}
         tool_hitokoto = {"type": "function", "function": function_hitokoto}
-        tool_food = {"type": "function", "function": function_food}
-        tool_dice = {"type": "function", "function": function_dice}
         tool_political_news = {"type": "function", "function": function_political_news}
         tool_bilibili = {"type": "function", "function": function_bilibili}
         tool_at_member = {"type": "function", "function": function_at_member}
-        tool_feature_request = {"type": "function", "function": function_feature_request}
         tool_reminder = {"type": "function", "function": function_reminder}
         tool_list_reminders = {"type": "function", "function": function_list_reminders}
         tool_delete_reminder = {"type": "function", "function": function_delete_reminder}
         tool_balance = {"type": "function", "function": function_balance}
         tool_current_time = {"type": "function", "function": function_current_time}
         tool_music = {"type": "function", "function": function_music}
-        tool_sticker_battle = {"type": "function", "function": function_sticker_battle}
         tool_check_affection = {"type": "function", "function": function_check_affection}
         tool_affection_leaderboard = {"type": "function", "function": function_affection_leaderboard}
         tool_recall_message = {"type": "function", "function": function_recall_message}
         tool_group_stats = {"type": "function", "function": function_group_stats}
         tool_read_context = {"type": "function", "function": function_read_context}
-        tool_feature_list = {"type": "function", "function": function_feature_list}
         tool_explain_self = {"type": "function", "function": function_explain_self}
         tool_send_voice = {"type": "function", "function": function_send_voice}
-        tool_similar_sticker = {"type": "function", "function": function_similar_sticker}
 
         return [
             tool_tarot,
@@ -400,28 +319,21 @@ class AiTools:
             tool_web_search,
             tool_weather,
             tool_sticker,
-            tool_request_sticker,
             tool_hitokoto,
-            tool_food,
-            tool_dice,
             tool_political_news,
             tool_balance,
             tool_bilibili,
             tool_at_member,
-            tool_feature_request,
             tool_reminder,
             tool_list_reminders,
             tool_delete_reminder,
             tool_current_time,
             tool_music,
-            tool_sticker_battle,
             tool_check_affection,
             tool_affection_leaderboard,
             tool_recall_message,
             tool_group_stats,
             tool_read_context,
-            tool_feature_list,
             tool_explain_self,
             tool_send_voice,
-            tool_similar_sticker,
         ]
