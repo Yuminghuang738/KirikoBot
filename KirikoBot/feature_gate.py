@@ -15,13 +15,18 @@ logger = logging.getLogger(__name__)
 
 # Feature registry — shared by gate logic and the dashboard UI.
 # Order = display order on the settings page.
+#
+# 这里**不再有「推送」分类**。原先有两个开关，都有问题：
+#   · `subscription`（群推送订阅）是推送页所有订阅项的总开关 —— 与推送页重合
+#   · `morning_news`（早间新闻推送）管的是一套**遗留的固定 7:00 早报**，
+#     而推送页里早就有一个「早间新闻」订阅项，两者会各发一次
+# 现在推送只由推送页的订阅项控制：那套遗留早报连同它的开关一起删掉了。
+# 同理，`request_sticker` 曾经挂在 `vision` 上（应要求找表情），已随功能移除。
 FEATURE_DEFS: list[dict[str, str]] = [
-    {"key": "morning_news",    "label": "早间新闻推送", "category": "推送",     "desc": "每天 7:00 推送时政/游戏新闻和每日一言"},
     {"key": "affection",       "label": "好感度系统",   "category": "互动系统", "desc": "记录与 Kiriko 的好感度，影响回复语气"},
     {"key": "profiles",        "label": "用户画像",     "category": "互动系统", "desc": "分析群友发言生成人格画像"},
     {"key": "learning",        "label": "学习系统",     "category": "互动系统", "desc": "记录对话经验并自我改进"},
     {"key": "vision",          "label": "图像识别",     "category": "视觉",     "desc": "理解表情包/图片内容并生成回复"},
-    {"key": "sticker_battle",  "label": "斗图模式",     "category": "视觉",     "desc": "表情包对战玩法"},
     {"key": "sticker",         "label": "表情包发送",   "category": "视觉",     "desc": "聊天中发送表情包"},
     {"key": "sticker_collect", "label": "表情包采集",   "category": "视觉",     "desc": "自动收藏群友发的表情包"},
     {"key": "music",           "label": "音乐点歌",     "category": "生活娱乐", "desc": "点歌/音乐分享卡片"},
@@ -32,20 +37,14 @@ FEATURE_DEFS: list[dict[str, str]] = [
     {"key": "gaming_news",     "label": "游戏新闻",     "category": "信息查询", "desc": "游戏新闻查询"},
     {"key": "bilibili",        "label": "B站热搜",      "category": "信息查询", "desc": "B站热搜榜"},
     {"key": "hitokoto",        "label": "一言",         "category": "生活娱乐", "desc": "随机一言/名言"},
-    {"key": "food",            "label": "吃什么",       "category": "生活娱乐", "desc": "随机推荐吃什么"},
-    {"key": "dice",            "label": "骰子",         "category": "生活娱乐", "desc": "掷骰子/随机数"},
     {"key": "reminder",        "label": "提醒",         "category": "群功能",   "desc": "设置/查询/删除提醒"},
     {"key": "at_member",       "label": "@群友",        "category": "群功能",   "desc": "帮用户@群友"},
     {"key": "balance",         "label": "余额查询",     "category": "群功能",   "desc": "查询 AI 服务余额"},
-    {"key": "feature_request", "label": "功能建议",     "category": "群功能",   "desc": "向开发者提交功能建议"},
     {"key": "recall",          "label": "撤回消息",     "category": "群功能",   "desc": "撤回机器人自己刚发出的消息"},
     {"key": "group_stats",     "label": "发言统计",     "category": "群功能",   "desc": "统计群内当天的发言情况"},
     {"key": "context_read",    "label": "语境读取",     "category": "群功能",   "desc": "需要时读取群里的近期聊天记录来理解语境"},
-    {"key": "feature_list",    "label": "需求清单查询", "category": "群功能",   "desc": "群友可查询提过的功能需求进度"},
     {"key": "explain_self",    "label": "执行回放",     "category": "群功能",   "desc": "调试用：把上一轮的思维链原文/工具调用/回复原文照录发出来，不经 AI 转述"},
     {"key": "voice",           "label": "语音回复",     "category": "群功能",   "desc": "偶尔直接用语音说话，而不是打字（需要 QQ 的 AI 语音功能）"},
-    {"key": "similar_sticker", "label": "相似表情",     "category": "视觉",     "desc": "按用户发的图找库里最像的表情"},
-    {"key": "subscription",    "label": "群推送订阅",   "category": "推送",     "desc": "按设定时间推送早报/游戏/一言/发言榜"},
 ]
 
 FEATURE_KEYS: list[str] = [f["key"] for f in FEATURE_DEFS]
@@ -68,21 +67,14 @@ TOOL_FEATURE: dict[str, str] = {
     "weather": "weather",
     "music_search": "music",
     "sticker": "sticker",
-    "request_sticker": "vision",
-    "sticker_battle": "sticker_battle",
     "hitokoto": "hitokoto",
-    "food_picker": "food",
-    "dice": "dice",
     "at_member": "at_member",
     "check_balance": "balance",
-    "submit_feature": "feature_request",
     "recall_message": "recall",
     "group_stats": "group_stats",
     "read_context": "context_read",
-    "feature_list": "feature_list",
     "explain_self": "explain_self",
     "send_voice": "voice",
-    "similar_sticker": "similar_sticker",
 }
 
 
