@@ -15,9 +15,9 @@ VALID_TABLES = {
     "history", "tarot_history", "tarot_content",
     "group_messages", "user_profiles", "tool_usage",
     "reminders", "learning_log", "group_rate_limits", "profile_memories",
-    "app_versions", "changelog", "stickers",
+    "stickers",
     "user_affection", "user_affection_log",
-    "feature_settings", "bot_messages", "ai_calls", "group_subscriptions", "profile_history",
+    "feature_settings", "bot_messages", "ai_calls", "profile_history",
     "amp_heads", "app_state", "user_mood",
 }
 
@@ -269,16 +269,6 @@ class DatabaseManager:
                     )"""
                 )
                 connect.execute(
-                    """CREATE TABLE IF NOT EXISTS group_subscriptions(
-                        group_id        TEXT NOT NULL,
-                        topic           TEXT NOT NULL,
-                        push_time       TEXT DEFAULT '07:00',
-                        enabled         INTEGER DEFAULT 1,
-                        last_fired_date TEXT DEFAULT '',
-                        PRIMARY KEY (group_id, topic)
-                    )"""
-                )
-                connect.execute(
                     """CREATE TABLE IF NOT EXISTS group_rate_limits(
                         group_id         TEXT PRIMARY KEY,
                         user_enabled     INTEGER NOT NULL DEFAULT 0,
@@ -400,36 +390,6 @@ class DatabaseManager:
                     except sqlite3.OperationalError:
                         pass  # Column already exists
                 connect.execute(
-                    """CREATE TABLE IF NOT EXISTS app_versions(
-                        id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                        version      TEXT NOT NULL UNIQUE,
-                        release_date TEXT NOT NULL,
-                        description  TEXT DEFAULT '',
-                        author       TEXT DEFAULT 'developer',
-                        digest_sent  INTEGER DEFAULT 0,
-                        created_at   DATETIME DEFAULT (datetime('now', 'localtime'))
-                    )"""
-                )
-                # Migration: add digest_sent column if not present
-                try:
-                    connect.execute(
-                        "ALTER TABLE app_versions ADD COLUMN digest_sent INTEGER DEFAULT 0"
-                    )
-                except sqlite3.OperationalError:
-                    pass
-                connect.execute(
-                    """CREATE TABLE IF NOT EXISTS changelog(
-                        id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                        version_id  INTEGER NOT NULL,
-                        entry_type  TEXT NOT NULL DEFAULT 'feature',
-                        title       TEXT NOT NULL,
-                        description TEXT DEFAULT '',
-                        author      TEXT DEFAULT 'developer',
-                        created_at  DATETIME DEFAULT (datetime('now', 'localtime')),
-                        FOREIGN KEY (version_id) REFERENCES app_versions(id)
-                    )"""
-                )
-                connect.execute(
                     """CREATE TABLE IF NOT EXISTS stickers(
                         id              INTEGER PRIMARY KEY AUTOINCREMENT,
                         filename        TEXT NOT NULL UNIQUE,
@@ -501,6 +461,10 @@ class DatabaseManager:
                 )
                 # Per-group / per-user feature toggles. settings_json only stores
                 # DISABLED keys; missing key or missing row = enabled.
+                # ── 已废弃功能的表：直接删掉（幂等）──
+                # 群订阅推送、版本管理都整体移除了，留着表只会让代码看起来还有功能
+                for dead in ("group_subscriptions", "app_versions", "changelog"):
+                    connect.execute(f"DROP TABLE IF EXISTS {dead}")
                 connect.execute(
                     """CREATE TABLE IF NOT EXISTS feature_settings(
                         scope_type    TEXT NOT NULL,
@@ -1213,57 +1177,8 @@ class DatabaseManager:
 
     # ── Group push subscriptions ─────────────────────────
 
-    SUBSCRIPTION_TOPICS = ("morning_news", "gaming_news", "hitokoto", "daily_roll_call",
-                           "amp_head")
 
-    def get_subscriptions(self, group_id: str | None = None) -> list[dict[str, Any]]:
-        """Per-group push subscriptions, optionally for one group."""
-        try:
-            if group_id:
-                rows = self.fetch_data(
-                    "SELECT group_id, topic, push_time, enabled, last_fired_date "
-                    "FROM group_subscriptions WHERE group_id = ? ORDER BY topic",
-                    (group_id,),
-                )
-            else:
-                rows = self.fetch_data(
-                    "SELECT group_id, topic, push_time, enabled, last_fired_date "
-                    "FROM group_subscriptions ORDER BY group_id, topic"
-                )
-        except sqlite3.Error:
-            logger.exception("subscription query failed")
-            return []
-        return [
-            {"group_id": r[0], "topic": r[1], "push_time": r[2],
-             "enabled": bool(r[3]), "last_fired_date": r[4]}
-            for r in rows
-        ]
 
-    def set_subscription(self, group_id: str, topic: str,
-                         push_time: str | None = None,
-                         enabled: bool | None = None) -> None:
-        """Create or update one subscription (unspecified fields are kept)."""
-        if topic not in self.SUBSCRIPTION_TOPICS:
-            raise ValueError(f"unknown topic: {topic}")
-        self.execute_action(
-            "INSERT INTO group_subscriptions (group_id, topic, push_time, enabled) "
-            "VALUES (?, ?, ?, ?) "
-            "ON CONFLICT(group_id, topic) DO UPDATE SET "
-            "push_time = COALESCE(?, push_time), "
-            "enabled   = COALESCE(?, enabled)",
-            (group_id, topic, push_time or "07:00", 1 if (enabled is None or enabled) else 0,
-             push_time, None if enabled is None else (1 if enabled else 0)),
-        )
-
-    def delete_subscription(self, group_id: str, topic: str) -> None:
-        self.execute_action(
-            "DELETE FROM group_subscriptions WHERE group_id = ? AND topic = ?",
-            (group_id, topic),
-        )
-
-    # ── 群回复频率限制 ───────────────────────────────────
-
-    # 字段顺序固定，读写都按它对齐
     _RATE_DEFAULTS: dict[str, int] = {
         "user_enabled": 0,      "user_window_min": 10, "user_max": 20,
         "group_enabled": 0,     "group_window_min": 10, "group_max": 30,
@@ -1338,25 +1253,7 @@ class DatabaseManager:
             })
         return out
 
-    def due_subscriptions(self, now_hm: str, today: str) -> list[dict[str, Any]]:
-        """Enabled subscriptions whose time has passed and haven't fired today."""
-        try:
-            rows = self.fetch_data(
-                "SELECT group_id, topic, push_time FROM group_subscriptions "
-                "WHERE enabled = 1 AND push_time <= ? AND last_fired_date != ?",
-                (now_hm, today),
-            )
-        except sqlite3.Error:
-            logger.exception("due subscription query failed")
-            return []
-        return [{"group_id": r[0], "topic": r[1], "push_time": r[2]} for r in rows]
 
-    def mark_subscription_fired(self, group_id: str, topic: str, today: str) -> None:
-        self.execute_action(
-            "UPDATE group_subscriptions SET last_fired_date = ? "
-            "WHERE group_id = ? AND topic = ?",
-            (today, group_id, topic),
-        )
 
     def get_profile_history(self, user_id: str, limit: int = 3) -> list[dict[str, Any]]:
         """Earlier profile snapshots, newest first.

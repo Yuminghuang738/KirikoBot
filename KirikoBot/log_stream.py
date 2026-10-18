@@ -20,11 +20,16 @@ class SSELogHandler(logging.Handler):
             "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
             datefmt="%H:%M:%S",
         ))
+        # 时间戳要用**单独的** formatter。`self.format(record)` 返回的是整行
+        # （"10:38:18 [INFO] think: xxx"），拿它当时间戳塞进 display，
+        # 整行就会被再输出一遍 —— 思维链因此变成
+        #   "…[INFO] think: xxx🧠思维链 xxx"
+        self._time_fmt = logging.Formatter("%(asctime)s", datefmt="%H:%M:%S")
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
             entry = {
-                "time": self.format(record),    # e.g. "12:48:37"
+                "time": self._time_fmt.format(record),   # 只有时间，e.g. "12:48:37"
                 "level": record.levelname,       # INFO/WARNING/ERROR
                 "name": record.name,             # logger name ("think", "main", etc.)
                 "msg": record.getMessage(),      # actual log message
