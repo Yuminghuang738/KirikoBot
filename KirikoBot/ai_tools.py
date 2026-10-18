@@ -283,45 +283,6 @@ class WebSearchTool:
         ai.user_text = f"搜索查询: {query}\n搜索内容: {content[:500]}"
 
 
-# ══════════════════════════════════════════════════════════
-#  Weather
-# ══════════════════════════════════════════════════════════
-
-class WeatherTool:
-    def __init__(self, weather_service: Any, msg_package: Any) -> None:
-        self.weather_service = weather_service
-        self.msg_package = msg_package
-
-    def weather_call(self, robot: Any, ai: Any) -> None:
-        tool_calls = ai.ai_message.get("tool_calls")
-        if not tool_calls:
-            return
-        try:
-            args = json.loads(tool_calls[0]["function"].get("arguments", "{}"))
-        except (json.JSONDecodeError, TypeError):
-            args = {}
-        city = args.get("city", "北京")
-
-        data = self.weather_service.get_weather(city)
-        if not data:
-            ai.tool_result_text = f"未查到「{city}」的天气信息"
-            _set_tool_meta(ai, tool_calls)
-            ai.user_text = ai.tool_result_text
-            return
-
-        lines = [
-            f"城市：{data['city']}",
-            f"温度：{data['temp']}°C（体感{data['feels_like']}°C），{data['weather_desc']}",
-            f"湿度：{data['humidity']}%，风向：{data['wind_dir']}，风速：{data['wind_speed']}km/h",
-            "未来预报：",
-        ]
-        for d in data["forecast"]:
-            lines.append(f"  {d['date']} {d['desc']} {d['low']}~{d['high']}°C")
-        ai.tool_result_text = "\n".join(lines)
-
-        _set_tool_meta(ai, tool_calls)
-        ai.user_text = ai.tool_result_text
-
 
 # ══════════════════════════════════════════════════════════
 #  Sticker
@@ -395,51 +356,6 @@ class StickerTool:
         ai.user_text = f"发送了表情包({category or '随机'}): {chosen}"
 
 
-# ══════════════════════════════════════════════════════════
-#  Hitokoto (一言)
-# ══════════════════════════════════════════════════════════
-
-class HitokotoTool:
-    def __init__(self, service: Any, msg_package: Any) -> None:
-        self.service = service
-        self.msg_package = msg_package
-
-    def hitokoto_call(self, robot: Any, ai: Any) -> None:
-        q = self.service.get_quote()
-        if q and q["text"]:
-            lines = [f"💬 {q['text']}"]
-            if q["source"]:
-                credit = f"—— {q['source']}"
-                if q["author"]:
-                    credit += f" ({q['author']})"
-                lines.append(credit)
-            robot.reply("\n".join(lines))
-        else:
-            robot.reply("呜～一言没抓到呢，再试一次吧！")
-        _set_tool_meta(ai, ai.ai_message.get("tool_calls"))
-        ai.user_text = robot.text
-
-
-# ══════════════════════════════════════════════════════════
-#  Bilibili Trending
-# ══════════════════════════════════════════════════════════
-
-class BilibiliTool:
-    def __init__(self, service: Any, msg_package: Any) -> None:
-        self.service = service
-        self.msg_package = msg_package
-
-    def bilibili_call(self, robot: Any, ai: Any) -> None:
-        items = self.service.get_trending() or self.service.get_hot_videos()
-        if not items:
-            robot.reply("呜～B站热搜获取失败了，稍后再试吧 (｡•́︿•̀｡)")
-            return
-        lines = ["📺 B站热搜"]
-        for i, item in enumerate(items, 1):
-            lines.append(f"{i}. {item['keyword']}")
-        robot.reply("\n".join(lines))
-        _set_tool_meta(ai, ai.ai_message.get("tool_calls"))
-        ai.user_text = robot.text
 
 
 # ══════════════════════════════════════════════════════════
@@ -830,9 +746,9 @@ class BalanceTool:
         except Exception:
             logger.exception("Balance query failed")
             result = "查询DeepSeek余额失败"
-        ai.tool_result_text = result
         _set_tool_meta(ai, ai.ai_message.get("tool_calls"))
-        ai.user_text = ai.tool_result_text
+        # 直接发原文 —— 余额是数字，让模型复述没有意义还可能读错
+        robot.reply(result)
 
 
 # ══════════════════════════════════════════════════════════
@@ -963,7 +879,7 @@ class MusicTool:
 # ══════════════════════════════════════════════════════════
 
 class AffectionTool:
-    """FOLLOW_UP tool: returns affection data for AI to format as reply."""
+    """SELF_CONTAINED：直接发原文，不经 AI 复述。"""
 
     def __init__(self, msg_package: Any, database_manager: Any) -> None:
         self.msg_package = msg_package
@@ -993,8 +909,7 @@ class AffectionTool:
                 robot.group_id or "", target_name,
             )
             if not target_uid:
-                ai.tool_result_text = f"找不到群友「{target_name}」哦～可能ta还没说过话？"
-                ai.user_text = ai.tool_result_text
+                robot.reply(f"找不到群友「{target_name}」哦～可能ta还没说过话？")
                 return
 
         # Fetch affection data
@@ -1006,21 +921,16 @@ class AffectionTool:
 
         is_self = (target_uid == robot.user_id) or (not target_name)
 
-        if is_self:
-            ai.tool_result_text = (
-                f"查询用户 {target_display} 的好感度结果：\n"
-                f"好感度：{score:.0f}/100 {emoji}{label}\n"
-                f"互动次数：{record['interaction_count']}次\n"
-                f"好评：{record['positive_count']}次 | 差评：{record['negative_count']}次\n"
-                f"关系备注：{record.get('notes') or '无'}"
-            )
-        else:
-            ai.tool_result_text = (
-                f"查询群友 {target_display} 对 Kiriko 的好感度结果：\n"
-                f"好感度：{score:.0f}/100 {emoji}{label}\n"
-                f"互动次数：{record['interaction_count']}次"
-            )
-        ai.user_text = ai.tool_result_text
+        # 直接发原文：数字类回答让模型复述反而容易被它加工得不准
+        lines = [
+            f"💕 {target_display} 的好感度",
+            f"{score:.0f}/100 {emoji}{label}",
+            f"互动 {record['interaction_count']} 次"
+            f"（好评 {record['positive_count']} / 差评 {record['negative_count']}）",
+        ]
+        if is_self and record.get("notes"):
+            lines.append(f"备注：{record['notes']}")
+        robot.reply("\n".join(lines))
 
 
 # ══════════════════════════════════════════════════════════
@@ -1028,7 +938,7 @@ class AffectionTool:
 # ══════════════════════════════════════════════════════════
 
 class AffectionLeaderboardTool:
-    """FOLLOW_UP tool: returns leaderboard for AI to format as reply."""
+    """SELF_CONTAINED：直接发原文，不经 AI 复述。"""
 
     def __init__(self, msg_package: Any, database_manager: Any) -> None:
         self.msg_package = msg_package
@@ -1045,8 +955,7 @@ class AffectionLeaderboardTool:
         )
 
         if not board:
-            ai.tool_result_text = "这个群还没有好感度数据哦～多和我聊天互动吧！(◕‿◕✿)"
-            ai.user_text = ai.tool_result_text
+            robot.reply("这个群还没有好感度数据哦～多和我聊天互动吧！(◕‿◕✿)")
             return
 
         lines = [f"📊 {robot.group_name or '本群'} 好感度排行榜 TOP{len(board)}"]
@@ -1058,8 +967,7 @@ class AffectionLeaderboardTool:
                 f"({entry['interaction_count']}次互动)"
             )
 
-        ai.tool_result_text = "\n".join(lines)
-        ai.user_text = ai.tool_result_text
+        robot.reply("\n".join(lines))
 
 
 # ══════════════════════════════════════════════════════════
@@ -1118,7 +1026,7 @@ class RecallMessageTool:
 # ══════════════════════════════════════════════════════════
 
 class GroupStatsTool:
-    """FOLLOW_UP tool: one day of activity for the current group."""
+    """SELF_CONTAINED：直接发原文，不经 AI 复述。"""
 
     def __init__(self, database_manager: Any, msg_package: Any) -> None:
         self.db = database_manager
@@ -1147,40 +1055,38 @@ class GroupStatsTool:
             day = raw_day
 
         if not robot.group_id:
-            ai.tool_result_text = "这个功能只能在群里用。"
-            ai.user_text = ai.tool_result_text
+            robot.reply("这个功能只能在群里用。")
             return
 
         try:
             stats = self.db.get_daily_group_stats(robot.group_id, day)
         except Exception:
             logger.exception("Group stats failed")
-            ai.tool_result_text = "统计查询失败了，稍后再试吧。"
-            ai.user_text = ai.tool_result_text
+            robot.reply("统计查询失败了，稍后再试吧。")
             return
 
         if not stats["total"]:
-            ai.tool_result_text = f"{day} 这个群还没有说话记录。用自然的语气说一下今天很安静即可。"
-            ai.user_text = ai.tool_result_text
+            robot.reply(f"{day} 这个群还没有说话记录，今天挺安静的。")
             return
 
+        # 直接发原文：统计是数字，让模型复述反而容易被加工得不准
         lines = [
-            f"{day} 的发言统计（数据可直接用于回复）：",
-            f"- 总消息：{stats['total']} 条",
-            f"- 活跃人数：{stats['active_users']} 人",
-            f"- 其中图片/表情：{stats['images']} 条",
+            f"📊 {day} 发言统计",
+            f"总消息：{stats['total']} 条",
+            f"活跃人数：{stats['active_users']} 人",
+            f"图片/表情：{stats['images']} 条",
         ]
         if stats["top"]:
-            lines.append("- 发言最多：")
+            lines.append("发言最多：")
             for i, item in enumerate(stats["top"][:5], 1):
-                lines.append(f"    {i}. {item['user_name']} — {item['count']} 条")
+                lines.append(f"  {i}. {item['user_name']} — {item['count']} 条")
         peak = max(range(24), key=lambda h: stats["hourly"][h])
         if stats["hourly"][peak]:
-            lines.append(f"- 最热闹的时段：{peak:02d}:00 - {peak + 1:02d}:00（{stats['hourly'][peak]} 条）")
-        lines.append("请用 Kiriko 的语气把这些数据讲出来，不要直接念条目。")
-
-        ai.tool_result_text = "\n".join(lines)
-        ai.user_text = ai.tool_result_text
+            lines.append(
+                f"最热闹的时段：{peak:02d}:00 - {peak + 1:02d}:00"
+                f"（{stats['hourly'][peak]} 条）"
+            )
+        robot.reply("\n".join(lines))
 
 
 # ══════════════════════════════════════════════════════════
