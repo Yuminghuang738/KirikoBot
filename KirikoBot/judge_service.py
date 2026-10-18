@@ -88,9 +88,11 @@ class JudgeService:
 
         new_score = None
         if affection_on and abs(total) >= self.MIN_DELTA:
-            new_score = AffectionService.update_score(
-                db, robot.user_id, robot.group_id, robot.user_name, total,
-                positive=total > 0, negative=total < 0,
+            # 情绪分单条 ±0.3、每日净额 ±1.0（钳制在 service 里）。
+            # 学习分单独传进去：它反映的是机器人质量，不该被情绪分的额度吃掉。
+            new_score = AffectionService.apply_judge_delta(
+                db, robot.user_id, robot.group_id, robot.user_name,
+                sentiment=delta, learning=learning_delta,
             )
 
         logger.info(

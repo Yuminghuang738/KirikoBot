@@ -355,6 +355,50 @@ def _ambient_group_context(robot: RobotServer, disabled: set[str]) -> str:
         return ""
     return format_group_context(rows, Config.GROUP_CONTEXT_MINUTES)
 
+
+def _speaker_context(robot: RobotServer, disabled: set[str]) -> str:
+    """当前说话人的详细块：关系 + 画像 + 共同记忆。
+
+    放进 user message 而不是 system prompt —— 它随「谁在说话」变化，
+    放系统提示词里等于每换个人就废掉整段前缀缓存。
+    """
+    if robot.msg_type != "group" or not robot.group_id:
+        return ""
+
+    affection = None
+    if "affection" not in disabled:
+        try:
+            affection = affection_service.get_or_create(
+                db, robot.user_id, robot.group_id, robot.user_name,
+            )
+        except Exception:
+            logger.debug("affection record failed", exc_info=True)
+
+    parts: list[str] = []
+    if affection is not None:
+        try:
+            block = affection_service.relationship_block(
+                db, robot.user_id, robot.group_id,
+            )
+            if block:
+                parts.append(block)
+        except Exception:
+            logger.debug("relationship block failed", exc_info=True)
+
+    if "profiles" not in disabled:
+        try:
+            block = profile_service.build_speaker_context(
+                db, robot.user_id, robot.group_id, robot.user_name,
+                affection=affection,
+            )
+            if block:
+                parts.append(block)
+        except Exception:
+            logger.debug("speaker profile failed", exc_info=True)
+
+    return "\n".join(parts)
+
+
 def _log_thinking(user_name: str, reasoning: str) -> None:
     """Log thinking chain to dedicated logger (visible in logs + frontend)."""
     if not reasoning:
@@ -572,8 +616,13 @@ def main_logic(robot: RobotServer) -> None:
         # ── Affection: record valid interaction (base points only, sync) ──
         if robot.msg_type == "group" and robot.group_id and "affection" not in disabled:
             try:
+                # 先更新连续出现天数，再算事件分 —— streak 本身就是一个事件
+                affection_service.touch_streak(
+                    db, robot.user_id, robot.group_id, robot.user_name,
+                )
                 affection_service.record_interaction(
                     db, robot.user_id, robot.group_id, robot.user_name,
+                    has_images=bool(getattr(robot.incoming, "has_images", False)),
                 )
             except Exception:
                 logger.debug("main.main_logic 忽略了异常", exc_info=True)
@@ -597,7 +646,8 @@ def main_logic(robot: RobotServer) -> None:
         is_private = robot.msg_type == "private"
         user_text = _context(robot, _reply_note(robot),
                              _ambient_group_context(robot, disabled),
-                             mood=_mood_signal(robot))
+                             mood=_mood_signal(robot),
+                             speaker=_speaker_context(robot, disabled))
         system_prompt = _build_system_prompt(
             robot, db, profile_service, learning_service, affection_service, disabled,
         )
