@@ -1,57 +1,100 @@
-# 🤖 KirikoBot — 基于 LLBot + DeepSeek 的 QQ 聊天机器人
+# 🤖 KirikoBot
 
-一个运行在 **LLBot / OneBot** 框架上的 QQ 机器人，集成 **DeepSeek V4.1 Flash** 大模型，提供智能对话、工具调用、定时任务、版本管理等丰富功能。机器人采用可爱女孩风格（Kiriko），支持颜文字。
+基于 **LLBot（OneBot）+ DeepSeek** 的 QQ 聊天机器人。一个 20 岁的可爱女生 Kiriko
+在群里陪你聊天，会傲娇、会发表情包、记得你是谁、也会因为太久不来而跟你疏远。
+
+当前版本 **v1.20.0** · 20 个工具 · 558 条测试
 
 ---
 
 ## ✨ 主要功能
 
-### 💬 AI 对话
-- 接入 DeepSeek V4.1 Flash API（模型名 `deepseek-flash`），支持 Thinking 思维链
-- 群聊 @机器人 或私聊触发，16 轮对话记忆
-- 用户画像分析 + 自学习反馈系统
+### 💬 AI 对话与人格
 
-### 🛠 内置工具（19个）
-| 工具 | 说明 |
-|------|------|
-| 🃏 塔罗牌 | 随机抽牌 + AI 解读 |
-| 🎵 点歌 | 网易云搜歌 → QQ 音乐卡片播放 |
-| 🔍 联网搜索 | 实时搜索 + AI 总结 |
-| 🌤 天气查询 | 全国城市天气 + 预报 |
-| 🎲 掷骰子 | D6/D20/D100 |
-| 🍜 吃什么 | 随机美食推荐 |
-| ⏰ 提醒 | 秒/分/时/天 精确提醒，支持每日重复 |
-| 📰 时政新闻 | BBC/VOA 翻译播报 |
-| 🎮 游戏新闻 | 热点游戏资讯 |
-| 📺 B站热搜 | Bilibili 热门排行 |
-| 💬 一言 | 随机 Hitokoto 语录 |
-| 💰 余额查询 | DeepSeek API 余额 |
-| 😊 表情包 | 随机 Kiriko 表情 |
-| 👥 @群友 | AI 自主 @群成员 |
-| 📋 功能建议 | 群友提需求 → 自动收录 |
+- 接入 DeepSeek（模型名 `deepseek-flash`），支持 Thinking 思维链
+- 群聊 @机器人 或私聊触发，16 轮对话记忆
+- **完整人格**：20 岁大三女生，玩摇滚、打游戏、追番、养猫狗；说话短、不反问、不 AI 腔
+- **渐进式情绪**：被反复骚扰时从「正常」慢慢变成「懒得搭理」，但不会真的生气，更不会突然不回复
+- **防提示词泄露**：被追问设定、要求复述/翻译/代码块包裹时，一律挡回去
+
+### 🛠 内置工具（20 个）
+
+| 分类 | 工具 | 说明 |
+|---|---|---|
+| 信息查询 | 🔍 联网搜索 | 走 DeepSeek 官方 Search API，一次拿到正文 |
+| | 📰 时政新闻 | BBC / VOA 翻译播报 |
+| | 🎮 游戏新闻 | 热点游戏资讯 |
+| 生活娱乐 | 🃏 塔罗牌 | 每日一抽 + AI 解读，有历史记录 |
+| | 🎵 点歌 | 网易云搜歌 → QQ 音乐卡片 |
+| 视觉 | 😊 表情包 | 从 2000+ 张库里按情绪挑一张 |
+| 互动系统 | 💕 好感度 | 查自己 / 别人的好感度、排行榜 |
+| 群功能 | ⏰ 提醒 | 秒/分/时/天 精确提醒，支持每日重复 |
+| | 👥 @群友 | 帮用户 @ 群成员 |
+| | 💬 撤回 | 撤回自己刚发的消息 |
+| | 📊 发言统计 | 当天条数 / 活跃人数 / 时段分布 |
+| | 📖 语境读取 | 当前这句读不懂时，翻一下近期聊天 |
+| | 💰 余额查询 | DeepSeek API 余额 |
+| | 🎤 语音回复 | 用语音说话而不是打字 |
+| | 🔁 执行回放 | 调试用：把上一轮原始记录照录出来 |
+| 常驻 | 🕐 当前时间 | 算「30 秒后」这类相对时间 |
+
+> 表里有的行包含多个工具：「塔罗牌」= 抽牌 + 历史，「提醒」= 设 / 查 / 删，
+> 「好感度」= 自己查询 + 排行榜，合计 **20 个**。
+> 除 `get_current_time` 外，都能在群设置里**按群独立开关**（共 19 个开关）。
+
+### 🎭 好感度与用户画像
+
+**好感度是事件制的，不是积分制** —— 奖励「来过」，不奖励「刷屏」：
+
+| 事件 | 分值 |
+|---|---|
+| 当天首次出现 | +0.3 |
+| 第一次说话 | +1.0 |
+| 连续出现 | +0.05 × 天数（封顶 0.5） |
+| 深夜出现（0–5 点） | +0.1 |
+| 发图/表情包 | +0.1 |
+| AI 判官情绪分 | ±0.3，每日净额 ±1.0 |
+
+每日事件分总计上限 **+3.0**。掉分 1.5/周，封底 20 —— 关系**可以变差**。
+五档：冷淡 → 普通 → 友好 → 亲密 → 挚友。
+
+**用户画像是两层的**：`stable`（性格关键词、称呼偏好、雷点、口头禅、爱聊/不爱聊）
+和 `recent`（最近的情绪、在忙什么、提过的事），外加**共同记忆**（具体发生过的事）。
+
+差异化体现在三处：**称呼分层**（熟人才叫名字）、**记得对方提过的事**、
+**关系好才偶尔多说一句 / 才敢傲娇**。
+
+### 🚦 回复频率限制
+
+按群配置，两种模式可独立开关、也可组合：
+
+| 模式 | 含义 |
+|---|---|
+| **单用户** | N 分钟内对**同一个用户**最多回 Y 条（对所有用户一视同仁） |
+| **群聊** | N 分钟内在这个群最多发 Y 条 |
+
+超额**静默丢弃**（不回复「你太频繁了」，那条提示本身也会占额度）。
+用滑动窗口，计数器在内存里，重启清零。**私聊不参与**。
 
 ### 📦 版本管理 + 群聊推送
+
 - 语义化版本号 `X.Y.Z`，一键自增
 - 变更日志分类：🎉新功能 / 🔧修复 / 💡改进 / ⚠️重大变更
-- 新版本/新功能**自动推送到所有 QQ 群**
-- 前端管理面板支持手动推送 + 防重复
-
-### 🌅 定时任务
-- 早安问候（7:00）— 时政新闻 + 游戏资讯 + 每日一言
-- 精确到秒的提醒触发器
+- 新版本 / 新功能可**推送到所有 QQ 群**，支持防重复
+- **按群订阅**的定时推送：早报 / 游戏速递 / 一言 / 发言榜 / 箱头推荐，
+  每个群自己勾选、自己设时间（错过超过 2 小时则跳过）
 
 ### 🖥 Web 管理面板
-- 实时日志流（SSE）
-- 功能需求清单（收集 → 开发 → 完成 → 自动推送）
-- 版本历史 + 变更日志浏览
-- 提醒管理 / 塔罗记录 / 对话历史 / 用户画像 / 自学习日志
-- 群组管理 / 表情包画廊
+
+实时日志（SSE）· 对话记录 · 用户画像 · 好感度 · 自学习 · 提醒 · 塔罗 ·
+表情包库 · 版本日志 · 群管理 · 群活跃 · 聊天回看 · AI 用量与成本 ·
+群推送订阅 · **群功能设置 + 频率限制** · LLBot 连接状态
 
 ---
 
 ## 📋 前置要求
 
-- 一台可运行 Docker 的机器（Linux / Windows WSL2 / macOS）
+- 一台能跑 Docker 的机器（Linux / Windows WSL2 / macOS），建议 **2 核 4G 起**
 - 一个可以登录的 QQ 账号
 - [DeepSeek API Key](https://platform.deepseek.com/api_keys)
 
@@ -62,231 +105,160 @@
 ### 1. 克隆项目
 
 ```bash
-git clone https://github.com/1315318/KirikoBot.git
-cd KirikoBot
+git clone git@github.com:Yuminghuang738/KirikoBot-LLBot.git
+cd KirikoBot-LLBot
 ```
 
-### 2. 配置 `.env`
+### 2. 配置 `KirikoBot/.env`
 
 ```ini
-ROBOT_QQ         = "你的机器人QQ号"
-ONEBOT_API       = "http://llbot:3000"
-ONEBOT_TOKEN     = "llbot_kiriko_token"
-DEEPSEEK_API     = "https://api.deepseek.com/chat/completions"
-DEEPSEEK_TOKEN   = "你的DeepSeek API Key"
-DEEPSEEK_MODEL   = "deepseek-flash"     # DeepSeek V4.1 Flash
-DEEPSEEK_REASONING_EFFORT = "low"       # 思考强度 low/high/max
-GROUP_ROLE       = "你是聊天小助手Kiriko...（群聊人设）"
-PRIVATE_ROLE     = "你是聊天小助手Kiriko...（私聊人设）"
-TAROT_ROLE       = "你是牌面解读助手Kiriko..."
+ROBOT_QQ        = "你的机器人QQ号"        # 只用于日志/面板显示
+ONEBOT_API      = "http://llbot:3000"
+ONEBOT_TOKEN    = "llbot_kiriko_token"
+DEEPSEEK_API    = "https://api.deepseek.com/chat/completions"
+DEEPSEEK_TOKEN  = "你的 DeepSeek API Key"
+DEEPSEEK_MODEL  = "deepseek-flash"
+DEEPSEEK_REASONING_EFFORT = "low"        # 思考强度 low/high/max
 
-# 管理面板内嵌 LLBot（可选，留空则用默认值）
-LLBOT_WEBUI_URL        = "http://llbot:3080"        # 后端访问地址（容器内网）
-LLBOT_WEBUI_PUBLIC_URL = ""                          # 浏览器访问地址，留空自动推导
+GROUP_ROLE      = ""                     # 可选：群聊人设补充，从属于人格
+PRIVATE_ROLE    = ""                     # 可选：私聊人设补充
+TAROT_ROLE      = ""                     # 可选：解牌口吻
+
+VISION_ENABLED  = "true"                 # 图像/表情包识别
+VOICE_ENABLED   = "true"                 # AI 语音回复
+GROUP_CONTEXT_ENABLED = "false"          # 群聊背景是否默认附带
 ```
 
-> 面板的「连接状态 / WebQQ」页面通过 `llbot_config/webui_token.txt` 自动登录 LLBot WebUI，
-> 无需再手工填密码。`docker-compose.yml` 已把该目录只读挂载进机器人容器。
+`.env.example` 里有完整的变量清单。
 
-### 3. 安装 LLBot Docker 框架
+### 3. 启动
 
 ```bash
-curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/LLOneBot/LuckyLilliaBot/refs/heads/main/script/install-llbot-docker.sh -o llbot-docker.sh && \
-chmod u+x ./llbot-docker.sh && ./llbot-docker.sh
+docker compose up -d --build
 ```
 
-### 4. 合并文件并启动
+三个容器：`pmhq`（QQ 客户端）、`llbot`（OneBot 框架）、`my-robot`（KirikoBot 本体）。
 
-```bash
-cp -r ./* ./llbot-docker/
-cd llbot-docker
-docker compose up -d
+### 4. 扫码登录
+
+浏览器打开 `http://<机器地址>:3080`，用手机 QQ 扫码。
+
+登录成功后 OneBot 的 3000 端口才会起来，机器人开始收消息。
+
+### 5. 打开管理面板
+
+```
+http://<机器地址>:5000
 ```
 
-### 5. 扫码登录
+用户名随意，密码在 `KirikoBot/.dashboard_password`（首次启动自动生成）。
 
-打开 `http://localhost:3080`，用手机 QQ 扫描二维码登录。
+> **部署到公网前请务必看下面的「安全」一节** —— 这个面板能删群、能读全部聊天记录、
+> 能驱动 QQ 号，Basic auth 走明文 HTTP 时只和网络本身一样私密。
+
+---
+
+## 🔐 安全
+
+面板的权限比看起来大得多：能**删除一个群和它的全部数据**、能**给所有群推消息**、
+能**读所有聊天记录**、还能通过 LLBot 桥**驱动 QQ 号本身**。所以：
+
+- **默认就有 Basic auth**（`KirikoBot/.dashboard_password`，或 `.env` 里设 `DASHBOARD_PASSWORD`）
+- **不要把 5000 直接暴露到公网**。Basic auth 走明文 HTTP 时只和网络本身一样私密，
+  要么套 HTTPS，要么根本不暴露
+- 推荐做法：**Tailscale**（云服务器加入 tailnet，本地用 `100.x.x.x:5000` 访问，
+  安全组只开 22），或者 **SSH 隧道**（`ssh -L 5000:localhost:5000`）
+- OneBot webhook 有独立的 HMAC 验签，不走面板口令
 
 ---
 
 ## 🏗 项目结构
 
 ```
-KirikoBot/
-├── main.py                # Flask 入口，路由注册，服务编排
-├── ai_server.py           # DeepSeek AI 请求
-├── ai_tools.py            # 工具实现（Tarot, Weather, Music, Dice...）
-├── ai_tools_list.py       # AI Function Calling 工具定义
-├── llbot_client.py        # OneBot HTTP API + MessageBuilder
-├── robot_server.py        # 消息解析
-├── msg_package.py         # 消息封装
-├── config.py              # 环境变量配置
-├── database_manager.py    # SQLite 数据库管理
-├── scheduler.py           # 定时任务（早安/提醒）
-├── version_manager.py     # 版本号 + 变更日志 + 群聊推送
-├── music_service.py       # 网易云音乐搜索
-├── weather_service.py     # 天气查询服务
-├── balance_service.py     # DeepSeek API 余额查询
-├── profile_service.py     # 用户画像分析
-├── learning_service.py    # 自学习反馈模块
-├── log_stream.py          # SSE 实时日志流
-├── extra_services.py      # 额外服务（骰子、B站热搜等）
-├── hot_news.py            # 热点新闻抓取
-├── news_crawler.py        # 新闻爬虫
-├── political_news.py      # 时政新闻（BBC/VOA）
-├── sticker_collector.py   # 表情包收集
-├── web_search.py          # 联网搜索
-├── llbot_webui.py         # LLBot WebUI 同源反代（自动注入密码）
-├── .env.example           # 环境变量模板
-├── VERSION                # 当前版本号
-├── requirements.txt       # Python 依赖
-├── Dockerfile             # Docker 镜像构建
-├── docker-compose.yml     # Docker Compose 配置
-├── stickers/              # 机器人表情包素材
-├── carside_picture/       # 塔罗牌面图素材
-├── static/
-│   ├── css/app.css        # 面板设计系统（日夜主题）
-│   └── js/app.js          # 面板前端逻辑
-└── templates/
-    └── dashboard.html     # Web 管理面板外壳
+KirikoBot-LLBot/
+├── docker-compose.yml          # 三个容器的编排
+├── README.md
+├── DEVELOPMENT_GUIDE.md
+├── recalibrate_affection.py    # 好感度重算脚本（一次性）
+├── bootstrap_affection.py      # ⚠️ 旧模型遗留，已标过时
+├── merge_db.py                 # 数据库合并工具
+├── llbot_config/               # LLBot 数据（挂载进容器）
+├── tests/                      # 558 条测试
+└── KirikoBot/                  # ← 机器人本体，整个目录挂进容器的 /app
+    ├── main.py                 # Flask 入口、路由、服务编排
+    ├── prompt_builder.py       # 人格 + 系统提示词装配
+    ├── ai_server.py            # DeepSeek 请求
+    ├── ai_tools.py             # 工具实现
+    ├── ai_tools_list.py        # Function Calling 工具定义（20 个）
+    ├── affection_service.py    # 好感度（事件制）
+    ├── profile_service.py      # 用户画像（两层）+ 共同记忆
+    ├── rate_limiter.py         # 回复频率限制
+    ├── judge_service.py        # AI 判官（情绪 + 学习反馈）
+    ├── learning_service.py     # 自学习
+    ├── feature_gate.py         # 按群/按用户的功能开关
+    ├── scheduler.py            # 定时任务（提醒 / 订阅推送 / 箱头爬取）
+    ├── web_search.py           # 联网搜索（DeepSeek Search API）
+    ├── database_manager.py     # SQLite
+    ├── dashboard_auth.py       # 面板 Basic auth
+    ├── webhook_auth.py         # OneBot webhook HMAC 验签
+    ├── llbot_client.py         # OneBot HTTP API + MessageBuilder
+    ├── llbot_webui.py          # LLBot WebUI 同源反代
+    ├── robot_server.py         # 消息解析 + 统一发送出口
+    ├── config.py               # 环境变量
+    ├── *.py                    # 各业务服务（音乐/天气/新闻/塔罗/表情包…）
+    ├── static/                 # 面板前端（css/js）
+    ├── templates/dashboard.html
+    ├── stickers/               # 表情包库（不进镜像）
+    ├── carside_picture/        # 牌面素材
+    ├── Dockerfile
+    ├── .dockerignore           # 排除运行时数据，构建上下文 909MB → 0.7MB
+    └── requirements.txt
 ```
 
 ---
 
-## 🖥 管理面板
-
-打开 `http://localhost:5000`，共 16 个页面，支持日间 / 夜间主题，纯本地资源、无外部 CDN 依赖。
-
-| 分组 | 页面 |
-|------|------|
-| 概览 | 总览、实时日志 |
-| 对话与用户 | 对话记录、群消息、用户画像、好感度、自学习 |
-| 内容与工具 | 提醒、塔罗、表情包、功能清单 |
-| 系统 | 版本日志、群管理、群设置 |
-
-**表情包自动分类**：新表情包收集时会自动调用视觉模型识别分类（可爱 / 搞笑 / 动物 / 动漫 …）
-并记录描述与情绪，无需手动批量分类。分类在后台线程执行，不影响回复速度。
-
-**删除群聊**：「群管理」页每个群都有删除按钮，会**永久清除该群全部数据**
-（群消息、对话记录、用户画像、好感度、工具调用、提醒、功能需求、学习笔记、功能开关），
-弹窗会先列出各项条数并要求输入群号确认；勾选「同时让机器人退出该 QQ 群」还会调用
-OneBot `set_group_leave` 让机器人退群（退群后需重新邀请）。
-表情包图库是全局共享的，不会被删除。
-| LLBot 连接 | 连接状态、WebQQ |
-
-**LLBot 整合方式**：面板不重造轮子 —— LLBot 自己的 React WebUI 功能很全，
-所以这里做的是「原生面板 + 原版兜底」：
-
-- **连接状态**：原生重做。登录状态、好友/群数量、消息收发、内存与 CPU、
-  设备版本、快速登录账号列表、**LLBot 实时日志**（SSE 转发）。
-- **WebQQ**：`iframe` 直接内嵌 LLBot 原版 WebUI，收发消息、群成员、通知等全部功能保持原样。
-
-认证是自动的：LLBot WebUI 的每个 `/api/*` 都要求请求头
-`x-webui-token: sha256(密码)`，密码明文存放在 `llbot_config/webui_token.txt`。
-后端的 `/llbot-api/*` 同源反代会自己读取并哈希该密码注入请求，
-**密码不会下发到浏览器**，因此不需要在面板里二次登录。
-
-> 若提示「未找到 LLBot WebUI 密码」，确认 `docker-compose.yml` 中
-> `my-robot` 服务保留了 `./llbot_config:/app/llbot_config:ro` 挂载。
-
-### 🔐 访问口令
-
-面板可以删除数据、向所有群推送消息，还能通过 WebQQ 操作你的 QQ 账号，
-所以默认启用 **HTTP Basic 鉴权**：
-
-- 首次启动自动生成口令，保存在 `KirikoBot/.dashboard_password`（已 gitignore），
-  同时打印在启动日志里：`docker logs kirikobot | grep 面板密码`
-- 想自己指定就设 `DASHBOARD_USER` / `DASHBOARD_PASSWORD`
-- 浏览器只需登录一次，之后同源的图片、SSE 日志流都会自动带上凭据
-
-⚠️ Basic 认证在纯 HTTP 下只等于「网络有多私密就有多安全」。**不要把 5000 端口
-直接暴露到公网**；确需外部访问请套一层 HTTPS 反向代理。
-
-### 📡 Webhook 验签
-
-LLBot 上报事件时会带 `x-signature`（对报文体的 HMAC-SHA1 签名）。
-默认拿 `ONEBOT_TOKEN` 当密钥，所以**只需在 LLBot 配置里把 `ob11 → http-post`
-那条连接的 token 填成与 `ONEBOT_TOKEN` 相同的值**再重启 llbot 容器即可。
-两边不一致时事件会被 403 拒绝，日志里会写明原因。
-
-### 💾 数据保留与备份
-
-- 原始消息默认保留 **180 天**（`RETENTION_DAYS`，0 = 永久）；画像 / 好感度 /
-  工具统计等聚合数据不受影响
-- 每天自动备份数据库到 `KirikoBot/backups/`，保留最近 14 份（`BACKUP_KEEP`），
-  使用 SQLite 在线备份 API，WAL 模式下同样安全
-
-### 🗂️ 群活跃与聊天回看
-
-- **群活跃**：选群 + 日期，看当天总消息数、活跃人数、图片数、发言排行和 24 小时时段分布
-- **聊天回看**：按天/关键词/昵称检索群聊完整记录，分页浏览，支持按引用关系显示被引用的原文
-- 机器人在群里也能直接回答「今天谁最能说」这类问题
-
-### ↩️ 撤回消息
-
-机器人可以撤回自己刚发出的消息（@ 它说「撤回」即可）。QQ 的撤回窗口约 2 分钟，
-超时会明确告知而不是假装成功。
-
-### 💬 引用感知
-
-群友引用某条消息说话时，机器人能看懂被引用的是谁、说了什么——包括**识别出那是在引用它自己说过的话**，
-从而顺着原话题回应，而不是把追问当成全新话题。LLBot 的引用段自带被引用消息内容，
-所以这个能力不产生额外 API 调用。
-
-群消息同时记录 `message_id`（LLBot 短 id）和 `message_seq`（QQ seq），
-为后续的引用链回看与消息撤回打好基础。
-
-### 🧩 话题线程化 / 群推送 / 长期记忆 / 相似表情
-
-- **话题线程化**：聊天回看支持「按话题分组」——按引用链 + 时间间隔把群聊聚成话题，
-  多话题并行的群聊终于看得清了
-- **群推送订阅**：每群可单独订阅早间新闻 / 游戏速递 / 每日一言 / 今日发言榜，各自设时间
-- **今日发言榜**：到点自动 @ 出当天发言最多的三个人
-- **长期记忆**：画像更新时保留旧版本，印象发生变化时会记得"你以前不是这样的"
-- **相似表情**：用户发图后可要求找库里最像的一张（复用去重用的 pHash 索引）
-- **需求清单查询 / 执行回放**：群友可以直接问"还有什么功能没做"，
-  也能让机器人回放上一轮调用了什么工具、当时在想什么
-
-### 🧪 测试
+## 🧪 测试
 
 ```bash
-pip install -r KirikoBot/requirements-dev.txt
-python -m pytest tests/ -q
+python3 -m pytest tests/ -q
 ```
 
-GitHub Actions 会在 PR 上自动跑测试与语法检查。
+覆盖：人格完整性与防泄露、渐进式情绪、好感度事件制、频率限制、搜索接口、
+引用感知、历史完整性、数据迁移、面板接口、安全加固。
+
+测试**不联网** —— 真实搜索和模型调用不在单元测试里，那会让测试本身变得不可靠。
 
 ---
 
 ## 🔧 开发指南
 
-新增工具需修改 4 个文件：`ai_tools_list.py` → `ai_tools.py` → `main.py`（导入+注册路由+分类）。
-
-### 修改 .env 后
+### 改完代码
 
 ```bash
-# ⚠️ 必须重建容器，restart 不会更新环境变量
+docker compose restart my-robot        # 只重启机器人（代码是 bind mount，不用重建）
+docker compose up -d --build           # 改了依赖 / Dockerfile 才需要重建
+docker compose logs -f my-robot        # 看日志
+```
+
+### 改完 `.env`
+
+```bash
 docker compose up -d --force-recreate my-robot
 ```
 
-### 常见问题
+> ⚠️ `env_file` 只在**容器创建**时读取 —— `restart` **不会**更新环境变量，
+> 必须 `--force-recreate`。
 
-| 症状 | 原因 | 解决 |
-|------|------|------|
-| 推送显示成功但群聊收不到 | ONEBOT_API 使用了过期 IP | 用 `llbot:3000` 并重建容器 |
-| 容器 exit 137 | OOM/SIGKILL | 重启容器 |
-| QQ 消息收发失效 | 登录会话过期 | 打开 WebUI(:3080) 扫码 |
-| curl llbot:3000 返回 502 | 主机代理拦截 | 在 Docker 内部测试 |
+### 数据库
 
----
+`KirikoBot/robot.db`（SQLite，宿主机上，靠 bind mount 进容器）。
+备份就是复制这个文件；`KirikoBot/backups/` 里还有程序按天存的。
 
-## 📄 许可证
+### 修改人格
 
-[GPL V3](LICENSE) © 2026 Bosak
+人格全部在 `KirikoBot/prompt_builder.py` 的 `PERSONA`。改完记得跑测试 ——
+`tests/test_persona_integrity.py` 会检查章节锚点、防泄露断言和长度上限。
 
----
-
-## 🙏 致谢
-
-- [LLOneBot / LuckyLilliaBot](https://github.com/LLOneBot/LuckyLilliaBot) – QQ 机器人 Docker 框架
-- [DeepSeek](https://www.deepseek.com/) – 大语言模型 API
+> 人格是系统提示词的第一段，也是 DeepSeek 前缀缓存的锚点：改它会让缓存失效一次，
+> 之后重新建立。**每条消息都在变的内容（时间、当前说话人的画像和关系）故意放在
+> user message 里**，就是为了不废掉这段缓存。
