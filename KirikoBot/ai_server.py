@@ -513,38 +513,6 @@ class AiServer:
         }
 
     @staticmethod
-    def vision_chat_reply(
-        image_url_or_path: str,
-        role_prompt: str = "",
-        user_name: str = "",
-        user_text: str = "",
-    ) -> str | None:
-        """Vision API end-to-end: understand image + generate Kiriko-style reply.
-
-        Single vision call replaces the old two-step (vision → DeepSeek) pipeline.
-        Embeds Kiriko's personality (GROUP_ROLE/PRIVATE_ROLE) into the prompt so
-        the vision model responds in character directly.
-
-        Returns the reply text, or None if vision is unavailable/fails.
-        """
-        parts: list[str] = []
-        if role_prompt:
-            parts.append(role_prompt)
-        parts.append(f"用户 {user_name} 给你发了一张图片/表情包。")
-        if user_text.strip():
-            parts.append(f"用户同时说：{user_text.strip()}")
-        parts.append(
-            "请根据图片内容，用可爱自然的语气做出回应。"
-            "直接像聊天一样回复即可，30-80字，适当使用颜文字。"
-            "不需要描述图片内容。"
-        )
-        instruction = "\n".join(parts)
-        # Creative reply → sample warm; the default 0 makes image replies flat
-        # and formulaic, which is the main source of "AI 味" on this path.
-        return AiServer.vision_analyze(image_url_or_path, prompt=instruction,
-                                       max_tokens=500, temperature=0.85)
-
-    @staticmethod
     def _format_for_qq(text: str) -> str:
         """Convert markdown to QQ-friendly plain text."""
         # Convert markdown to HTML then strip tags

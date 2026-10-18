@@ -49,7 +49,6 @@ from feature_gate import (
     FEATURE_DEFS, FeatureGate, VALID_SCOPES,
     disabled_tool_names, disabled_labels,
 )
-from extra_services import HitokotoService
 from hot_news import HotNewsScraper
 from judge_service import JudgeService
 from llbot_client import LLBotClient, MessageBuilder
@@ -67,7 +66,6 @@ from robot_server import RobotServer
 from rate_limiter import RateLimiter
 from scheduler import BotScheduler
 from sticker_collector import StickerCollector, STICKER_DIR, STICKER_CATEGORIES
-from version_manager import VersionManager
 from web_search import WebSearch
 
 
@@ -116,7 +114,6 @@ gaming_news = GamingNews(news_crawler, pkg)
 web_search = WebSearch()
 web_search_tool = WebSearchTool(web_search, pkg)
 sticker_tool = StickerTool(pkg)
-hitokoto_service = HitokotoService()
 amp_head_crawler = AmpHeadCrawler(db)
 at_member_tool = AtMemberTool(pkg, db, llbot)
 reminder_tool = ReminderTool(db, pkg)
@@ -131,8 +128,8 @@ music_service = MusicService()
 music_tool = MusicTool(music_service, pkg)
 hot_news_scraper = HotNewsScraper()
 
-scheduler = BotScheduler(db, llbot, political_news_scraper, news_crawler, hitokoto_service, feature_gate,
-                         amp_crawler=amp_head_crawler)
+# 群订阅推送已整体移除，调度器现在只管提醒和箱头库爬取
+scheduler = BotScheduler(db, llbot, feature_gate, amp_crawler=amp_head_crawler)
 scheduler.start()
 sticker_collector = StickerCollector(db=db)
 profile_service = ProfileService()
@@ -156,8 +153,6 @@ llbot.set_recorder(db.record_bot_message)
 # swallowed inside ai_metrics.
 if Config.AI_METRICS_ENABLED:
     ai_metrics.set_sink(db.record_ai_call)
-version_manager = VersionManager(db, llbot)
-version_manager.seed_initial_version()
 
 # Security posture, stated once at boot so a weakened config is never silent.
 if not Config.WEBHOOK_TOKEN:
@@ -409,77 +404,52 @@ def _log_thinking(user_name: str, reasoning: str) -> None:
 
 
 
-def _process_sticker_analysis(robot: RobotServer, image_url: str) -> None:
-    """Analyze a sticker/image via vision API end-to-end.
+_VISION_DESCRIBE_PROMPT = (
+    "客观描述这张图：画的是什么、什么风格、什么情绪。"
+    "画面里有文字就照抄出来。"
+    "不要评论，不要扮演任何人，不要加语气词。两句话以内。"
+)
 
-    Flow: Vision API directly generates Kiriko-style reply (single call).
-    No DeepSeek involvement — the vision model handles understanding + reply.
-    Falls back to context-based DeepSeek response only if vision is unavailable.
-    Sticker categorization runs asynchronously in background.
+
+def _describe_image_into_message(robot: RobotServer, image_url: str) -> None:
+    """把图片内容转成文字描述，塞进消息里，然后让**正常聊天链路**去回。
+
+    ## 为什么不再让视觉模型直接生成回复
+
+    之前这条路是「视觉模型一步到位」：图片 + 一段 role_prompt 一起喂进去，
+    由视觉模型直接说出那句回复。有两个硬伤：
+
+    1. **语气不是同一个人** —— 它拿到的是 `GROUP_ROLE`（一个可选的短配置，
+       默认就是空的），不是平时用的那份完整人格。同一个群里打字聊天是 Kiriko，
+       发张图就换了个人。
+    2. **接不上前文** —— 没有历史、没有群语境、没有「当前说话人」的画像，
+       模型只看得到这一张图，所以回复是割裂的。
+
+    现在视觉只做它**该做的事**：把图看清楚，描述出来。说话交回平时那条链路，
+    人格、历史、群语境、好感度全都照常带上。
     """
-    try:
-        reply_text: str | None = None
-
-        # Step 1: Vision API end-to-end (understand image + generate Kiriko reply)
-        if Config.VISION_ENABLED:
-            try:
-                role = (
-                    Config.GROUP_ROLE
-                    if robot.msg_type == "group"
-                    else Config.PRIVATE_ROLE
-                )
-                reply_text = AiServer.vision_chat_reply(
-                    image_url_or_path=image_url,
-                    role_prompt=build_role_prompt(role),
-                    user_name=robot.user_name,
-                    user_text=robot.msg.strip(),
-                )
-                if reply_text:
-                    logger.info(
-                        "Vision end-to-end: %s → %s",
-                        robot.user_name, reply_text[:40],
-                    )
-                else:
-                    logger.warning("Vision API returned None for reply")
-            except Exception:
-                logger.exception("Vision end-to-end reply failed, falling back")
-
-        # Step 2: Fallback — context-based DeepSeek response
-        if not reply_text:
-            user_text = f"用户 {robot.user_name} 发了一个表情包/图片。"
-            if robot.msg.strip():
-                user_text += f" 用户同时说：{robot.msg.strip()}"
-            system_text = (
-                build_role_prompt(Config.GROUP_ROLE) + "\n"
-                "有群友发了一张表情包/图片。你看不到图片内容，"
-                "请根据上下文对这张表情包做出回应，30字以内。"
-            )
-            ai = AiServer(
-                system_text=system_text,
-                user_text=user_text,
-                history_list=[],
-                tools=[],
-                model_type=Config.DEEPSEEK_MODEL,
-                thinking_type="disabled",
-            )
-            ai.ai_request()
-            reply_text = ai.ai_text.strip() if ai.ai_text else "收到表情包啦～好可爱！(◕‿◕✿)"
-
-        robot.reply(reply_text)
-
-        # Step 3: Background sticker categorization (best-effort, non-blocking)
-        if Config.VISION_ENABLED:
-            executor.submit(_background_sticker_categorize, image_url)
-
-        # Record to chat history
-        _save_turn(robot.user_id, robot.group_id, "[图片消息]", reply_text)
-
-    except Exception:
-        logger.exception("Sticker analysis failed for %s", image_url[:60])
+    desc = ""
+    if Config.VISION_ENABLED:
         try:
-            robot.reply("收到表情包啦～(◕‿◕✿)")
+            desc = AiServer.vision_analyze(
+                image_url, prompt=_VISION_DESCRIBE_PROMPT,
+                max_tokens=300, temperature=0, source="vision_desc",
+            ) or ""
         except Exception:
-            logger.debug("main._process_sticker_analysis 忽略了异常", exc_info=True)
+            logger.exception("Vision describe failed")
+
+    desc = " ".join(desc.strip().split())[:200] or "一张图片，没看清内容"
+    tag = f"[图片：{desc}]"
+    text = robot.incoming.text.strip()
+    robot.incoming.text = f"{text} {tag}".strip() if text else tag
+    logger.info("🖼 图片转文字：%s", desc[:60])
+
+    # 表情包归类仍然在后台做，不影响回复速度
+    if Config.VISION_ENABLED:
+        try:
+            executor.submit(_background_sticker_categorize, image_url)
+        except Exception:
+            logger.debug("sticker categorize submit failed", exc_info=True)
 
 
 def _background_sticker_categorize(image_url: str) -> None:
@@ -588,9 +558,9 @@ def main_logic(robot: RobotServer) -> None:
         # ── @bot + image → analyze ──────────────────────
         if robot.at_judgement and robot.msg_type == "group":
             if has_images and vision_on:
-                logger.info("🎯 Sticker flow: direct analysis (@bot+image) from %s", robot.user_name)
-                _process_sticker_analysis(robot, first_image_url)
-                return
+                logger.info("🎯 图片先描述再走正常回复 (@bot+image) from %s", robot.user_name)
+                # 不 return —— 描述会并进消息文本，后面的链路照常跑
+                _describe_image_into_message(robot, first_image_url)
 
             # No image and no text (bare @bot ping / QQ-face-only) → cheap canned
             # greeting. No pending, no AI call.
@@ -601,9 +571,8 @@ def main_logic(robot: RobotServer) -> None:
 
         # ── Private chat with images — always analyze ──
         if has_images and robot.msg_type == "private" and vision_on:
-            logger.info("🎯 Sticker flow: private chat image from %s", robot.user_name)
-            _process_sticker_analysis(robot, first_image_url)
-            return
+            logger.info("🎯 图片先描述再走正常回复 (private) from %s", robot.user_name)
+            _describe_image_into_message(robot, first_image_url)
 
         # Only respond to @bot or private (after sticker flow)
         if not robot.at_judgement and robot.msg_type != "private":
@@ -954,205 +923,6 @@ def api_affection_adjust():
         logger.exception("Failed to adjust affection for %s/%s", user_id, group_id)
         return jsonify({"ok": False, "error": "数据库更新失败"}), 500
 
-
-@app.route("/api/versions/bump", methods=["POST"])
-def api_versions_bump():
-    """Bump version number and return the new version string (does not create it)."""
-    data = request.get_json(silent=True) or {}
-    bump_type = data.get("type", "patch")
-    if bump_type not in ("major", "minor", "patch"):
-        return jsonify({"ok": False, "error": "type must be: major, minor, or patch"}), 400
-    try:
-        new_version = version_manager.bump_version(bump_type)
-        return jsonify({"ok": True, "version": new_version, "bump": bump_type})
-    except Exception:
-        logger.exception("Version bump failed")
-        return jsonify({"ok": False, "error": "版本号递增失败"}), 500
-
-@app.route("/api/versions/current")
-def api_versions_current():
-    current = version_manager.get_current_version()
-    if not current:
-        return jsonify({"ok": False, "error": "No versions found"}), 404
-    version_id = current["id"]
-    changelogs = version_manager.get_changelogs(version_id=version_id)
-    current["changelogs"] = changelogs
-    return jsonify({"ok": True, "version": current})
-
-@app.route("/api/versions")
-def api_versions():
-    versions = version_manager.get_all_versions()
-    return jsonify({"ok": True, "versions": versions})
-
-@app.route("/api/versions/<int:version_id>")
-def api_version_detail(version_id: int):
-    detail = version_manager.get_version_detail(version_id)
-    if not detail:
-        return jsonify({"ok": False, "error": "Version not found"}), 404
-    return jsonify({"ok": True, "version": detail})
-
-@app.route("/api/versions", methods=["POST"])
-def api_versions_create():
-    data = request.get_json(silent=True) or {}
-    version = (data.get("version") or "").strip()
-    if not version:
-        return jsonify({"ok": False, "error": "Version string is required"}), 400
-    # Validate version format: X.Y.Z
-    import re
-    if not re.match(r"^\d+\.\d+\.\d+$", version):
-        return jsonify({"ok": False, "error": "Version must be in format X.Y.Z (e.g. 1.0.0)"}), 400
-    description = data.get("description", "")
-    author = data.get("author", "dashboard")
-    notify = data.get("notify", True)
-    try:
-        result = version_manager.create_version(version, description, author, notify=notify)
-        return jsonify({"ok": True, "version": result})
-    except Exception:
-        logger.exception("Failed to create version %s", version)
-        return jsonify({"ok": False, "error": "Database insert failed"}), 500
-
-@app.route("/api/changelog")
-def api_changelog():
-    version_id = request.args.get("version_id", type=int)
-    entry_type = request.args.get("type")
-    limit = request.args.get("limit", 100, type=int)
-    entries = version_manager.get_changelogs(version_id=version_id, entry_type=entry_type, limit=limit)
-    return jsonify({"ok": True, "changelogs": entries})
-
-@app.route("/api/changelog", methods=["POST"])
-def api_changelog_create():
-    data = request.get_json(silent=True) or {}
-    version_id = data.get("version_id", 0)
-    entry_type = data.get("entry_type", "feature")
-    title = (data.get("title") or "").strip()
-    description = data.get("description", "")
-    author = data.get("author", "dashboard")
-    if not version_id or not title:
-        return jsonify({"ok": False, "error": "version_id and title are required"}), 400
-    if entry_type not in {"feature", "fix", "improve", "breaking"}:
-        return jsonify({"ok": False, "error": "entry_type must be one of: feature, fix, improve, breaking"}), 400
-    try:
-        entry = version_manager.add_changelog(version_id, entry_type, title, description, author)
-        # Notify groups about the new changelog entry
-        try:
-            executor.submit(version_manager.notify_changelog_entry, entry)
-        except Exception:
-            logger.debug("main.api_changelog_create 忽略了异常", exc_info=True)
-        return jsonify({"ok": True, "entry": entry})
-    except Exception:
-        logger.exception("Failed to create changelog entry")
-        return jsonify({"ok": False, "error": "Database insert failed"}), 500
-
-# ── Manual push notification ─────────────────────────
-
-@app.route("/api/changelog/<int:entry_id>/push", methods=["POST"])
-def api_changelog_push(entry_id: int):
-    """Manually push a changelog entry notification to all groups."""
-    rows = db.fetch_data(
-        "SELECT id, version_id, entry_type, title, description, author, created_at "
-        "FROM changelog WHERE id = ?", (entry_id,)
-    )
-    if not rows:
-        return jsonify({"ok": False, "error": "Changelog entry not found"}), 404
-    r = rows[0]
-    entry = {
-        "id": r[0], "version_id": r[1], "entry_type": r[2],
-        "title": r[3], "description": r[4], "author": r[5],
-        "created_at": r[6],
-    }
-    try:
-        version_manager.notify_changelog_entry(entry)
-        return jsonify({"ok": True, "pushed": entry["title"]})
-    except Exception:
-        logger.exception("Failed to push changelog entry #%d", entry_id)
-        return jsonify({"ok": False, "error": "Push failed"}), 500
-
-@app.route("/api/versions/<int:version_id>/push", methods=["POST"])
-def api_version_push(version_id: int):
-    """Manually push a version release notification to all groups."""
-    detail = version_manager.get_version_detail(version_id)
-    if not detail:
-        return jsonify({"ok": False, "error": "Version not found"}), 404
-    try:
-        version_manager.notify_version_release(detail)
-        return jsonify({"ok": True, "pushed": detail["version"]})
-    except Exception:
-        logger.exception("Failed to push version #%d", version_id)
-        return jsonify({"ok": False, "error": "Push failed"}), 500
-
-# ── New Feature Digest Push ──────────────────────────
-
-@app.route("/api/digest/push", methods=["POST"])
-def api_digest_push():
-    """Push a new-feature digest to all active groups. Only pushes current version once."""
-    current = version_manager.get_current_version()
-    if not current:
-        return jsonify({"ok": False, "error": "No version found"}), 404
-    version_id = current["id"]
-    version_str = current["version"]
-
-    # Check if digest was already sent for this version
-    rows = db.fetch_data(
-        "SELECT digest_sent FROM app_versions WHERE id = ?", (version_id,)
-    )
-    if rows and rows[0][0]:
-        return jsonify({"ok": False, "error": f"版本 v{version_str} 已推送过速递，无需重复推送"}), 400
-
-    # Get feature-type changelogs from current version ONLY
-    features = version_manager.get_changelogs(version_id=version_id, entry_type="feature")
-
-    # Build digest message
-    lines = [
-        "📬 KirikoBot 新功能速递！",
-        "",
-        f"📦 版本：v{version_str}",
-        f"📅 日期：{current.get('release_date', '')}",
-        "",
-    ]
-
-    if features:
-        lines.append("🎉 本次更新内容：")
-        for i, f in enumerate(features, 1):
-            title = f.get("title", "未知")
-            desc = f.get("description", "")
-            if desc.startswith("来自 "):
-                parts = desc.split("的需求：", 1)
-                if len(parts) == 2:
-                    desc = parts[1].strip()
-            if desc and len(desc) > 80:
-                desc = desc[:80] + "…"
-            line = f"  {i}. {title}"
-            if desc:
-                line += f" — {desc}"
-            lines.append(line)
-        lines.append("")
-
-    lines.append("感谢大家对 KirikoBot 的支持！(◕‿◕✿)")
-
-    message = "\n".join(lines)
-
-    # Send to all active groups
-    groups = version_manager._get_active_group_ids()
-    success = 0
-    for gid in groups:
-        try:
-            from llbot_client import MessageBuilder
-            builder = MessageBuilder()
-            builder.text(message)
-            llbot.send_group_msg(gid, builder.build())
-            success += 1
-        except Exception:
-            logger.exception("Failed to send digest to group %s", gid)
-
-    # Mark digest as sent
-    try:
-        db.execute_action("UPDATE app_versions SET digest_sent = 1 WHERE id = ?", (version_id,))
-    except Exception:
-        logger.debug("main.api_digest_push 忽略了异常", exc_info=True)
-
-    logger.info("Feature digest pushed: v%s to %d/%d groups", version_str, success, len(groups))
-    return jsonify({"ok": True, "pushed": success, "total_groups": len(groups),
-                    "version": version_str, "features_count": len(features)})
 
 @app.route("/api/messages")
 def api_messages():
@@ -1599,36 +1369,6 @@ def api_group_messages(group_id: str):
         size=size,
     )
     return jsonify({"ok": True, "group_id": group_id, **result})
-
-
-@app.route("/api/subscriptions")
-def api_subscriptions():
-    """All push subscriptions (optionally ?group_id=)."""
-    return jsonify({"ok": True,
-                    "topics": list(db.SUBSCRIPTION_TOPICS),
-                    "subscriptions": db.get_subscriptions(request.args.get("group_id") or None)})
-
-
-@app.route("/api/subscriptions", methods=["POST"])
-def api_subscription_set():
-    """Create/update one subscription: {group_id, topic, time, enabled}."""
-    data = request.get_json(silent=True) or {}
-    group_id = str(data.get("group_id") or "").strip()
-    topic = str(data.get("topic") or "").strip()
-    if not group_id or topic not in db.SUBSCRIPTION_TOPICS:
-        return jsonify({"ok": False, "error": "group_id and a valid topic are required"}), 400
-    push_time = str(data.get("time") or "07:00").strip()
-    if not re.match(r"^\d{1,2}:\d{2}$", push_time):
-        return jsonify({"ok": False, "error": "time must look like HH:MM"}), 400
-    db.set_subscription(group_id, topic, push_time=push_time,
-                        enabled=bool(data.get("enabled", True)))
-    return jsonify({"ok": True, "subscriptions": db.get_subscriptions(group_id)})
-
-
-@app.route("/api/subscriptions/<group_id>/<topic>", methods=["DELETE"])
-def api_subscription_delete(group_id: str, topic: str):
-    db.delete_subscription(group_id, topic)
-    return jsonify({"ok": True, "subscriptions": db.get_subscriptions(group_id)})
 
 
 @app.route("/api/amp-heads")

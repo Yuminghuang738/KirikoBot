@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 import logging
-import re
 import threading
 import time
 from datetime import datetime, timedelta
@@ -14,35 +12,26 @@ logger = logging.getLogger(__name__)
 
 
 class BotScheduler:
-    """Background scheduler for reminders + morning greetings."""
+    """Background scheduler：提醒、箱头库爬取、每日维护。
+
+    群订阅推送已经整体移除 —— 机器人不再主动往群里推任何东西，
+    除了用户自己设的提醒。
+    """
 
     CHECK_INTERVAL = 5  # seconds between checks (supports second-precision reminders)
     AMP_CRAWL_INTERVAL_DAYS = 7
 
     def __init__(
-        self, db: Any, llbot: Any, political_news: Any, news_crawler: Any,
-        hitokoto_service: Any = None, feature_gate: Any = None,
+        self, db: Any, llbot: Any, feature_gate: Any = None,
         amp_crawler: Any = None,
     ) -> None:
         self.db = db
         self.llbot = llbot
-        self.political_news = political_news
-        self.news_crawler = news_crawler
-        self.hitokoto_service = hitokoto_service
-        self.feature_gate = feature_gate
+        self.feature_gate = feature_gate      # 提醒的按群开关要用
         self.amp_crawler = amp_crawler
         self._running = False
         self._thread: threading.Thread | None = None
 
-    def _get_active_groups(self) -> list[str]:
-        """Get all distinct group IDs from recorded messages."""
-        try:
-            rows = self.db.fetch_data(
-                "SELECT DISTINCT group_id FROM group_messages WHERE group_id IS NOT NULL"
-            )
-            return [r[0] for r in rows if r[0]]
-        except Exception:
-            return []
 
     def start(self) -> None:
         if self._running:
@@ -59,7 +48,6 @@ class BotScheduler:
         while self._running:
             try:
                 self._check_reminders()
-                self._check_subscriptions()
                 self._check_amp_crawl()
                 # Retention + DB backup, self-guarded to run once per day
                 maintenance_service.run_daily(self.db, self.db.db_file)
@@ -134,35 +122,6 @@ class BotScheduler:
                 "UPDATE reminders SET fired=1 WHERE id=?", (rid,),
             )
 
-    def _check_subscriptions(self) -> None:
-        now = datetime.now()
-        today = now.strftime("%Y-%m-%d")
-        hm = now.strftime("%H:%M")
-
-        for sub in self.db.due_subscriptions(hm, today):
-            gid, topic = sub["group_id"], sub["topic"]
-
-            # Always mark fired first: a failure must not retry on every tick.
-            self.db.mark_subscription_fired(gid, topic, today)
-
-            # 不再有「群推送订阅」总开关：推送页里每个订阅项自己的开关就是唯一控制。
-            late = self._minutes_late(sub["push_time"], now)
-            if late > self.MAX_LATE_MINUTES:
-                logger.info("Skipping stale %s push for %s (%d min late)", topic, gid, late)
-                continue
-
-            threading.Thread(
-                target=self._push_topic, args=(gid, topic), daemon=True,
-            ).start()
-
-    @staticmethod
-    def _minutes_late(push_time: str, now: datetime) -> int:
-        try:
-            hh, mm = (int(x) for x in push_time.split(":")[:2])
-        except (ValueError, AttributeError):
-            return 0
-        scheduled = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
-        return max(0, int((now - scheduled).total_seconds() // 60))
 
     def _check_amp_crawl(self) -> None:
         """Grow the amp-head library from Wikipedia, at most weekly.
@@ -211,274 +170,7 @@ class BotScheduler:
             except Exception:
                 logger.debug("amp_crawl_running reset failed", exc_info=True)
 
-    def _push_topic(self, group_id: str, topic: str) -> None:
-        try:
-            if topic == "daily_roll_call":
-                text = self._build_roll_call(group_id)
-            elif topic == "morning_news":
-                text = self._build_morning_lines()
-            elif topic == "gaming_news":
-                items = self.news_crawler.fetch_gaming_news()
-                text = self._format_titles("🎮 游戏速递", items, 5)
-            elif topic == "hitokoto":
-                text = self._build_hitokoto()
-            elif topic == "amp_head":
-                text = self._build_amp_head()
-            else:
-                logger.warning("Unknown subscription topic: %s", topic)
-                return
-
-            if not text:
-                return
-            from llbot_client import MessageBuilder
-            # Builders return a plain string, except the roll call which needs
-            # @ segments and returns a pre-built message list.
-            message = text if isinstance(text, list) else MessageBuilder().text(text).build()
-            self.llbot.send_group_msg(group_id, message)
-            logger.info("Subscription push '%s' sent to %s", topic, group_id)
-        except Exception:
-            logger.exception("Subscription push '%s' failed for %s", topic, group_id)
-
-    def _build_morning_lines(self) -> str:
-        """The morning briefing on its own (used by the subscription push)."""
-        news_items: list[dict[str, str]] = []
-        try:
-            news_items = self.political_news.translate_news(
-                self.political_news.fetch_for_greeting()
-            )
-        except Exception:
-            logger.exception("Morning political news fetch failed")
-
-        gaming_items: list[dict[str, str]] = []
-        try:
-            gaming_items = self.news_crawler.fetch_gaming_news()
-        except Exception:
-            logger.debug("scheduler._build_morning_lines 忽略了异常", exc_info=True)
-
-        lines = ["☀️ 早上好！新的一天开始啦～ (◕‿◕✿)", ""]
-        if news_items:
-            lines.append(self._format_titles("📰 今日时政要闻", news_items, 5))
-            lines.append("")
-        if gaming_items:
-            lines.append(self._format_titles("🎮 游戏速递", gaming_items, 3))
-            lines.append("")
-        quote = self._build_hitokoto()
-        if quote:
-            lines.append(quote)
-            lines.append("")
-        lines.append("祝大家今天元气满满！💪✨")
-        return "\n".join(lines)
-
-    @staticmethod
-    def _format_titles(title: str, items: list[dict[str, str]], limit: int) -> str:
-        lines = [f"{title}："]
-        for i, n in enumerate(items[:limit], 1):
-            src = f" [{n['source']}]" if n.get("source") else ""
-            lines.append(f"  {i}. {n.get('title', '')}{src}")
-        return "\n".join(lines)
-
-    def _build_hitokoto(self) -> str:
-        if not self.hitokoto_service:
-            return ""
-        try:
-            quote = self.hitokoto_service.get_quote()
-        except Exception:
-            logger.exception("Hitokoto fetch failed")
-            return ""
-        if not quote or not quote.get("text"):
-            return ""
-        credit = " ".join(
-            p for p in (quote.get("source"), quote.get("author")) if p
-        )
-        return f"💬 每日一言：\n  {quote['text']}" + (f"\n  —— {credit}" if credit else "")
-
-    def _build_amp_head(self) -> str:
-        """Daily guitar amp-head recommendation.
-
-        The facts come from the curated `amp_heads` table rather than from the
-        model: years, tube complements and street prices are exactly the kind
-        of detail an AI will invent convincingly. No API call, no token cost.
-        """
-        try:
-            head = self.db.get_amp_head_of_the_day()
-        except Exception:
-            logger.exception("Amp head lookup failed")
-            return ""
-        if not head:
-            return ""
-
-        title = f"{head['brand']} {head['model']}".strip()
-        lines = [f"🎸 今日箱头 · {title}", ""]
-
-        born = " · ".join(
-            x for x in (f"{head['year']} 年" if head.get("year") else "",
-                        head.get("origin") or "") if x
-        )
-        if born:
-            lines.append(f"📅 诞生：{born}")
-
-        specs = " · ".join(
-            x for x in (head.get("power"), head.get("kind"), head.get("tubes")) if x
-        )
-        if specs:
-            lines.append(f"🔊 配置：{specs}")
-
-        if head.get("tone"):
-            lines.extend(["", "🎵 音色特点：", f"  {head['tone']}"])
-        # Crawled rows often have no price (Wikipedia rarely states one) — the
-        # line is dropped rather than filled with a guess.
-        if head.get("price"):
-            lines.extend(["", f"💰 市场价格：{head['price']}"])
-        if head.get("tip"):
-            lines.extend(["", "⭐ 使用推荐：", f"  {head['tip']}"])
-        if head.get("famous"):
-            lines.extend(["", f"🎼 知名使用者：{head['famous']}"])
-
-        lines.append("")
-        if head.get("source") == "wikipedia":
-            url = head.get("source_url") or ""
-            lines.append("📖 来源：英文维基百科（自动抓取整理）")
-            if url:
-                lines.append(url)
-            lines.append("（资料为自动抽取，可能不完整；有疑问以来源为准）")
-        elif head.get("price"):
-            lines.append("（价格随成色与行情浮动，仅供参考）")
-        return "\n".join(lines)
-
-    def _build_roll_call(self, group_id: str) -> str:
-        """Daily roll call: @ the members who spoke most today."""
-        try:
-            stats = self.db.get_daily_group_stats(group_id)
-        except Exception:
-            logger.exception("Roll call stats failed")
-            return ""
-
-        total = stats.get("total", 0)
-        if not total:
-            return "📣 今天群里好安静呀，一个人都没说话……明天记得来聊天哦 (｡•́︿•̀｡)"
-
-        top = stats.get("top", [])[:3]
-        from llbot_client import MessageBuilder
-        builder = MessageBuilder()
-        builder.text(f"📣 今日发言榜（共 {total} 条 · {stats['active_users']} 人参与）\n\n")
-        for i, item in enumerate(top, 1):
-            medal = {1: "🥇", 2: "🥈", 3: "🥉"}.get(i, "•")
-            builder.text(f"{medal} ")
-            if item.get("user_id"):
-                builder.at(str(item["user_id"]))
-                builder.text(" ")
-            builder.text(f"— {item['count']} 条\n")
-        builder.text("\n今天最活跃的就是你们啦～其他人也要多冒泡哦 (◕‿◕✿)")
-        # Returns a segment list (it contains @ mentions), which _push_topic
-        # sends as-is.
-        return builder.build()
-
-# ── Time parsing for reminders ─────────────────────────
-
-def _cn_to_arabic(text: str) -> str:
-    """Convert Chinese numerals in text to Arabic digits."""
-    cn_map = {"零": "0", "一": "1", "二": "2", "两": "2", "三": "3", "四": "4",
-              "五": "5", "六": "6", "七": "7", "八": "8", "九": "9", "十": "10"}
-    # Replace "三十" → "30", "五" → "5", etc.
-    result = []
-    i = 0
-    while i < len(text):
-        if text[i:i+2] in cn_map:
-            result.append(cn_map[text[i:i+2]])
-            i += 2
-        elif text[i] in cn_map:
-            result.append(cn_map[text[i]])
-            i += 1
-        else:
-            result.append(text[i])
-            i += 1
-    return "".join(result)
 
 
-def parse_reminder_time(text: str) -> tuple[str | None, str | None, int]:
-    """Extract time and content from a reminder request.
-    Returns (remind_time_str, content, repeat_daily) or (None, error_msg, 0)."""
-    now = datetime.now()
 
-    # Pre-process Chinese numerals → Arabic
-    text = _cn_to_arabic(text)
 
-    # ── Daily recurring patterns ──────────────────────────
-    daily_patterns = [
-        (r"(?:每天|每日)\s*(\d+)\s*点\s*(\d+)\s*分\s*(.+)",
-         lambda m: (now.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0), m.group(3))),
-        (r"(?:每天|每日)\s*(\d+)\s*点半\s*(.+)",
-         lambda m: (now.replace(hour=int(m.group(1)), minute=30, second=0), m.group(2))),
-        (r"(?:每天|每日)\s*早上\s*(\d+)\s*点\s*(.+)",
-         lambda m: (now.replace(hour=int(m.group(1)), minute=0, second=0), m.group(2))),
-        (r"(?:每天|每日)\s*下午\s*(\d+)\s*点\s*(.+)",
-         lambda m: (now.replace(hour=12 + int(m.group(1)), minute=0, second=0), m.group(2))),
-        (r"(?:每天|每日)\s*晚上\s*(\d+)\s*点\s*(.+)",
-         lambda m: (now.replace(hour=12 + int(m.group(1)), minute=0, second=0), m.group(2))),
-        (r"(?:每天|每日)\s*上午\s*(\d+)\s*点\s*(.+)",
-         lambda m: (now.replace(hour=int(m.group(1)), minute=0, second=0), m.group(2))),
-        (r"(?:每天|每日)\s*(\d+)\s*点\s*(.+)",
-         lambda m: (now.replace(hour=int(m.group(1)), minute=0, second=0), m.group(2))),
-    ]
-
-    for pattern, time_fn in daily_patterns:
-        match = re.search(pattern, text)
-        if match:
-            try:
-                remind_time, content = time_fn(match)
-            except Exception:
-                logger.debug("scheduler.parse_reminder_time 忽略了异常", exc_info=True)
-                continue
-            if remind_time <= now:
-                remind_time += timedelta(days=1)
-            # Clean up content
-            content = content.strip()
-            for prefix in ("提醒我", "提醒", "记得", "别忘了", "叫我", "帮我"):
-                if content.startswith(prefix):
-                    content = content[len(prefix):].strip()
-            while content and content[0] in "的去要来把给":
-                content = content[1:].strip()
-            if not content:
-                content = "未指定内容"
-            return (remind_time.strftime("%Y-%m-%d %H:%M:%S"), content, 1)
-
-    # ── One-shot patterns ─────────────────────────────────
-    patterns = [
-        (r"半\s*小?\s*时\s*后\s*(.+)", lambda m: (now + timedelta(minutes=30), m.group(1))),
-        (r"(\d+)\s*秒\s*后\s*(.+)", lambda m: (now + timedelta(seconds=int(m.group(1))), m.group(2))),
-        (r"(\d+)\s*分钟\s*后\s*(.+)", lambda m: (now + timedelta(minutes=int(m.group(1))), m.group(2))),
-        (r"(\d+)\s*小时\s*后\s*(.+)", lambda m: (now + timedelta(hours=int(m.group(1))), m.group(2))),
-        (r"(\d+)\s*点\s*(\d+)\s*分\s*(\d+)\s*秒\s*(.+)", lambda m: (now.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=int(m.group(3))), m.group(4))),
-        (r"(\d+)\s*点\s*(\d+)\s*分\s*(.+)", lambda m: (now.replace(hour=int(m.group(1)), minute=int(m.group(2))), m.group(3))),
-        (r"(\d+)\s*点半\s*(.+)", lambda m: (now.replace(hour=int(m.group(1)), minute=30), m.group(2))),
-        (r"明天\s*(\d+)\s*点\s*(.+)", lambda m: ((now + timedelta(days=1)).replace(hour=int(m.group(1)), minute=0), m.group(2))),
-        (r"今天\s*(\d+)\s*点\s*(.+)", lambda m: (now.replace(hour=int(m.group(1)), minute=0), m.group(2))),
-        (r"下午\s*(\d+)\s*点\s*(.+)", lambda m: (now.replace(hour=12 + int(m.group(1)), minute=0), m.group(2))),
-        (r"(\d+)\s*点\s*(.+)", lambda m: (now.replace(hour=int(m.group(1)), minute=0), m.group(2))),
-    ]
-
-    for pattern, time_fn in patterns:
-        match = re.search(pattern, text)
-        if match:
-            try:
-                remind_time, content = time_fn(match)
-            except Exception:
-                logger.debug("scheduler.parse_reminder_time 忽略了异常", exc_info=True)
-                continue
-            if remind_time <= now:
-                remind_time += timedelta(days=1)
-            # Clean up content: strip "提醒我" / "提醒" prefixes
-            content = content.strip()
-            for prefix in ("提醒我", "提醒", "记得", "别忘了", "叫我", "帮我"):
-                if content.startswith(prefix):
-                    content = content[len(prefix):].strip()
-            # Also strip leading 的/去/要
-            while content and content[0] in "的去要来把给":
-                content = content[1:].strip()
-
-            if not content:
-                content = "未指定内容"
-
-            return (remind_time.strftime("%Y-%m-%d %H:%M:%S"), content, 0)
-
-    return (None, "无法理解时间，请说'X分钟后提醒我XXX'或'明天X点提醒我XXX'或'每天X点提醒我XXX'", 0)

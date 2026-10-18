@@ -103,31 +103,82 @@ class TestFeatureRegistryIsClean:
         assert "vision" in FEATURE_KEYS
 
 
-class TestLegacyMorningPushIsGone:
-    def test_the_scheduler_no_longer_has_it(self):
-        """那套固定 7:00 早报和推送页的「早间新闻」订阅项重复，会各发一次。"""
+class TestTheWholePushSystemIsGone:
+    """群订阅推送**整体移除**了 —— 机器人不再主动往群里推任何东西。
+
+    移除的是这一整套：订阅表 / 主题常量 / 调度器里的推送逻辑 / API / 前端页面。
+    早报、游戏速递、一言、发言榜、箱头推荐这几个「主题」全都跟着没了。
+    留下的只有**用户自己设的提醒**。
+    """
+
+    def test_the_scheduler_has_no_push_machinery(self):
         import scheduler
 
-        for attr in ("_morning_greeting", "_check_greetings", "_last_morning"):
+        for attr in ("_check_subscriptions", "_push_topic", "_minutes_late",
+                     "_build_morning_lines", "_build_hitokoto",
+                     "_build_amp_head", "_build_roll_call", "_format_titles"):
             assert not hasattr(scheduler.BotScheduler, attr), f"{attr} 还在调度器里"
 
-    def test_the_subscription_topic_still_exists(self):
-        """删的是那套遗留路径，不是早间新闻本身 —— 它现在是推送页的一个订阅项。"""
+    def test_the_subscription_table_and_api_are_gone(self):
         from database_manager import DatabaseManager
+        import main
 
-        assert "morning_news" in DatabaseManager.SUBSCRIPTION_TOPICS
+        assert not hasattr(DatabaseManager, "SUBSCRIPTION_TOPICS")
+        for attr in ("get_subscriptions", "set_subscription", "delete_subscription",
+                     "due_subscriptions", "mark_subscription_fired"):
+            assert not hasattr(DatabaseManager, attr), f"{attr} 还在"
+        rules = {str(r) for r in main.app.url_map.iter_rules()}
+        assert not any("/api/subscriptions" in r for r in rules), "订阅接口还在"
 
-    def test_the_morning_briefing_builder_survived(self):
-        """订阅推送仍然要用它来生成早报正文。"""
+    def test_the_table_is_dropped_on_startup(self, db):
+        """光删代码不够，数据也要清 —— 否则表里还留着各群的订阅配置。"""
+        rows = db.fetch_data(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='group_subscriptions'"
+        )
+        assert rows == []
+
+    def test_reminders_survive(self):
+        """提醒不是「推送」—— 它是用户自己设的，必须留着。"""
         import scheduler
 
-        assert hasattr(scheduler.BotScheduler, "_build_morning_lines")
+        assert hasattr(scheduler.BotScheduler, "_check_reminders")
+        assert hasattr(scheduler.BotScheduler, "_fire_reminder")
 
-    def test_the_manual_trigger_endpoint_is_gone(self):
+
+class TestVersionManagementIsGone:
+    """版本管理 + 版本推送整体废弃：没有任何东西再往里写，留着只是负担。"""
+
+    def test_the_module_is_deleted(self):
+        import importlib
+
+        try:
+            importlib.import_module("version_manager")
+        except ModuleNotFoundError:
+            return
+        raise AssertionError("version_manager 还在")
+
+    def test_the_tables_are_dropped_on_startup(self, db):
+        for table in ("app_versions", "changelog"):
+            rows = db.fetch_data(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            )
+            assert rows == [], f"{table} 还在"
+
+    def test_the_api_and_pages_are_gone(self):
         import main
 
         rules = {str(r) for r in main.app.url_map.iter_rules()}
-        assert not any("/api/scheduler/morning" in r for r in rules)
+        for path in ("/api/versions", "/api/changelog", "/api/digest/push"):
+            assert not any(path in r for r in rules), f"{path} 还在"
+
+        html = open("KirikoBot/templates/dashboard.html", encoding="utf-8").read()
+        assert 'data-page="versions"' not in html
+        assert 'data-page="push"' not in html
+
+    def test_no_version_file(self):
+        import os
+
+        assert not os.path.exists("KirikoBot/VERSION")
 
 
 class TestFeatureRequestChainIsGone:
@@ -204,4 +255,5 @@ class TestDataToolsAnswerDirectly:
 
         for name in ("weather_tool", "bilibili_tool", "hitokoto_tool"):
             assert not hasattr(main, name), f"{name} 还在"
-        assert hasattr(main, "hitokoto_service"), "一言推送还要用这个服务"
+        # 一言推送移除后，这个服务也没有调用方了
+        assert not hasattr(main, "hitokoto_service"), "一言推送已经没了，服务不该还留着"
