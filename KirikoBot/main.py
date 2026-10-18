@@ -17,8 +17,7 @@ from flask import Flask, Response, jsonify, render_template, request, send_from_
 from ai_server import AiServer
 from ai_tools import (
     Tarot, Tarot_History, GamingNews,
-    WebSearchTool, WeatherTool, StickerTool,
-    HitokotoTool, BilibiliTool,
+    WebSearchTool, StickerTool,
     AtMemberTool, ReminderTool, TimeTool, PoliticalNewsTool,
     BalanceTool, MusicTool,
     ListRemindersTool, DeleteReminderTool,
@@ -50,7 +49,7 @@ from feature_gate import (
     FEATURE_DEFS, FeatureGate, VALID_SCOPES,
     disabled_tool_names, disabled_labels,
 )
-from extra_services import HitokotoService, BilibiliTrending
+from extra_services import HitokotoService
 from hot_news import HotNewsScraper
 from judge_service import JudgeService
 from llbot_client import LLBotClient, MessageBuilder
@@ -70,7 +69,6 @@ from scheduler import BotScheduler
 from sticker_collector import StickerCollector, STICKER_DIR, STICKER_CATEGORIES
 from version_manager import VersionManager
 from web_search import WebSearch
-from weather_service import WeatherService
 
 
 def _setup_logging() -> None:
@@ -117,12 +115,9 @@ news_crawler = NewsCrawler()
 gaming_news = GamingNews(news_crawler, pkg)
 web_search = WebSearch()
 web_search_tool = WebSearchTool(web_search, pkg)
-weather_tool = WeatherTool(WeatherService(), pkg)
 sticker_tool = StickerTool(pkg)
 hitokoto_service = HitokotoService()
 amp_head_crawler = AmpHeadCrawler(db)
-hitokoto_tool = HitokotoTool(hitokoto_service, pkg)
-bilibili_tool = BilibiliTool(BilibiliTrending(), pkg)
 at_member_tool = AtMemberTool(pkg, db, llbot)
 reminder_tool = ReminderTool(db, pkg)
 list_reminders_tool = ListRemindersTool(db, pkg)
@@ -185,9 +180,7 @@ _start_time = time.time()
 ROUTES = {
     "tarot": tarot.tarot_call, "tarot_history": tarot_history.tarot_history_call,
     "gaming_news": gaming_news.gaming_news_call, "web_search": web_search_tool.web_search_call,
-    "weather": weather_tool.weather_call, "sticker": sticker_tool.sticker_call,
-    "hitokoto": hitokoto_tool.hitokoto_call,
-    "bilibili_trending": bilibili_tool.bilibili_call,
+    "sticker": sticker_tool.sticker_call,
     "at_member": at_member_tool.at_member_call, "set_reminder": reminder_tool.set_reminder_call,
     "list_reminders": list_reminders_tool.list_reminders_call,
     "delete_reminder": delete_reminder_tool.delete_reminder_call,
@@ -207,8 +200,9 @@ ROUTES = {
 # Self-contained tools format and send their own reply — no AI follow-up needed
 SELF_CONTAINED_TOOLS = {
     "tarot", "sticker", "web_search", "at_member",
-    "political_news", "gaming_news", "bilibili_trending",
-    "hitokoto", "tarot_history", "music_search",
+    "political_news", "gaming_news", "tarot_history", "music_search",
+    # 这几个是纯数据类回答（统计/余额/好感度），直接发原文比让模型复述更准
+    "group_stats", "check_balance", "check_affection", "affection_leaderboard",
     # explain_self sends the raw debug dump itself; a follow-up turn would only
     # add the model's paraphrase on top of the text we want verbatim.
     "explain_self",

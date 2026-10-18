@@ -48,20 +48,6 @@ class AiTools:
                 "required": ["query"],
             },
         }
-        function_weather = {
-            "name": "weather",
-            "description": "当用户询问天气、气温、是否会下雨、穿什么衣服等天气相关问题时，调用此函数查询天气",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "city": {
-                        "type": "string",
-                        "description": "城市名称，如：北京、上海、广州、深圳、成都等",
-                    }
-                },
-                "required": ["city"],
-            },
-        }
         function_sticker = {
             "name": "sticker",
             "description": (
@@ -83,16 +69,6 @@ class AiTools:
                 },
                 "required": [],
             },
-        }
-        function_hitokoto = {
-            "name": "hitokoto",
-            "description": "当用户表示想听一句话、来句名言、励志语录、每日一句、一言时，调用此函数获取随机一言",
-            "parameters": empty_params,
-        }
-        function_bilibili = {
-            "name": "bilibili_trending",
-            "description": "当用户询问B站热搜、B站热门、bilibili热搜、B站排行、B站视频排行时，调用此函数获取B站热搜榜单",
-            "parameters": empty_params,
         }
         function_at_member = {
             "name": "at_member",
@@ -292,11 +268,8 @@ class AiTools:
         tool_tarot_history = {"type": "function", "function": function_tarot_history}
         tool_gaming_news = {"type": "function", "function": function_gaming_news}
         tool_web_search = {"type": "function", "function": function_web_search}
-        tool_weather = {"type": "function", "function": function_weather}
         tool_sticker = {"type": "function", "function": function_sticker}
-        tool_hitokoto = {"type": "function", "function": function_hitokoto}
         tool_political_news = {"type": "function", "function": function_political_news}
-        tool_bilibili = {"type": "function", "function": function_bilibili}
         tool_at_member = {"type": "function", "function": function_at_member}
         tool_reminder = {"type": "function", "function": function_reminder}
         tool_list_reminders = {"type": "function", "function": function_list_reminders}
@@ -317,12 +290,9 @@ class AiTools:
             tool_tarot_history,
             tool_gaming_news,
             tool_web_search,
-            tool_weather,
             tool_sticker,
-            tool_hitokoto,
             tool_political_news,
             tool_balance,
-            tool_bilibili,
             tool_at_member,
             tool_reminder,
             tool_list_reminders,

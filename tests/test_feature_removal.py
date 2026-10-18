@@ -22,9 +22,13 @@ import pytest
 APP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "KirikoBot")
 
 REMOVED_TOOLS = (
+    # 2026-10 第一批：使用率低 / 与 AI 能力重合
     "dice", "food_picker", "request_sticker",
     "sticker_battle", "similar_sticker",
     "submit_feature", "feature_list",
+    # 2026-10 第二批：天气、B站热搜、一言
+    # —— 这三个要么 AI 自己就能答，要么使用率太低
+    "weather", "bilibili_trending", "hitokoto",
 )
 # 这些 feature key 已随功能/重复的推送开关一起移除
 REMOVED_FEATURE_KEYS = (
@@ -32,6 +36,7 @@ REMOVED_FEATURE_KEYS = (
     "feature_request", "feature_list",
     "morning_news",   # 遗留的固定 7:00 早报
     "subscription",   # 与推送页重合的总开关
+    "weather", "bilibili", "hitokoto",   # 对应工具已移除
 )
 
 
@@ -60,7 +65,8 @@ class TestToolsAreGone:
         import ai_tools
 
         for cls in ("DiceTool", "FoodPickerTool", "StickerBattleTool",
-                    "SimilarStickerTool", "FeatureRequestTool", "FeatureListTool"):
+                    "SimilarStickerTool", "FeatureRequestTool", "FeatureListTool",
+                    "WeatherTool", "BilibiliTool", "HitokotoTool"):
             assert not hasattr(ai_tools, cls), f"{cls} 还在 ai_tools 里"
 
     def test_the_battle_state_is_gone(self):
@@ -154,3 +160,48 @@ class TestPushPageIsTheSingleControl:
         """原来的说明让用户去设置页找总开关，那个开关已经没了。"""
         js = open(os.path.join(APP_DIR, "static", "js", "app.js"), encoding="utf-8").read()
         assert "群设置 → 群推送订阅" not in js
+
+
+class TestDataToolsAnswerDirectly:
+    """统计 / 余额 / 好感度这类**数字型**回答直接发原文，不经 AI 复述。
+
+    理由：让模型复述数字没有任何收益，还可能把数读错、把排行顺序讲乱。
+    这类工具改成 SELF_CONTAINED 之后，自己把结果发出去，模型不再参与。
+    """
+
+    DATA_TOOLS = {
+        "GroupStatsTool": "group_stats_call",
+        "BalanceTool": "balance_call",
+        "AffectionTool": "check_affection_call",
+        "AffectionLeaderboardTool": "affection_leaderboard_call",
+    }
+
+    def test_they_are_declared_self_contained(self):
+        """不在这个集合里就会走「工具返回 → 模型再复述一遍」那条路。"""
+        import main
+
+        for tool in ("group_stats", "check_balance",
+                     "check_affection", "affection_leaderboard"):
+            assert tool in main.SELF_CONTAINED_TOOLS, f"{tool} 还是跟进式"
+
+    def test_they_send_their_own_message(self):
+        import inspect
+
+        import ai_tools
+
+        for cls_name, method in self.DATA_TOOLS.items():
+            src = inspect.getsource(getattr(getattr(ai_tools, cls_name), method))
+            assert "robot.reply" in src or "robot.send" in src, f"{cls_name} 没自己发消息"
+            assert "tool_result_text" not in src, \
+                f"{cls_name}.{method} 还在把结果交给模型加工"
+
+    def test_the_removed_services_are_not_instantiated(self):
+        """天气 / B站热搜的服务只被工具用，工具没了就该停止实例化。
+
+        一言是例外：定时推送的「一言」订阅项还要用它，所以服务保留。
+        """
+        import main
+
+        for name in ("weather_tool", "bilibili_tool", "hitokoto_tool"):
+            assert not hasattr(main, name), f"{name} 还在"
+        assert hasattr(main, "hitokoto_service"), "一言推送还要用这个服务"
