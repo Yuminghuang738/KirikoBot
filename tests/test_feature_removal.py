@@ -257,3 +257,57 @@ class TestDataToolsAnswerDirectly:
             assert not hasattr(main, name), f"{name} 还在"
         # 一言推送移除后，这个服务也没有调用方了
         assert not hasattr(main, "hitokoto_service"), "一言推送已经没了，服务不该还留着"
+
+
+class TestAmpHeadLibraryIsGone:
+    """箱头库整体移除 —— 它原本只服务于「箱头推荐」那个推送主题。
+
+    推送没了之后它就是个没人看的资料库，还要每 7 天爬一次 Wikipedia、
+    养 391 + 264 行代码。
+    """
+
+    def test_the_modules_are_deleted(self):
+        import importlib
+
+        for mod in ("amp_head_crawler", "amp_heads_data"):
+            try:
+                importlib.import_module(mod)
+            except ModuleNotFoundError:
+                continue
+            raise AssertionError(f"{mod} 还在")
+
+    def test_the_db_layer_is_gone(self):
+        from database_manager import DatabaseManager
+
+        for attr in ("seed_amp_heads", "count_amp_heads", "amp_head_exists",
+                     "add_amp_head", "get_amp_heads", "delete_amp_head",
+                     "get_amp_head_of_the_day"):
+            assert not hasattr(DatabaseManager, attr), f"{attr} 还在"
+
+    def test_the_table_is_dropped_on_startup(self, db):
+        rows = db.fetch_data(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='amp_heads'"
+        )
+        assert rows == []
+
+    def test_the_scheduler_no_longer_crawls(self):
+        import scheduler
+
+        for attr in ("_check_amp_crawl", "_crawl_amp_heads", "AMP_CRAWL_INTERVAL_DAYS"):
+            assert not hasattr(scheduler.BotScheduler, attr), f"{attr} 还在"
+
+    def test_the_api_and_page_are_gone(self):
+        import main
+
+        rules = {str(r) for r in main.app.url_map.iter_rules()}
+        assert not any("/api/amp-heads" in r for r in rules), "箱头库接口还在"
+
+        html = open("KirikoBot/templates/dashboard.html", encoding="utf-8").read()
+        assert 'data-page="amps"' not in html
+
+    def test_reminders_still_work(self):
+        """箱头爬取删了，但调度器的核心职责（提醒）必须还在。"""
+        import scheduler
+
+        assert hasattr(scheduler.BotScheduler, "_check_reminders")
+        assert hasattr(scheduler.BotScheduler, "_fire_reminder")

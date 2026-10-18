@@ -54,7 +54,6 @@ from judge_service import JudgeService
 from llbot_client import LLBotClient, MessageBuilder
 from llbot_webui import llbot_bp
 from msg_package import MsgPackage
-from amp_head_crawler import AmpHeadCrawler
 from news_crawler import NewsCrawler
 from log_stream import sse_handler, setup_sse_logging
 from learning_service import LearningService
@@ -114,7 +113,6 @@ gaming_news = GamingNews(news_crawler, pkg)
 web_search = WebSearch()
 web_search_tool = WebSearchTool(web_search, pkg)
 sticker_tool = StickerTool(pkg)
-amp_head_crawler = AmpHeadCrawler(db)
 at_member_tool = AtMemberTool(pkg, db, llbot)
 reminder_tool = ReminderTool(db, pkg)
 list_reminders_tool = ListRemindersTool(db, pkg)
@@ -129,7 +127,7 @@ music_tool = MusicTool(music_service, pkg)
 hot_news_scraper = HotNewsScraper()
 
 # 群订阅推送已整体移除，调度器现在只管提醒和箱头库爬取
-scheduler = BotScheduler(db, llbot, feature_gate, amp_crawler=amp_head_crawler)
+scheduler = BotScheduler(db, llbot, feature_gate)
 scheduler.start()
 sticker_collector = StickerCollector(db=db)
 profile_service = ProfileService()
@@ -1369,65 +1367,6 @@ def api_group_messages(group_id: str):
         size=size,
     )
     return jsonify({"ok": True, "group_id": group_id, **result})
-
-
-@app.route("/api/amp-heads")
-def api_amp_heads():
-    """The amp-head library: hand-written rows plus anything crawled."""
-    try:
-        limit = int(request.args.get("limit", 200))
-        offset = int(request.args.get("offset", 0))
-    except ValueError:
-        limit, offset = 200, 0
-    return jsonify({
-        "ok": True,
-        "heads": db.get_amp_heads(limit, offset),
-        "total": db.count_amp_heads(),
-        "manual": db.count_amp_heads("manual"),
-        "crawled": db.count_amp_heads("wikipedia"),
-        "last_crawl": db.get_state("amp_crawl_last") or "",
-        "crawl_running": db.get_state("amp_crawl_running") == "1",
-    })
-
-
-@app.route("/api/amp-heads/<int:head_id>", methods=["DELETE"])
-def api_amp_head_delete(head_id: int):
-    try:
-        db.delete_amp_head(head_id)
-        return jsonify({"ok": True, "deleted": head_id})
-    except Exception:
-        logger.exception("Failed to delete amp head #%d", head_id)
-        return jsonify({"ok": False, "error": "Database delete failed"}), 500
-
-
-@app.route("/api/amp-heads/crawl", methods=["POST"])
-def api_amp_head_crawl():
-    """Crawl Wikipedia now, in the background (it is throttled and slow)."""
-    if db.get_state("amp_crawl_running") == "1":
-        return jsonify({"ok": False, "error": "已有抓取任务在跑"}), 409
-    data = request.get_json(silent=True) or {}
-    try:
-        limit = max(1, min(int(data.get("limit", 8)), 30))
-    except (TypeError, ValueError):
-        limit = 8
-
-    def _run() -> None:
-        from datetime import datetime as _dt
-
-        from amp_head_crawler import AmpHeadCrawler
-
-        db.set_state("amp_crawl_running", "1")
-        try:
-            summary = AmpHeadCrawler(db).crawl(limit=limit)
-            db.set_state("amp_crawl_last", _dt.now().strftime("%Y-%m-%d %H:%M:%S"))
-            logger.info("Manual amp crawl finished: %s", summary)
-        except Exception:
-            logger.exception("Manual amp crawl failed")
-        finally:
-            db.set_state("amp_crawl_running", "0")
-
-    threading.Thread(target=_run, daemon=True, name="amp-crawl-manual").start()
-    return jsonify({"ok": True, "started": True, "limit": limit})
 
 
 @app.route("/api/ai/metrics")
