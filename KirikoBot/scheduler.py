@@ -12,23 +12,20 @@ logger = logging.getLogger(__name__)
 
 
 class BotScheduler:
-    """Background scheduler：提醒、箱头库爬取、每日维护。
+    """Background scheduler：提醒 + 每日维护。
 
     群订阅推送已经整体移除 —— 机器人不再主动往群里推任何东西，
     除了用户自己设的提醒。
     """
 
     CHECK_INTERVAL = 5  # seconds between checks (supports second-precision reminders)
-    AMP_CRAWL_INTERVAL_DAYS = 7
 
     def __init__(
         self, db: Any, llbot: Any, feature_gate: Any = None,
-        amp_crawler: Any = None,
     ) -> None:
         self.db = db
         self.llbot = llbot
         self.feature_gate = feature_gate      # 提醒的按群开关要用
-        self.amp_crawler = amp_crawler
         self._running = False
         self._thread: threading.Thread | None = None
 
@@ -48,7 +45,6 @@ class BotScheduler:
         while self._running:
             try:
                 self._check_reminders()
-                self._check_amp_crawl()
                 # Retention + DB backup, self-guarded to run once per day
                 maintenance_service.run_daily(self.db, self.db.db_file)
             except Exception:
@@ -121,56 +117,5 @@ class BotScheduler:
             self.db.execute_action(
                 "UPDATE reminders SET fired=1 WHERE id=?", (rid,),
             )
-
-
-    def _check_amp_crawl(self) -> None:
-        """Grow the amp-head library from Wikipedia, at most weekly.
-
-        Runs in its own thread: the crawl is throttled and can take a while,
-        and the scheduler tick must not block on it.
-        """
-        if not self.amp_crawler:
-            return
-        try:
-            if self.db.get_state("amp_crawl_running") == "1":
-                return
-        except Exception:
-            return
-        last = ""
-        try:
-            last = self.db.get_state("amp_crawl_last") or ""
-        except Exception:
-            logger.debug("scheduler._check_amp_crawl 忽略了异常", exc_info=True)
-        if last:
-            try:
-                elapsed = (datetime.now() - datetime.strptime(
-                    last, "%Y-%m-%d %H:%M:%S")).total_seconds()
-                if elapsed < self.AMP_CRAWL_INTERVAL_DAYS * 86400:
-                    return
-            except ValueError:
-                logger.info("Unparseable amp_crawl_last=%r, crawling", last)
-        threading.Thread(target=self._crawl_amp_heads, daemon=True,
-                         name="amp-crawl").start()
-
-    def _crawl_amp_heads(self) -> None:
-        try:
-            self.db.set_state("amp_crawl_running", "1")
-        except Exception:
-            return
-        try:
-            summary = self.amp_crawler.crawl()
-            self.db.set_state("amp_crawl_last",
-                              datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-            logger.info("Amp head crawl finished: %s", summary)
-        except Exception:
-            logger.exception("Amp head crawl failed")
-        finally:
-            try:
-                self.db.set_state("amp_crawl_running", "0")
-            except Exception:
-                logger.debug("amp_crawl_running reset failed", exc_info=True)
-
-
-
 
 
