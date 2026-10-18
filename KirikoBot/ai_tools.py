@@ -844,7 +844,7 @@ class MusicTool:
         info_lines.append("")
 
         # ── 2. Send music share card (QQ native music UI) ──
-        info_lines.append(f"🎧 正在播放，点击收听 ↑")
+        info_lines.append(f"🎧 正在播放，点击收听")
 
         info_builder = MessageBuilder()
         info_builder.text("\n".join(info_lines))
