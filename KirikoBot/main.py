@@ -59,7 +59,7 @@ from log_stream import sse_handler, setup_sse_logging
 from learning_service import LearningService
 from music_service import MusicService
 from political_news import PoliticalNewsScraper
-from profile_service import ProfileService
+from profile_service import ProfileService, normalize_profile
 import robot_server
 from robot_server import RobotServer
 from rate_limiter import RateLimiter
@@ -799,7 +799,23 @@ def api_tarot(): return jsonify({"records": db.get_all_tarot_history(50)})
 def api_history(): return jsonify({"records": db.get_all_history(50)})
 
 @app.route("/api/profiles")
-def api_profiles(): return jsonify({"profiles": db.get_all_profiles()})
+def api_profiles():
+    """用户画像列表。
+
+    画像在 2026-10 改成了两层结构（`stable` / `recent`）。这里**统一 normalize
+    一次**：面板就不必同时兼容新旧两种结构，也不会因为库里还有老格式而渲染出
+    一批只有名字、正文全空的卡片。
+    """
+    rows = db.get_all_profiles()
+    for row in rows:
+        row["profile"] = normalize_profile(row.get("profile") or {})
+        try:
+            row["memories"] = [
+                m["content"] for m in db.get_profile_memories(row["user_id"], limit=3)
+            ]
+        except Exception:
+            row["memories"] = []
+    return jsonify({"profiles": rows})
 
 @app.route("/api/learning")
 def api_learning():

@@ -516,24 +516,42 @@ async function profilesHTML(){
   }
   h+=`<div class="profile-grid">`;
   d.profiles.forEach((x,i)=>{
-    const p=x.profile||{};
+    // 画像是两层结构：stable（慢变量）+ recent（最近）。
+    // 后端已经把老格式 normalize 过，这里只按新结构读。
+    const raw=x.profile||{};
+    const s=raw.stable||{}, r=raw.recent||{};
+    const tags=v=>Array.isArray(v)&&v.length?v.map(i=>`<span class="t">${esc(i)}</span>`).join(''):'';
+    const row=(k,v)=>v?`<div class="row"><span class="k">${k}</span><span>${esc(v)}</span></div>`:'';
+    const tagRow=(k,v)=>tags(v)?`<div class="row"><span class="k">${k}</span><div class="tags">${tags(v)}</div></div>`:'';
+    // 节奏是 {length, emoji, night}，拼成一句更顺眼
+    const st=s.style||{};
+    const styleTxt=[st.length?`说话${st.length}`:'', st.emoji?`表情${st.emoji}`:'',
+                    st.night?'夜猫子':''].filter(Boolean).join('，');
+    const recentTxt=[r.doing?`在忙${r.doing}`:'', r.mood?`情绪${r.mood}`:''].filter(Boolean).join(' · ');
+
+    let body='';
+    body+=tagRow('性格', s.traits);
+    body+=row('节奏', styleTxt);
+    body+=tagRow('爱聊', s.likes);
+    body+=tagRow('不爱聊', s.dislikes);
+    body+=tagRow('雷点', s.avoid);
+    body+=tagRow('口头禅', s.catchphrase);
+    body+=row('最近', recentTxt);
+    body+=tagRow('提过', r.mentioned);
+    body+=tagRow('你们之间', x.memories);
+    body+=row('备注', s.notes);
+    if(!body)body=`<div class="row"><span class="k">画像</span><span>还没分析出内容</span></div>`;
+
     h+=`<div class="profile-card reveal" style="--i:${Math.min(i,12)}">
       <div class="pc-top">
         <div class="pc-ava">${esc((x.user_name||'?').slice(0,1))}</div>
         <div style="min-width:0">
-          <h4>${esc(x.user_name||'未知用户')}</h4>
+          <h4>${esc(x.user_name||'未知用户')}${s.nickname?` <span class="sr-off">叫「${esc(s.nickname)}」</span>`:''}</h4>
           <div class="meta">${x.msg_count||0} 条消息 · ${esc(x.updated||'')}</div>
         </div>
       </div>
-      <div class="pc-body">`;
-    if(p.personality)h+=`<div class="row"><span class="k">性格</span><span>${esc(p.personality)}</span></div>`;
-    if(p.speaking_style)h+=`<div class="row"><span class="k">风格</span><span>${esc(p.speaking_style)}</span></div>`;
-    if(p.mood)h+=`<div class="row"><span class="k">情绪</span><span>${esc(p.mood)}</span></div>`;
-    if(p.relationship)h+=`<div class="row"><span class="k">关系</span><span>${esc(p.relationship)}</span></div>`;
-    if(p.interests&&p.interests.length)h+=`<div class="row"><span class="k">兴趣</span><div class="tags">${p.interests.map(i=>`<span class="t">${esc(i)}</span>`).join('')}</div></div>`;
-    if(p.topics&&p.topics.length)h+=`<div class="row"><span class="k">话题</span><span>${p.topics.map(esc).join(' / ')}</span></div>`;
-    if(p.note)h+=`<div class="row"><span class="k">备注</span><span>${esc(p.note)}</span></div>`;
-    h+=`</div></div>`;
+      <div class="pc-body">${body}</div>
+    </div>`;
   });
   return h+`</div>`;
 }
