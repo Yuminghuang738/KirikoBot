@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Bootstrap affection scores from real @bot interactions only.
+"""【已过时 · 2026-10】Bootstrap affection scores from real @bot interactions only.
+
+⚠️ **不要再用这个脚本改生产分数。** 它按「关键词情绪 + 工具使用 + 学习反馈」
+给分，那是**旧的积分制**模型。现在好感度改成了事件制（见
+affection_service.py 顶部），这个脚本跑一遍会把按新规则算出来的分数又拉回
+旧口径。要重算历史分数请用同目录的 `recalibrate_affection.py`。
+
+留在这里只是因为 `judge_service` 的 `[ltype]` 前缀注释还引用它。
 
 Uses history table (role=user entries = actual bot conversations) for scoring.
 Keyword sentiment is extracted from the user's message content in history.

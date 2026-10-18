@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 VALID_TABLES = {
     "history", "tarot_history", "tarot_content",
     "group_messages", "user_profiles", "tool_usage",
-    "reminders", "learning_log", "group_rate_limits",
+    "reminders", "learning_log", "group_rate_limits", "profile_memories",
     "app_versions", "changelog", "stickers",
     "user_affection", "user_affection_log",
     "feature_settings", "bot_messages", "ai_calls", "group_subscriptions", "profile_history",
@@ -457,6 +457,8 @@ class DatabaseManager:
                         last_interaction  DATETIME,
                         relationship      TEXT DEFAULT 'neutral',
                         notes             TEXT DEFAULT '',
+                        streak_days       INTEGER DEFAULT 0,
+                        last_seen_date    TEXT DEFAULT '',
                         created_at        DATETIME DEFAULT (datetime('now', 'localtime')),
                         updated_at        DATETIME DEFAULT (datetime('now', 'localtime')),
                         UNIQUE(user_id, group_id)
@@ -469,8 +471,33 @@ class DatabaseManager:
                         group_id   TEXT NOT NULL,
                         date       TEXT NOT NULL,
                         delta      REAL DEFAULT 0,
+                        event      TEXT DEFAULT 'misc',
                         timestamp  DATETIME DEFAULT (datetime('now', 'localtime'))
                     )"""
+                )
+                # 老库补列（新建的表已经有这些列了，ALTER 会报错，忽略即可）
+                for stmt in (
+                    "ALTER TABLE user_affection ADD COLUMN streak_days INTEGER DEFAULT 0",
+                    "ALTER TABLE user_affection ADD COLUMN last_seen_date TEXT DEFAULT ''",
+                    "ALTER TABLE user_affection_log ADD COLUMN event TEXT DEFAULT 'misc'",
+                ):
+                    try:
+                        connect.execute(stmt)
+                    except sqlite3.OperationalError:
+                        pass  # Column already exists
+                connect.execute(
+                    """CREATE TABLE IF NOT EXISTS profile_memories(
+                        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id      TEXT NOT NULL,
+                        content      TEXT NOT NULL,
+                        kind         TEXT DEFAULT 'event',
+                        created_at   DATETIME DEFAULT (datetime('now', 'localtime')),
+                        last_used_at DATETIME,
+                        used_count   INTEGER DEFAULT 0
+                    )"""
+                )
+                connect.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_pm_user ON profile_memories(user_id)"
                 )
                 # Per-group / per-user feature toggles. settings_json only stores
                 # DISABLED keys; missing key or missing row = enabled.
@@ -2076,6 +2103,86 @@ class DatabaseManager:
             (limit,),
         )
         return [{"user_id": r[0], "card": r[1], "time": r[2]} for r in rows]
+
+    # ── 共同记忆 ─────────────────────────────────────────
+
+    MEMORY_KEEP = 5        # 每人最多留几条
+
+    def add_profile_memory(self, user_id: str, content: str, kind: str = "event") -> bool:
+        """记一条「你和这个人之间**具体**发生过的事」。
+
+        比画像标签有用得多：标签说「直率」，记忆说「上周答应帮他听一段录音」。
+        同一个 content 不重复记。
+        """
+        content = (content or "").strip()[:200]
+        if not user_id or len(content) < 2:
+            return False
+        try:
+            dup = self.fetch_data(
+                "SELECT id FROM profile_memories WHERE user_id=? AND content=?",
+                (user_id, content),
+            )
+            if dup:
+                return False
+            self.execute_action(
+                "INSERT INTO profile_memories (user_id, content, kind) VALUES (?,?,?)",
+                (user_id, content, kind),
+            )
+            self._prune_memories(user_id)
+            return True
+        except sqlite3.Error:
+            logger.debug("add_profile_memory failed", exc_info=True)
+            return False
+
+    def _prune_memories(self, user_id: str) -> None:
+        """超出上限就淘汰「最久没用过」的。"""
+        try:
+            rows = self.fetch_data(
+                "SELECT id FROM profile_memories WHERE user_id=? "
+                "ORDER BY IFNULL(last_used_at, created_at) DESC, id DESC",
+                (user_id,),
+            )
+            if len(rows) > self.MEMORY_KEEP:
+                stale = [r[0] for r in rows[self.MEMORY_KEEP:]]
+                marks = ",".join("?" * len(stale))
+                self.execute_action(
+                    f"DELETE FROM profile_memories WHERE id IN ({marks})", tuple(stale),
+                )
+        except sqlite3.Error:
+            logger.debug("prune memories failed", exc_info=True)
+
+    def get_profile_memories(self, user_id: str, limit: int = 3) -> list[dict[str, Any]]:
+        """取几条可以提的记忆。
+
+        排序刻意用「**最久没提过的优先**」：老是复读同一条梗比不提还烦。
+        没用过的排最前，其次是最久以前用过的。
+        """
+        try:
+            rows = self.fetch_data(
+                "SELECT id, content, kind FROM profile_memories WHERE user_id=? "
+                "ORDER BY CASE WHEN last_used_at IS NULL THEN 0 ELSE 1 END, "
+                "         last_used_at, id DESC LIMIT ?",
+                (user_id, limit),
+            )
+        except sqlite3.Error:
+            return []
+        return [{"id": r[0], "content": r[1], "kind": r[2]} for r in rows]
+
+    def mark_memory_used(self, ids: Any) -> None:
+        """提过就记一下，下次优先换别的。"""
+        ids = [i for i in (ids or []) if i]
+        if not ids:
+            return
+        marks = ",".join("?" * len(ids))
+        try:
+            self.execute_action(
+                f"UPDATE profile_memories SET "
+                f"last_used_at=datetime('now','localtime'), used_count=used_count+1 "
+                f"WHERE id IN ({marks})",
+                tuple(ids),
+            )
+        except sqlite3.Error:
+            logger.debug("mark_memory_used failed", exc_info=True)
 
     def get_all_profiles(self) -> list[dict[str, Any]]:
         rows = self.fetch_data(

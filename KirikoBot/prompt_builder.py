@@ -78,6 +78,8 @@ PERSONA = """【你是谁】
 - 情绪有起伏，但幅度不大：开心会高兴，累了会有点没精神
 - 颜文字是调味不是主菜：大部分回复不用它；要用也别每次都同一个，换着来或者干脆不打
 - 别形成口头禅（不要每条都用「哈」「欸」「哼」开头，也不要反复用同一句式）
+- 对**亲密以上**的人，偶尔可以多说一句 —— 尤其当你想起来他之前提过的事。
+  仍以短为主，别借机写小作文
 
 【表情包】
 - 你有一大堆表情包，也很爱用 —— 但**不是每条都发**。发多了就成了刷屏，反而不好玩
@@ -143,6 +145,7 @@ PERSONA = """【你是谁】
   - 被夸：「才不是呢」「……好吧，谢谢你」「你少哄我」
   - 被戳穿心软：有点不好意思，把话岔开
 - **绝大多数时候都是好好说话的**。一直端着、每条都傲娇，就成了表演，反而不可爱
+- 傲娇主要留给**熟的人**（亲密以上）。对不熟的人端着，会显得莫名其妙
 - 傲娇不是凶：不刻薄、不阴阳怪气、不真的伤人。说完要让人想笑，
   觉得你可爱，不是让人觉得不舒服
 
@@ -384,7 +387,7 @@ def format_group_context(rows: list[dict[str, Any]], minutes: int = 15) -> str:
 
 def build_user_message(robot: Any, reply_note: str = "",
                        group_context: str = "", now: Any = None,
-                       mood: str = "") -> str:
+                       mood: str = "", speaker: str = "") -> str:
     """Build the user-role message — the ambient context plus this interaction.
 
     Everything volatile lives here rather than in the system prompt: the quote
@@ -402,10 +405,13 @@ def build_user_message(robot: Any, reply_note: str = "",
     prefix = f"{reply_note}\n" if reply_note else ""
     context = f"{group_context}\n" if group_context else ""
     feeling = f"{mood}\n" if mood else ""
+    # 当前说话人的画像/关系放这里，不放 system prompt —— 它随"谁在说话"变化，
+    # 放进缓存前缀等于每换个人就废掉一次缓存（当初把时间戳挪出来就是为了这个）
+    who = f"{speaker}\n" if speaker else ""
     if robot.msg_type == "group":
-        return (f"{stamp}{feeling}{context}{prefix}群「{robot.group_name or ''}」中 "
+        return (f"{stamp}{feeling}{who}{context}{prefix}群「{robot.group_name or ''}」中 "
                 f"用户 {robot.user_name} 说：{msg}")
-    return f"{stamp}{feeling}{prefix}用户 {robot.user_name} 说：{msg}"
+    return f"{stamp}{feeling}{who}{prefix}用户 {robot.user_name} 说：{msg}"
 
 
 def _time_line(now: Any = None) -> str:
@@ -520,16 +526,8 @@ def build_system_prompt(
         except Exception:
             logger.debug("learning context failed", exc_info=True)
 
-    if db is not None and not is_private and robot.group_id and "affection" not in disabled:
-        if affection_service is not None:
-            try:
-                affection_text = affection_service.build_context_prompt(
-                    db, robot.user_id, robot.group_id, robot.user_name,
-                )
-                if affection_text:
-                    parts.append(affection_text)
-            except Exception:
-                logger.debug("affection context failed", exc_info=True)
+    # 关系和当前说话人的画像**故意不在这里** —— 它们随"谁在说话"变化，
+    # 属于每条消息都会变的内容，走 build_user_message 的 speaker 参数。
 
     # ── Disabled features notice (per-group / per-user toggles) ──
     if disabled:
