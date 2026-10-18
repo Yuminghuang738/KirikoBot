@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 VALID_TABLES = {
     "history", "tarot_history", "tarot_content",
     "group_messages", "user_profiles", "tool_usage",
-    "reminders", "learning_log",
+    "reminders", "learning_log", "group_rate_limits",
     "app_versions", "changelog", "stickers",
     "user_affection", "user_affection_log",
     "feature_settings", "bot_messages", "ai_calls", "group_subscriptions", "profile_history",
@@ -276,6 +276,18 @@ class DatabaseManager:
                         enabled         INTEGER DEFAULT 1,
                         last_fired_date TEXT DEFAULT '',
                         PRIMARY KEY (group_id, topic)
+                    )"""
+                )
+                connect.execute(
+                    """CREATE TABLE IF NOT EXISTS group_rate_limits(
+                        group_id         TEXT PRIMARY KEY,
+                        user_enabled     INTEGER NOT NULL DEFAULT 0,
+                        user_window_min  INTEGER NOT NULL DEFAULT 10,
+                        user_max         INTEGER NOT NULL DEFAULT 20,
+                        group_enabled    INTEGER NOT NULL DEFAULT 0,
+                        group_window_min INTEGER NOT NULL DEFAULT 10,
+                        group_max        INTEGER NOT NULL DEFAULT 30,
+                        updated_at       DATETIME DEFAULT (datetime('now', 'localtime'))
                     )"""
                 )
                 connect.execute(
@@ -1222,6 +1234,83 @@ class DatabaseManager:
             (group_id, topic),
         )
 
+    # ── 群回复频率限制 ───────────────────────────────────
+
+    # 字段顺序固定，读写都按它对齐
+    _RATE_DEFAULTS: dict[str, int] = {
+        "user_enabled": 0,      "user_window_min": 10, "user_max": 20,
+        "group_enabled": 0,     "group_window_min": 10, "group_max": 30,
+    }
+    _RATE_COLS = ("user_enabled", "user_window_min", "user_max",
+                  "group_enabled", "group_window_min", "group_max")
+
+    def get_rate_limit(self, group_id: str) -> dict[str, Any]:
+        """这个群的限流配置。没配过就返回空 dict，调用方补默认值。"""
+        try:
+            rows = self.fetch_data(
+                "SELECT user_enabled, user_window_min, user_max, "
+                "       group_enabled, group_window_min, group_max "
+                "  FROM group_rate_limits WHERE group_id = ?",
+                (group_id,),
+            )
+        except sqlite3.Error:
+            logger.exception("rate limit query failed")
+            return {}
+        if not rows:
+            return {}
+        out = dict(zip(self._RATE_COLS, rows[0]))
+        out["user_enabled"] = bool(out["user_enabled"])
+        out["group_enabled"] = bool(out["group_enabled"])
+        return out
+
+    def set_rate_limit(self, group_id: str, **fields: Any) -> dict[str, Any]:
+        """写入/更新一个群的限流配置。没给的字段保持原值。"""
+        current = dict(self._RATE_DEFAULTS)
+        for k, v in (self.get_rate_limit(group_id) or {}).items():
+            current[k] = int(bool(v)) if k.endswith("_enabled") else int(v)
+
+        for key in self._RATE_DEFAULTS:
+            if key not in fields or fields[key] is None:
+                continue
+            value = fields[key]
+            if key.endswith("_enabled"):
+                current[key] = 1 if value else 0
+            else:
+                hi = 1440 if "window" in key else 1000
+                current[key] = self._clamp_int(int(value), self._RATE_DEFAULTS[key], 1, hi)
+
+        self.execute_action(
+            "INSERT INTO group_rate_limits "
+            "  (group_id, user_enabled, user_window_min, user_max, "
+            "   group_enabled, group_window_min, group_max, updated_at) "
+            "VALUES (?,?,?,?,?,?,?, datetime('now','localtime')) "
+            "ON CONFLICT(group_id) DO UPDATE SET "
+            "  user_enabled=excluded.user_enabled, user_window_min=excluded.user_window_min, "
+            "  user_max=excluded.user_max, group_enabled=excluded.group_enabled, "
+            "  group_window_min=excluded.group_window_min, group_max=excluded.group_max, "
+            "  updated_at=excluded.updated_at",
+            (str(group_id), current["user_enabled"], current["user_window_min"], current["user_max"],
+             current["group_enabled"], current["group_window_min"], current["group_max"]),
+        )
+        return self.get_rate_limit(group_id)
+
+    def all_rate_limits(self) -> list[dict[str, Any]]:
+        """所有配过的群（面板用）。"""
+        rows = self.fetch_data(
+            "SELECT group_id, user_enabled, user_window_min, user_max, "
+            "       group_enabled, group_window_min, group_max, updated_at "
+            "  FROM group_rate_limits ORDER BY group_id"
+        )
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            out.append({
+                "group_id": r[0],
+                "user_enabled": bool(r[1]), "user_window_min": r[2], "user_max": r[3],
+                "group_enabled": bool(r[4]), "group_window_min": r[5], "group_max": r[6],
+                "updated_at": r[7],
+            })
+        return out
+
     def due_subscriptions(self, now_hm: str, today: str) -> list[dict[str, Any]]:
         """Enabled subscriptions whose time has passed and haven't fired today."""
         try:
@@ -2107,6 +2196,7 @@ class DatabaseManager:
         ("tool_usage", "工具调用"),
         ("user_affection", "好感度"),
         ("user_affection_log", "好感度流水"),
+        ("group_rate_limits", "限流配置"),
     )
     # 注意 user_profiles 不在上面：画像是**全局一份**，不再挂在某个群下。
     # 直接按群删会连带抹掉他在别的群和私聊里积累的印象。只在这个群说过话的

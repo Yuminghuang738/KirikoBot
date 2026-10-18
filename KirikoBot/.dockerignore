@@ -1,0 +1,32 @@
+# 运行时数据，靠 bind mount 挂进容器（compose 里 ./KirikoBot:/app），
+# 不需要也不应该打进镜像。
+#
+# 没有这个文件时，构建上下文是 950MB（贴图 769M + 备份 109M + 数据库 16M），
+# 传到构建器一半就断：short read: unexpected EOF。
+
+# 表情包库
+stickers/
+
+# 数据库备份
+backups/
+
+# 挂给 LLBot 的图
+carside_picture/
+
+# SQLite 数据库及其附属文件
+*.db
+*.db-wal
+*.db-shm
+*.db.bak.*
+
+# 密钥：只通过 env_file 注入，别烤进镜像
+.env
+.dashboard_password
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# 其它运行时产物
+*.log

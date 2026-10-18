@@ -1353,12 +1353,18 @@ function bindAffection(){
 // ── Feature settings (per-group / per-user toggles) ──
 let SettingsScope={type:'group',id:''};
 let SettingsFeatures=[],SettingsGroups=[],SettingsEnabled={};
+let SettingsLimits={};   // group_id → 限流配置
 
 async function settingsHTML(){
   try{
     const d=await fetch('/api/settings/groups').then(r=>r.json());
     SettingsFeatures=d.features||[];
     SettingsGroups=d.groups||[];
+  }catch(_){}
+  try{
+    const rl=await fetch('/api/rate-limits').then(r=>r.json());
+    SettingsLimits={};
+    (rl.groups||[]).forEach(g=>{if(g.limit)SettingsLimits[g.group_id]=g.limit});
   }catch(_){}
   return `<div class="page-head">
       <div><div class="ph-title">群功能 <span class="em">设置</span></div>
@@ -1447,8 +1453,70 @@ function SettingsRenderRows(){
     });
     h+=`</div>`;
   });
+  if(SettingsScope.type==='group'&&SettingsScope.id){
+    const L=SettingsLimits[SettingsScope.id]||{user_enabled:false,user_window_min:10,user_max:20,group_enabled:false,group_window_min:10,group_max:30};
+    const onCnt=(L.user_enabled?1:0)+(L.group_enabled?1:0);
+    h+=`<div class="set-group" id="rateLimitPanel">
+      <div class="sg-head">回复频率限制<span class="sg-count">${onCnt?`已开启 ${onCnt}/2`:'未开启'}</span></div>
+      <div class="set-row">
+        <div class="sr-info">
+          <div class="sr-label">单用户模式${L.user_enabled?'':' <span class="sr-off">· 已关闭</span>'}</div>
+          <div class="sr-desc">每
+            <input type="number" id="rlUserWin" min="1" max="1440" value="${L.user_window_min}" style="width:64px"> 分钟内，对**同一个用户**最多回
+            <input type="number" id="rlUserMax" min="1" max="1000" value="${L.user_max}" style="width:64px"> 条
+            <br><span style="opacity:.7">对所有用户一视同仁，不是给某个人单独设</span></div>
+        </div>
+        <label class="switch"><input type="checkbox" id="rlUserOn" ${L.user_enabled?'checked':''}><span class="slider"></span></label>
+      </div>
+      <div class="set-row">
+        <div class="sr-info">
+          <div class="sr-label">群聊模式${L.group_enabled?'':' <span class="sr-off">· 已关闭</span>'}</div>
+          <div class="sr-desc">每
+            <input type="number" id="rlGroupWin" min="1" max="1440" value="${L.group_window_min}" style="width:64px"> 分钟内，在这个群最多发
+            <input type="number" id="rlGroupMax" min="1" max="1000" value="${L.group_max}" style="width:64px"> 条</div>
+        </div>
+        <label class="switch"><input type="checkbox" id="rlGroupOn" ${L.group_enabled?'checked':''}><span class="slider"></span></label>
+      </div>
+      <div style="padding:12px 18px;display:flex;gap:12px;align-items:center">
+        <button class="btn primary" onclick="SettingsSaveLimit()">💾 保存限流设置</button>
+        <span class="ph-sub" id="rlStatus"></span>
+      </div>
+    </div>`;
+  }
   h+=`<div class="set-note">💡 修改即时生效，无需重启。关闭某项功能后，群内/私聊用户索要该功能时 Kiriko 会礼貌说明暂不可用。</div>`;
   box.innerHTML=h;
+}
+
+async function SettingsSaveLimit(){
+  const gid=SettingsScope.id; if(!gid)return;
+  const num=(id,lo,hi,def)=>{const el=$(id);const v=parseInt(el&&el.value,10);return Number.isFinite(v)?Math.min(hi,Math.max(lo,v)):def};
+  const body={
+    user_enabled: !!($('rlUserOn')&&$('rlUserOn').checked),
+    user_window_min: num('rlUserWin',1,1440,10),
+    user_max: num('rlUserMax',1,1000,20),
+    group_enabled: !!($('rlGroupOn')&&$('rlGroupOn').checked),
+    group_window_min: num('rlGroupWin',1,1440,10),
+    group_max: num('rlGroupMax',1,1000,30),
+  };
+  const st=$('rlStatus'); if(st)st.textContent='保存中…';
+  try{
+    const r=await fetch('/api/rate-limits/'+encodeURIComponent(gid),{
+      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)
+    }).then(r=>r.json());
+    if(r.ok){
+      SettingsLimits[gid]=r.limit||body;
+      if(st)st.textContent='✅ 已保存';
+      toast('限流设置已保存');
+      SettingsRenderRows();
+      const st2=$('rlStatus'); if(st2)st2.textContent='✅ 已保存，立即生效';
+    }else{
+      if(st)st.textContent='保存失败';
+      toast('保存失败: '+(r.error||'未知'),'err');
+    }
+  }catch(e){
+    if(st)st.textContent='保存失败';
+    toast('保存失败','err');
+  }
 }
 
 async function SettingsLoad(){
