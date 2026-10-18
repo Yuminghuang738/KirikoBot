@@ -1,193 +1,212 @@
-"""联网搜索：那几个**能离线验证**的环节。
+"""联网搜索：走 DeepSeek 官方 Search API。
 
-背景：线上表现为「搜什么都搜不到」。查下来根因在网络（本机出口是机房 IP，
-搜索引擎要么扔 CAPTCHA、要么喂随机垃圾），但排查过程中挖出好几个**代码本身
-的 bug** —— 它们让任何一次搜索都注定失败。这个文件锁住这些环节。
+这里只测**不联网**的部分：地址推导、请求体、响应映射、错误分类。
+真正发请求那一步不放进单元测试 —— 把外部网络塞进测试，本身就是不可靠的测试。
 
-不联网：只测纯函数（链接解包、跳转壳识别、拦截页识别）。真正的搜索要发请求，
-放进来会让测试依赖外部网络，那才是不可靠的测试。
+（历史：这个文件以前测的是一整套自己爬搜索引擎的实现 —— Bing 的 base64 跳转
+解包、360 的 JS 跳转壳、CAPTCHA 识别、维基百科标题过滤。换成官方 API 之后那些
+代码连同测试一起删掉了，因为它们要解决的问题已经不存在了。）
 """
 from __future__ import annotations
 
-import base64
+import pytest
 
-from bs4 import BeautifulSoup
-
+import web_search
 from web_search import WebSearch
 
 
-class TestUnwrapBingRedirect:
-    """Bing 的结果链接是跳转地址，直接抓只会拿到一个空壳中转页。
+class FakeResp:
+    """够用的 requests.Response 替身。"""
 
-    真实表现：把 `www.bing.com/ck/a?...` 当正文页去抓，拿回来的是
-    「Please click here if the page does not redirect automatically」——
-    正文一个字都没有，等于没搜。
-    """
+    def __init__(self, status: int = 200, payload=None, text: str = "") -> None:
+        self.status_code = status
+        self._payload = payload
+        self.text = text
 
-    @staticmethod
-    def _bing_link(real: str) -> str:
-        payload = "a1" + base64.urlsafe_b64encode(real.encode()).decode().rstrip("=")
-        return f"https://www.bing.com/ck/a?!&&p=deadbeef&u={payload}&ntb=1"
-
-    def test_it_recovers_the_real_url(self):
-        real = "https://zh.wikipedia.org/wiki/中國"
-        assert WebSearch._unwrap_link(self._bing_link(real)) == real
-
-    def test_it_handles_missing_padding(self):
-        """Bing 的 base64 去掉了 `=` 补位，必须自己补回来。"""
-        real = "https://baike.baidu.com/item/中华人民共和国/106"
-        link = self._bing_link(real)
-        assert "=" not in link.split("u=")[1].split("&")[0]
-        assert WebSearch._unwrap_link(link) == real
-
-    def test_ordinary_links_pass_through(self):
-        for url in ("https://example.com/a", "https://www.so.com/link?m=abc"):
-            assert WebSearch._unwrap_link(url) == url
-
-    def test_garbage_does_not_crash(self):
-        assert WebSearch._unwrap_link("https://www.bing.com/ck/a?u=!!!!") .startswith("http")
+    def json(self):
+        if self._payload is None:
+            raise ValueError("not json")
+        return self._payload
 
 
-class TestRealUrlFromShell:
-    """360 的链接是 `so.com/link?m=...`，返回一个 280 字节的 JS 跳转壳。
-
-    requests 不执行 JS，所以会停在壳上、正文为空。真地址就写在脚本里。
-    """
-
-    SHELL = (
-        '<meta content="always" name="referrer">'
-        '<script>window.location.replace("https://www.runoob.com/docker/docker-tutorial.html")</script>'
-        '<noscript><meta http-equiv="refresh" content="0;URL=\'https://www.runoob.com/docker/docker-tutorial.html\'"></noscript>'
+@pytest.fixture
+def ws(monkeypatch):
+    """一个带着 token、不会真发请求的 WebSearch。"""
+    monkeypatch.setattr(web_search.Config, "DEEPSEEK_TOKEN", "test-key", raising=False)
+    monkeypatch.setattr(
+        web_search.Config, "DEEPSEEK_API",
+        "https://api.deepseek.com/chat/completions", raising=False,
     )
-
-    def test_it_reads_the_location_replace_script(self):
-        assert WebSearch._real_url_from_shell(self.SHELL) == \
-            "https://www.runoob.com/docker/docker-tutorial.html"
-
-    def test_it_falls_back_to_the_meta_refresh(self):
-        html = '<meta http-equiv="refresh" content="0;URL=\'https://example.com/x\'">'
-        assert WebSearch._real_url_from_shell(html) == "https://example.com/x"
-
-    def test_a_normal_page_yields_nothing(self):
-        assert WebSearch._real_url_from_shell("<html><body>普通文章</body></html>") == ""
+    return WebSearch()
 
 
-class TestRedirectStubGuard:
-    """抓回来的如果是跳转空壳，宁可不要，也别喂给 AI。"""
+def _patch_post(monkeypatch, resp):
+    calls: list[dict] = []
 
-    def test_it_rejects_the_bing_stub(self):
-        stub = "Please\nclick here\nif the page does not redirect automatically ..."
-        assert WebSearch._is_redirect_stub(stub) is True
+    def fake_post(url, headers=None, json=None, timeout=None):
+        calls.append({"url": url, "headers": headers or {}, "json": json or {}, "timeout": timeout})
+        if isinstance(resp, Exception):
+            raise resp
+        return resp
 
-    def test_it_rejects_chinese_stubs(self):
-        assert WebSearch._is_redirect_stub("页面跳转中，请稍候") is True
-
-    def test_it_rejects_near_empty_pages(self):
-        assert WebSearch._is_redirect_stub("  ") is True
-
-    def test_real_content_survives(self):
-        text = "Docker 是一个开源的应用容器引擎，让开发者可以打包应用以及依赖包到一个可移植的镜像中。" * 3
-        assert WebSearch._is_redirect_stub(text) is False
+    monkeypatch.setattr(web_search.requests, "post", fake_post)
+    return calls
 
 
-class TestBlockDetection:
-    """「被反爬拦了」必须和「真没搜到」分开 —— 否则用户会一直换关键词重试。"""
-
-    def _resp(self, status: int, body: str):
-        class R:
-            status_code = status
-            text = body
-        return R()
-
-    DDG_CHALLENGE = (
-        "<html><head><title>DuckDuckGo</title></head><body>"
-        "Unfortunately, bots use DuckDuckGo too. Please complete the following "
-        "challenge to confirm this search was made by a human. Select all squares "
-        "containing a duck:</body></html>"
-    )
-
-    def test_ddg_captcha_is_detected(self):
-        w = WebSearch()
-        soup = BeautifulSoup(self.DDG_CHALLENGE, "lxml")
-        assert w._looks_blocked(self._resp(202, self.DDG_CHALLENGE), soup) is True
-
-    def test_rate_limit_status_is_detected(self):
-        w = WebSearch()
-        soup = BeautifulSoup("<html><body>ok</body></html>", "lxml")
-        assert w._looks_blocked(self._resp(429, "<html><body>ok</body></html>"), soup) is True
-
-    def test_a_normal_page_is_not_flagged(self):
-        w = WebSearch()
-        html = "<html><head><title>Docker 教程 - 菜鸟教程</title></head><body><p>Docker 是一个容器引擎。</p></body></html>"
-        assert w._looks_blocked(self._resp(200, html), BeautifulSoup(html, "lxml")) is False
-
-    def test_block_words_inside_scripts_do_not_false_positive(self):
-        """整页 HTML 里出现 challenge/captcha 这种词不算 —— 脚本里就有。
-
-        只看标题和开头可见正文，否则正常的搜索结果页会被误判成拦截页。
-        """
-        w = WebSearch()
-        html = (
-            "<html><head><title>搜索结果</title></head><body><p>正常内容</p>"
-            "<script>var challengeMode = false; /* captcha */</script></body></html>"
+class TestEndpoint:
+    def test_base_url_strips_the_chat_path(self, monkeypatch):
+        """ .env 里 DEEPSEEK_API 是完整的 chat/completions 地址，要剥成根。 """
+        monkeypatch.setattr(
+            web_search.Config, "DEEPSEEK_API",
+            "https://api.deepseek.com/chat/completions", raising=False,
         )
-        assert w._looks_blocked(self._resp(200, html), BeautifulSoup(html, "lxml")) is False
+        assert WebSearch._base_url() == "https://api.deepseek.com"
+        assert WebSearch.search_url() == "https://api.deepseek.com/v1/tools/search"
+
+    def test_a_custom_gateway_is_respected(self, monkeypatch):
+        monkeypatch.setattr(
+            web_search.Config, "DEEPSEEK_API",
+            "https://my-gateway.example/v1/chat/completions", raising=False,
+        )
+        assert WebSearch.search_url() == "https://my-gateway.example/v1/tools/search"
+
+    def test_it_tolerates_a_trailing_slash(self, monkeypatch):
+        monkeypatch.setattr(
+            web_search.Config, "DEEPSEEK_API", "https://api.deepseek.com/", raising=False,
+        )
+        assert WebSearch.search_url() == "https://api.deepseek.com/v1/tools/search"
 
 
-class TestSearchReasonContract:
-    def test_reason_defaults_to_ok(self):
-        assert WebSearch().last_reason == "ok"
+class TestRequest:
+    def test_it_sends_query_count_and_need_content(self, ws, monkeypatch):
+        calls = _patch_post(monkeypatch, FakeResp(payload={"results": []}))
+        ws._search("中国首都")
+        body = calls[0]["json"]
+        assert body["query"] == "中国首都"
+        assert body["need_content"] is True, "要一次拿到正文，省掉再抓页面那一步"
+        assert 1 <= body["count"] <= 50, "API 限制 count 在 1~50"
 
-    def test_duckduckgo_is_kept_as_a_last_resort(self):
-        """DDG 对机房 IP 一律 CAPTCHA，但删掉它就少了一道保险。"""
-        assert WebSearch.PROVIDERS[-1] == "duckduckgo"
+    def test_it_uses_bearer_auth(self, ws, monkeypatch):
+        calls = _patch_post(monkeypatch, FakeResp(payload={"results": []}))
+        ws._search("x")
+        assert calls[0]["headers"]["Authorization"] == "Bearer test-key"
+        assert calls[0]["url"].endswith("/v1/tools/search")
 
-    def test_wikipedia_is_in_the_chain(self):
-        """scraping 系全被喂垃圾时，维基百科的 API 是唯一稳定的来源。"""
-        assert "wikipedia" in WebSearch.PROVIDERS
-
-
-class TestWikipediaTitleRelevance:
-    """维基百科的全文搜索排序很松，必须按**标题**再过滤一道。
-
-    线上实例：问「IPv6 普及率 2026 最新」，它把「杜威十进分类法」排在第一位 ——
-    那篇文章只是正文里提到过一次 IPv6。这种结果如果排在前面，会占掉名额，
-    把真正相关的结果挤出去。
-    """
-
-    def test_the_actual_false_positive_is_filtered(self):
-        assert WebSearch._title_matches_query("杜威十进分类法", "IPv6 普及率 2026 最新") is False
-
-    def test_other_actual_false_positives_are_filtered(self):
-        for title in ("各国移动电话数目列表", "Firefox版本列表"):
-            assert WebSearch._title_matches_query(title, "IPv6 普及率 2026 最新") is False
-
-    def test_a_relevant_title_survives(self):
-        assert WebSearch._title_matches_query("IPv6", "IPv6 普及率 2026 最新") is True
-        assert WebSearch._title_matches_query("IPv6 deployment", "IPv6 penetration 2026") is True
-
-    def test_chinese_bigram_matching(self):
-        """中文按二字组近似切词 —— 「中国首都」要能匹配「中国的首都是哪里」。"""
-        assert WebSearch._title_matches_query("中国首都", "中国的首都是哪里") is True
-        assert WebSearch._title_matches_query("杜威十进分类法", "中国的首都是哪里") is False
-
-    def test_a_query_without_usable_tokens_keeps_everything(self):
-        """拆不出词就别过滤，宁可多给几条也别把结果清空。"""
-        assert WebSearch._title_matches_query("随便什么", "！？") is True
+    def test_a_missing_token_never_hits_the_network(self, ws, monkeypatch):
+        monkeypatch.setattr(web_search.Config, "DEEPSEEK_TOKEN", "", raising=False)
+        calls = _patch_post(monkeypatch, FakeResp(payload={"results": []}))
+        assert ws._search("x") == []
+        assert calls == [], "没配 key 就不该发请求"
+        assert ws.last_reason == "auth"
 
 
-class TestProviderOrderMatchesReality:
-    """顺序是按实测排的，不是按名气。留个测试免得以后被「改回常识顺序」。"""
+class TestResponseMapping:
+    def _results(self, **over):
+        base = {
+            "title": "标题", "url": "https://example.com/a",
+            "snippet": "短摘要", "summary": "长摘要", "content": "正文",
+        }
+        base.update(over)
+        return {"results": [base]}
 
-    def test_bing_is_first(self):
-        """换到住宅出口后，Bing 是唯一又稳又相关的源。"""
-        assert WebSearch.PROVIDERS[0] == "bing"
+    def test_it_prefers_content_over_summary(self, ws, monkeypatch):
+        _patch_post(monkeypatch, FakeResp(payload=self._results()))
+        out = ws.search_and_fetch("x")
+        assert "正文" in out
+        assert "长摘要" not in out
+        assert "https://example.com/a" in out, "要给 AI 看来源链接"
 
-    def test_bing_uses_the_cn_endpoint(self):
-        """必须用 cn.bing.com：www.bing.com 会跟随出口国家返回当地语言
-        （实测韩国出口返回整页韩语），而加 mkt/cc 参数反而让它返回 0 条。"""
-        assert WebSearch.BING_URL == "https://cn.bing.com/search"
+    def test_it_falls_back_to_summary(self, ws, monkeypatch):
+        _patch_post(monkeypatch, FakeResp(payload=self._results(content="")))
+        assert "长摘要" in ws.search_and_fetch("x")
 
-    def test_wikipedia_is_not_first(self):
-        """它的全文搜索太松，排前面会用「杜威十进分类法」占掉名额。"""
-        assert WebSearch.PROVIDERS.index("wikipedia") > 0
+    def test_it_falls_back_to_snippet(self, ws, monkeypatch):
+        _patch_post(monkeypatch, FakeResp(payload=self._results(content="", summary="")))
+        assert "短摘要" in ws.search_and_fetch("x")
+
+    def test_a_result_without_any_text_is_skipped(self, ws, monkeypatch):
+        _patch_post(monkeypatch, FakeResp(
+            payload=self._results(content="", summary="", snippet="")))
+        assert ws.search_and_fetch("x") == ""
+
+    def test_long_content_is_truncated(self, ws, monkeypatch):
+        _patch_post(monkeypatch, FakeResp(
+            payload=self._results(content="啊" * 5000)))
+        out = ws.search_and_fetch("x")
+        assert len(out) < 5000
+        assert out.rstrip().endswith("…")
+
+    def test_it_caps_the_number_of_results(self, ws, monkeypatch):
+        many = [{
+            "title": f"t{i}", "url": f"https://e.com/{i}",
+            "snippet": "", "summary": "s", "content": "c",
+        } for i in range(30)]
+        _patch_post(monkeypatch, FakeResp(payload={"results": many}))
+        out = ws.search_and_fetch("x")
+        assert out.count("【来源：") == WebSearch.MAX_RESULTS
+
+
+class TestFailureClassification:
+    """失败原因要分得开 —— 额度用完、被限流、配置错了，对用户说的话不一样。"""
+
+    @pytest.mark.parametrize("status,reason", [
+        (402, "quota"),
+        (429, "rate_limited"),
+        (401, "auth"),
+        (403, "auth"),
+        (500, "error"),
+        (504, "error"),
+        (400, "error"),
+    ])
+    def test_status_maps_to_reason(self, ws, monkeypatch, status, reason):
+        _patch_post(monkeypatch, FakeResp(status=status, text="boom"))
+        assert ws._search("x") == []
+        assert ws.last_reason == reason
+
+    def test_empty_results_is_not_an_error(self, ws, monkeypatch):
+        """空结果不计费，就是真没搜到 —— 不能跟「出问题」混为一谈。"""
+        _patch_post(monkeypatch, FakeResp(payload={"results": []}))
+        assert ws._search("x") == []
+        assert ws.last_reason == "no_results"
+
+    def test_a_network_error_is_an_error(self, ws, monkeypatch):
+        _patch_post(monkeypatch, web_search.requests.ConnectionError("boom"))
+        assert ws._search("x") == []
+        assert ws.last_reason == "error"
+
+    def test_a_non_json_body_is_an_error(self, ws, monkeypatch):
+        _patch_post(monkeypatch, FakeResp(status=200, payload=None, text="<html>"))
+        assert ws._search("x") == []
+        assert ws.last_reason == "error"
+
+    def test_success_resets_the_reason(self, ws, monkeypatch):
+        _patch_post(monkeypatch, FakeResp(status=429, text="slow down"))
+        ws._search("x")
+        assert ws.last_reason == "rate_limited"
+        _patch_post(monkeypatch, FakeResp(
+            payload={"results": [{"title": "t", "url": "u", "content": "c"}]}))
+        ws._search("x")
+        assert ws.last_reason == "ok"
+
+
+class TestFailureMessages:
+    def test_every_reason_has_a_message(self):
+        for reason in ("quota", "rate_limited", "auth", "error", "no_results"):
+            assert reason in WebSearch.REASON_MESSAGES
+
+    def test_messages_differ_per_reason(self):
+        """都一样的话，这个分类就白做了。"""
+        msgs = list(WebSearch.REASON_MESSAGES.values())
+        assert len(set(msgs)) == len(msgs)
+
+    def test_no_results_is_not_described_as_a_service_failure(self):
+        """「没搜到」别让用户以为服务坏了。"""
+        ws = WebSearch()
+        ws.last_reason = "no_results"
+        assert "额度" not in ws.failure_message()
+        assert "限流" not in ws.failure_message()
+
+    def test_an_unknown_reason_falls_back(self):
+        ws = WebSearch()
+        ws.last_reason = "something-new"
+        assert ws.failure_message() == WebSearch.REASON_MESSAGES["error"]

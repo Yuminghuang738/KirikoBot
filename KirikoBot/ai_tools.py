@@ -69,10 +69,7 @@ class Tarot:
         builder.text(f"\n🎴 {display_name}今天抽到的还是这张：{card['card_name']}")
         if card.get("card_text"):
             builder.text(f"\n{card['card_text']}")
-        if robot.msg_type == "group":
-            robot.llbot.send_group_msg(robot.group_id or "", builder.build())
-        else:
-            robot.llbot.send_private_msg(robot.user_id, builder.build())
+        robot.send(builder.build())
 
         ai.model_type = Config.DEEPSEEK_MODEL
         ai.thinking_type = "disabled"
@@ -88,10 +85,7 @@ class Tarot:
         ai.ai_request()
         if ai.ai_text:
             reply = MessageBuilder().text(ai.ai_text.strip())
-            if robot.msg_type == "group":
-                robot.llbot.send_group_msg(robot.group_id or "", reply.build())
-            else:
-                robot.llbot.send_private_msg(robot.user_id, reply.build())
+            robot.send(reply.build())
 
     def tarot_call(self, robot: Any, ai: Any) -> None:
         tool_calls = ai.ai_message.get("tool_calls")
@@ -135,10 +129,7 @@ class Tarot:
         if card["card_path"]:
             builder.image(card["card_path"])
         builder.text(f"\n🎴 {display_name}的塔罗牌：{card['card_name']}\n{card['card_text']}")
-        if robot.msg_type == "group":
-            robot.llbot.send_group_msg(robot.group_id or "", builder.build())
-        else:
-            robot.llbot.send_private_msg(robot.user_id, builder.build())
+        robot.send(builder.build())
 
         # AI interpretation
         ai.model_type = Config.DEEPSEEK_MODEL
@@ -157,10 +148,7 @@ class Tarot:
             if not is_for_self and target_name:
                 reply_builder.text(f"@{target_name} ")
             reply_builder.text(ai.ai_text.strip())
-            if robot.msg_type == "group":
-                robot.llbot.send_group_msg(robot.group_id or "", reply_builder.build())
-            else:
-                robot.llbot.send_private_msg(robot.user_id, reply_builder.build())
+            robot.send(reply_builder.build())
 
         # Deposit history for the REQUESTER (not target)
         try:
@@ -259,13 +247,14 @@ class WebSearchTool:
             return
 
         if not content:
-            # 「被反爬拦了」和「真没搜到」是两件事。以前一律说「没有搜索到相关
-            # 内容」，于是搜索引擎把这边限流时，用户看到的是「搜不到」，会一直
-            # 换关键词重试 —— 而问题其实出在出口 IP 上，换词没用。
-            if getattr(self.web_search, "last_reason", "") == "blocked":
-                robot.reply("搜索引擎把我这边限流了，过一会儿再试试吧～")
-            else:
-                robot.reply("抱歉，没有搜索到相关内容呢～换个关键词试试吧 (｡•́︿•̀｡)")
+            # 失败原因分几种，对用户说的话不一样：额度用完/被限流/配置错了，
+            # 换关键词是没用的，得让他知道该等还是该找开发者。文案由
+            # WebSearch.failure_message() 统一管，这里只负责发出去。
+            reason = getattr(self.web_search, "last_reason", "error")
+            message = getattr(self.web_search, "failure_message", None)
+            text = message() if callable(message) else "搜索没成，待会儿再试试吧"
+            logger.info("web_search 失败：reason=%s → 回复用户「%s」", reason, text)
+            robot.reply(text)
             return
 
         # Feed search results to AI for synthesis
@@ -401,10 +390,7 @@ class StickerTool:
         # Send image directly, no reply wrapper
         from llbot_client import MessageBuilder
         builder = MessageBuilder().image(f"{self.STICKER_DIR}/{chosen}")
-        if robot.msg_type == "group":
-            robot.llbot.send_group_msg(robot.group_id or "", builder.build())
-        else:
-            robot.llbot.send_private_msg(robot.user_id, builder.build())
+        robot.send(builder.build())
         _set_tool_meta(ai, tool_calls)
         ai.user_text = f"发送了表情包({category or '随机'}): {chosen}"
 
@@ -567,14 +553,11 @@ class AtMemberTool:
         builder.at(target_qq)
         builder.text(f" {content}")
 
-        if robot.msg_type == "group":
-            robot.llbot.send_group_msg(robot.group_id or "", builder.build())
-        else:
-            # Private context: at_member is a group-only feature.
-            # Send plain text without invalid @-segment.
-            pm_builder = MessageBuilder()
-            pm_builder.text(f"想对 {display_name} 说：{content}")
-            robot.llbot.send_private_msg(robot.user_id, pm_builder.build())
+        # 私聊里 at 是群专属功能，发纯文本，别塞无效的 @ 段
+        if robot.msg_type != "group":
+            builder = MessageBuilder()
+            builder.text(f"想对 {display_name} 说：{content}")
+        robot.send(builder.build())
 
         _set_tool_meta(ai, tool_calls)
         ai.user_text = f"@了{display_name}({target_qq}): {content}"
@@ -949,18 +932,12 @@ class MusicTool:
 
         info_builder = MessageBuilder()
         info_builder.text("\n".join(info_lines))
-        if robot.msg_type == "group":
-            robot.llbot.send_group_msg(robot.group_id or "", info_builder.build())
-        else:
-            robot.llbot.send_private_msg(robot.user_id, info_builder.build())
+        robot.send(info_builder.build())
 
         # Send the music share card — this renders as a beautiful playable card in QQ
         music_builder = MessageBuilder()
         music_builder.music(music_type, str(song_id))
-        if robot.msg_type == "group":
-            robot.llbot.send_group_msg(robot.group_id or "", music_builder.build())
-        else:
-            robot.llbot.send_private_msg(robot.user_id, music_builder.build())
+        robot.send(music_builder.build())
 
         logger.info("Music shared: %s - %s (id=%s, type=%s)", name, artist, song_id, music_type)
 
@@ -972,10 +949,7 @@ class MusicTool:
             if audio_path:
                 record_builder = MessageBuilder()
                 record_builder.record(audio_path)
-                if robot.msg_type == "group":
-                    robot.llbot.send_group_msg(robot.group_id or "", record_builder.build())
-                else:
-                    robot.llbot.send_private_msg(robot.user_id, record_builder.build())
+                robot.send(record_builder.build())
                 logger.info("Audio voice message also sent for %s - %s", name, artist)
         except Exception:
             logger.debug("ai_tools.music_search_call 忽略了异常", exc_info=True)
@@ -1453,10 +1427,7 @@ class ExplainSelfTool:
                 builder.reply(robot.incoming.message_id)
             builder.text(body)
             try:
-                if robot.msg_type == "group":
-                    robot.llbot.send_group_msg(robot.group_id or "", builder.build())
-                else:
-                    robot.llbot.send_private_msg(robot.user_id, builder.build())
+                robot.send(builder.build())
             except Exception:
                 logger.exception("explain_self send failed")
                 return

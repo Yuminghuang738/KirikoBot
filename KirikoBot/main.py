@@ -63,7 +63,9 @@ from learning_service import LearningService
 from music_service import MusicService
 from political_news import PoliticalNewsScraper
 from profile_service import ProfileService
+import robot_server
 from robot_server import RobotServer
+from rate_limiter import RateLimiter
 from scheduler import BotScheduler
 from sticker_collector import StickerCollector, STICKER_DIR, STICKER_CATEGORIES
 from version_manager import VersionManager
@@ -100,6 +102,11 @@ BATTLE_TIMEOUT = 60  # seconds before battle auto-ends
 # ── Services ────────────────────────────────────────────
 llbot = LLBotClient(Config.ONEBOT_API or "http://llbot:3000", Config.ONEBOT_TOKEN or "")
 db = DatabaseManager()
+
+# 回复频率限制：按群 / 按用户两个维度，配置存在 group_rate_limits 表里，
+# 在群设置面板里改。装进 robot_server 之后，所有出站回复都会过它一道。
+rate_limiter = RateLimiter(db)
+robot_server.install_rate_limiter(rate_limiter)
 feature_gate = FeatureGate(db)
 pkg = MsgPackage()
 tools_def = AiTools()
@@ -1690,6 +1697,64 @@ def api_settings_delete(scope_type: str, scope_id: str):
         logger.exception("Failed to reset feature settings %s:%s", scope_type, scope_id)
         return jsonify({"ok": False, "error": "failed to reset"}), 500
     return jsonify({"ok": True, "settings": settings})
+
+
+# ── Reply rate limits (per group) ───────────────────────
+#
+# 两种模式各自独立开关、可以同时开：
+#   单用户模式 —— N 分钟内对同一个用户最多回 Y 条（对所有用户一视同仁）
+#   群聊模式   —— N 分钟内在这个群最多发 Y 条
+
+RATE_LIMIT_FIELDS = ("user_enabled", "user_window_min", "user_max",
+                     "group_enabled", "group_window_min", "group_max")
+
+
+@app.route("/api/rate-limits")
+def api_rate_limits():
+    """所有群的限流配置 + 群列表（面板用它渲染）。"""
+    configured = {r["group_id"]: r for r in db.all_rate_limits()}
+    groups = []
+    for g in _list_groups():
+        gid = str(g.get("group_id") or "")
+        groups.append({
+            **g,
+            # 没配过的群给一份默认值，前端不用再判空
+            "limit": configured.get(gid) or {"group_id": gid, **{
+                "user_enabled": False, "user_window_min": 10, "user_max": 20,
+                "group_enabled": False, "group_window_min": 10, "group_max": 30,
+            }},
+        })
+    return jsonify({"ok": True, "groups": groups, "usage": rate_limiter.snapshot()})
+
+
+@app.route("/api/rate-limits/<group_id>", methods=["POST"])
+def api_rate_limits_save(group_id: str):
+    data = request.json or {}
+    try:
+        saved = db.set_rate_limit(group_id, **{
+            k: data.get(k) for k in RATE_LIMIT_FIELDS if k in data
+        })
+    except (ValueError, TypeError) as e:
+        return jsonify({"ok": False, "error": f"invalid value: {e}"}), 400
+    except Exception:
+        logger.exception("Failed to save rate limit for %s", group_id)
+        return jsonify({"ok": False, "error": "failed to save"}), 500
+
+    # 立刻生效，别等 RateLimiter 的配置缓存过期
+    rate_limiter.invalidate(group_id)
+    logger.info("限流配置已更新：%s → %s", group_id, saved)
+    return jsonify({"ok": True, "limit": saved})
+
+
+@app.route("/api/rate-limits/<group_id>", methods=["DELETE"])
+def api_rate_limits_reset(group_id: str):
+    try:
+        db.execute_action("DELETE FROM group_rate_limits WHERE group_id = ?", (str(group_id),))
+    except Exception:
+        logger.exception("Failed to reset rate limit for %s", group_id)
+        return jsonify({"ok": False, "error": "failed to reset"}), 500
+    rate_limiter.invalidate(group_id)
+    return jsonify({"ok": True})
 
 @app.route("/stickers/<path:filename>")
 def serve_sticker(filename: str):

@@ -1,430 +1,179 @@
+"""联网搜索：走 DeepSeek 官方的 Search / Fetch 接口。
+
+历史：这里曾经是一套「自己爬搜索引擎」的实现 —— 依次尝试 360 / Bing / 维基百科 /
+DuckDuckGo，再把结果页抓回来、从 Bing 的 base64 跳转壳和 360 的 JS 跳转壳里还原
+真实地址、识别 CAPTCHA 页、按标题过滤维基百科的松散匹配……
+
+那套东西存在的唯一原因是：当时没有可用的搜索 API。它有一半代码是在对抗反爬
+（出口 IP 被标记时，搜索引擎会扔 CAPTCHA 或者喂随机垃圾），而且效果始终不稳定。
+
+DeepSeek 上线了官方的 Search / Fetch 接口（自研搜索引擎），同样用 Bearer 鉴权、
+同一个 API Key，直接返回结构化结果和网页正文。所以那一整套对抗逻辑全部删掉了 ——
+不是「换了个源」，是这一类问题本身消失了。
+
+    POST https://api.deepseek.com/v1/tools/search
+    {query, count, need_content, ori_question}
+    → {results: [{title, url, snippet, summary, content, date, authority, ...}]}
+
+计费按请求次数（5 元 / 1000 次成功请求），与返回条数无关，所以 count 给够不额外
+花钱；QPS 是账号级 5，超过返回 429。
+"""
 from __future__ import annotations
 
-import base64
-import binascii
 import logging
-import re
 from typing import Any
-from urllib.parse import quote
 
 import requests
-from bs4 import BeautifulSoup
+
+from config import Config
 
 logger = logging.getLogger(__name__)
 
 
 class WebSearch:
-    """DeepSeek-style RAG search: search → fetch page content → feed to AI."""
+    """DeepSeek-style RAG search: Search API → 正文 → 喂给 AI。"""
 
-    # 先用谁、后用谁。这个顺序是**按实测结果**排的，不是按名气。
-    #
-    # Bing 排第一：换到住宅出口之后它是唯一又稳又相关的源。但必须用
-    # **cn.bing.com** —— 用 www.bing.com 时，出口在哪个国家就返回哪个国家的
-    # 结果（实测韩国出口返回一整页韩语），加 `mkt=zh-CN`/`cc=CN` 反而会让它
-    # 返回 0 条。cn.bing.com 不受出口位置影响，稳定给中文结果。
-    #
-    # 维基百科往后放：它的全文搜索匹配极松，问「IPv6 普及率」会返回
-    # 「杜威十进分类法」（那篇只是文中提了一次 IPv6），而且一旦排在前面就会
-    # 用这种结果把好结果挤出名额。现在加了标题相关性过滤兜着。
-    #
-    # 360 在住宅出口下实测 0 条，DDG 对非住宅 IP 之外的很多段也仍会扔
-    # CAPTCHA，两者都只作兜底。
-    PROVIDERS = ("bing", "so360", "wikipedia", "duckduckgo")
+    MAX_RESULTS = 5          # 交给 AI 的条数
+    MAX_PAGE_CHARS = 2000    # 每条结果最多取多少字正文
+    TIMEOUT = 20
 
-    BING_URL = "https://cn.bing.com/search"
-
-    WIKI_APIS = ("https://zh.wikipedia.org/w/api.php",
-                 "https://en.wikipedia.org/w/api.php")
-
-    SO360_URL = "https://www.so.com/s"
-    DDG_URL = "https://lite.duckduckgo.com/lite/"
-
-    TIMEOUT = 10
-    MAX_SEARCH_RESULTS = 5
-    MAX_FETCH_PAGES = 3
-    MAX_PAGE_CHARS = 2000  # max chars per page to extract
-
-    HEADERS = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/130.0.0.0 Safari/537.36"
-        ),
-        "Accept": "text/html,application/xhtml+xml",
-        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    # 失败原因 → 给用户的话。和「没搜到」区分开：前几种是**服务端的问题**，
+    # 换关键词没用，得让用户知道该等、该充值、还是配置错了。
+    REASON_MESSAGES = {
+        "quota": "我这边搜索额度用完了，得等充了值才能再搜",
+        "rate_limited": "搜太快了被限流了，过一会儿再试吧",
+        "auth": "搜索的钥匙不对，得让开发者看一下配置",
+        "error": "搜索服务暂时出问题了，待会儿再试试吧",
+        "no_results": "没搜到相关的内容，换个说法试试吧",
     }
 
-    # 反爬页面的特征句。整页 HTML 里出现这些词**不算**（脚本里就有），
-    # 只看标题和开头可见正文。
-    BLOCK_TITLE_MARKERS = ("captcha", "challenge", "just a moment",
-                           "attention required", "验证", "安全验证")
-    BLOCK_BODY_MARKERS = ("complete the following challenge", "select all squares",
-                          "confirm this search was made by a human")
-
     def __init__(self) -> None:
-        # 上一次 _search 的结果分类，给调用方用来**如实**告诉用户发生了什么：
-        #   ok          找到结果了
-        #   no_results  搜索引擎正常，就是没搜到
-        #   blocked     被反爬拦了（和「没搜到」是两件事，不能混为一谈）
+        # ok / no_results / quota / rate_limited / auth / error
         self.last_reason = "ok"
 
+    # ── 地址与鉴权 ───────────────────────────────────────
+
+    @staticmethod
+    def _base_url() -> str:
+        """从 DEEPSEEK_API 推出 API 根地址。
+
+        .env 里通常写的是完整的 chat/completions 地址，这里把它剥成根，
+        这样换自建代理/网关时只需要改一个变量。
+        """
+        api = (Config.DEEPSEEK_API or "https://api.deepseek.com").strip()
+        # 长的先剥："/chat/completions" 是 "/v1/chat/completions" 的后缀，
+        # 顺序反了会只剥掉后半截，留下 "/v1"，拼出来变成 /v1/v1/tools/search
+        for suffix in ("/v1/chat/completions", "/chat/completions"):
+            if api.endswith(suffix):
+                api = api[: -len(suffix)]
+                break
+        return api.rstrip("/")
+
+    @classmethod
+    def search_url(cls) -> str:
+        return f"{cls._base_url()}/v1/tools/search"
+
+    @staticmethod
+    def _token() -> str | None:
+        token = (Config.DEEPSEEK_TOKEN or "").strip()
+        return token or None
+
+    # ── 对外接口 ─────────────────────────────────────────
+
     def search_and_fetch(self, query: str) -> str:
-        """Search and fetch page content. Returns a text blob for the AI to read."""
-        from datetime import datetime
-        # Append current year to query for time-sensitive searches
-        current_year = datetime.now().strftime("%Y")
-        if current_year not in query:
-            query = f"{query} {current_year}"
+        """搜一次，把结果正文拼成一段文本给 AI。
+
+        一次请求就拿到正文（`need_content`），所以这里没有「再抓一次页面」那一步。
+        """
         results = self._search(query)
         if not results:
             return ""
 
-        pages_text: list[str] = []
-        fetch_count = 0
-        for r in results:
-            if fetch_count >= self.MAX_FETCH_PAGES:
-                break
-            content = self._fetch_page(r["link"])
-            if content:
-                pages_text.append(
-                    f"【来源：{r['title']}】\n{content}"
-                )
-                fetch_count += 1
-            elif r.get("snippet"):
-                # 抓不到正文时，至少把搜索结果自带的摘要给 AI —— 总比什么都不给强，
-                # 而且维基百科返回的摘要本身信息量就够回答「XX 是什么」。
-                pages_text.append(
-                    f"【来源：{r['title']}】\n{r['snippet']}"
-                )
-                fetch_count += 1
-
-        return "\n\n---\n\n".join(pages_text)
-
-    @staticmethod
-    def _query_tokens(query: str) -> tuple[list[str], list[str]]:
-        """把查询拆成「值得用来判断相关性的词」。
-
-        返回 (ASCII 词, 中文二字组)。中文没法像英文那样按空格切词，用二字组
-        近似：只要标题里出现查询的任意一个二字组，就认为沾边。
-        """
-        ascii_words = [w.lower() for w in re.findall(r"[A-Za-z0-9][A-Za-z0-9._+-]+", query)]
-        bigrams: list[str] = []
-        for run in re.findall(r"[\u4e00-\u9fff]{2,}", query):
-            bigrams.extend(run[i:i + 2] for i in range(len(run) - 1))
-        return ascii_words, bigrams
-
-    @classmethod
-    def _title_matches_query(cls, title: str, query: str) -> bool:
-        """标题是否真的和查询沾边。
-
-        维基百科的全文搜索匹配非常松：问「IPv6 普及率 2026 最新」，它会把
-        「杜威十进分类法」排在第一位 —— 那篇只是正文里提过一次 IPv6。这种
-        结果排在前面会占掉名额，把真正相关的挤出去，所以按**标题**过滤一道。
-        """
-        ascii_words, bigrams = cls._query_tokens(query)
-        if not ascii_words and not bigrams:
-            return True
-        low = title.lower()
-        return (any(w in low for w in ascii_words)
-                or any(b in title for b in bigrams))
-
-    def _search_wikipedia(self, query: str) -> tuple[list[dict[str, str]], bool]:
-        """维基百科的搜索 API（先中文，没命中再英文）。
-
-        它是官方给程序用的接口，不会扔 CAPTCHA 也不喂垃圾结果，而且返回体里
-        自带摘要 —— 但**全文搜索的排序很松**，所以结果要过一道标题相关性过滤
-        （见 `_title_matches_query`）。
-        """
-        for api in self.WIKI_APIS:
-            try:
-                r = requests.get(
-                    api, headers=self.HEADERS, timeout=self.TIMEOUT,
-                    params={"action": "query", "list": "search", "srsearch": query,
-                            "format": "json", "srlimit": self.MAX_SEARCH_RESULTS},
-                )
-                data = r.json()
-            except Exception:
-                logger.debug("维基百科搜索失败: %s", api, exc_info=True)
-                continue
-            lang = "zh" if "//zh." in api else "en"
-            results: list[dict[str, str]] = []
-            for hit in (data.get("query", {}).get("search") or []):
-                title = (hit.get("title") or "").strip()
-                if not title or not self._title_matches_query(title, query):
-                    continue
-                snippet = re.sub(r"<[^>]+>", "", hit.get("snippet") or "").strip()
-                results.append({
-                    "title": title,
-                    "link": f"https://{lang}.wikipedia.org/wiki/{quote(title.replace(' ', '_'))}",
-                    "snippet": snippet,
-                })
-            if results:
-                return results, False
-        return [], False
-
-    # ── 搜索：多引擎按顺序回退 ────────────────────────────
-
-    def _search(self, query: str) -> list[dict[str, str]]:
-        """从多个来源**一起**取结果，去重后交给 AI。
-
-        为什么不是「第一个有结果的就用」：本机出口是机房 IP，scraping 系引擎会
-        **喂随机垃圾**（实测「什么是 Docker」连查三次，Bing 依次给出
-        `MAC Address Vendor Lookup`、`中电科技（南京）电子信息发展有限公司`）。
-        垃圾结果「非空」，first-wins 的链式回退会被它堵死，永远轮不到可靠的源。
-
-        改成多源合并之后，单个源抽风也还有别的源兜着；反正下一步是让 AI 综合
-        这些搜索结果，多给几份候选反而更容易命中。
-        """
-        collected: list[dict[str, str]] = []
-        seen: set[str] = set()
-        blocked_any = False
-
-        for name in self.PROVIDERS:
-            if len(collected) >= self.MAX_SEARCH_RESULTS:
-                break
-            try:
-                results, blocked = getattr(self, f"_search_{name}")(query)
-            except Exception:
-                logger.debug("搜索源 %s 出错", name, exc_info=True)
-                continue
-            blocked_any = blocked_any or blocked
-            # 每个源只取前几条，把名额留给别的源，避免一家独吞
-            for r in results[:2]:
-                key = (r.get("title") or "")[:40] or r.get("link", "")
-                if key in seen:
-                    continue
-                seen.add(key)
-                collected.append(r)
-
-        if collected:
-            self.last_reason = "ok"
-            logger.info("Search '%s' → %d results", query[:40], len(collected))
-        else:
-            self.last_reason = "blocked" if blocked_any else "no_results"
-            logger.info("Search '%s' → 0 results (%s)", query[:40], self.last_reason)
-        return collected
-
-    def _looks_blocked(self, resp: Any, soup: BeautifulSoup) -> bool:
-        """是不是反爬页 —— 只在**没解析出结果时**才问这个问题。"""
-        if resp.status_code in (202, 403, 429):
-            return True
-        title = (soup.title.get_text(strip=True) if soup.title else "").lower()
-        if any(m in title for m in self.BLOCK_TITLE_MARKERS):
-            return True
-        head = soup.get_text(" ", strip=True)[:600].lower()
-        return any(m in head for m in self.BLOCK_BODY_MARKERS)
-
-    @staticmethod
-    def _unwrap_link(url: str) -> str:
-        """把搜索引擎的**跳转链接**还原成真实地址。
-
-        Bing 的结果链接长这样：
-
-            https://www.bing.com/ck/a?!&&p=...&u=a1aHR0cHM6Ly96aC53aWtpcGVkaWEu...
-
-        直接抓它会拿到一个只有「Please click here if the page does not redirect
-        automatically」的中转页 —— 正文一个字都没有，等于没抓。`u=` 是
-        base64url（前面多一个 `a1` 前缀），解出来才是真地址。
-        """
-        if "bing.com/ck/a" not in url:
-            return url
-        m = re.search(r"[?&]u=([^&]+)", url)
-        if not m:
-            return url
-        raw = m.group(1)
-        if raw.startswith("a1"):
-            raw = raw[2:]
-        raw = raw.replace("-", "+").replace("_", "/")
-        raw += "=" * (-len(raw) % 4)
-        try:
-            decoded = base64.b64decode(raw).decode("utf-8", "replace")
-        except (binascii.Error, ValueError):
-            return url
-        return decoded if decoded.startswith(("http://", "https://")) else url
-
-    def _search_bing(self, query: str) -> tuple[list[dict[str, str]], bool]:
-        r = requests.get(self.BING_URL, headers=self.HEADERS,
-                         params={"q": query, "setlang": "zh-CN"},
-                         timeout=self.TIMEOUT)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "lxml")
-        results: list[dict[str, str]] = []
-        for li in soup.select("li.b_algo"):
-            heading = li.select_one("h2") or li.select_one("h3")
-            if heading is None:
-                continue
-            link_el = heading.select_one("a")
-            link = self._unwrap_link((link_el.get("href") if link_el else "") or "")
-            # Bing 会把域名和面包屑塞进标题节点里，去掉 cite 才拿到干净的标题
-            clean = BeautifulSoup(str(heading), "lxml")
-            for junk in clean.select("cite, .b_attribution, .citeurl"):
-                junk.decompose()
-            title = clean.get_text(" ", strip=True)
-            if not link or len(title) < 3:
-                continue
-            snippet_el = li.select_one(".b_caption p") or li.select_one("p")
-            snippet = snippet_el.get_text(" ", strip=True) if snippet_el else ""
-            results.append({"title": title, "link": link, "snippet": snippet})
-            if len(results) >= self.MAX_SEARCH_RESULTS:
-                break
-        return results, (not results and self._looks_blocked(r, soup))
-
-    def _search_so360(self, query: str) -> tuple[list[dict[str, str]], bool]:
-        r = requests.get(self.SO360_URL, headers=self.HEADERS,
-                         params={"q": query}, timeout=self.TIMEOUT)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "lxml")
-        results: list[dict[str, str]] = []
-        for li in soup.select("li.res-list"):
-            link_el = li.select_one("h3 a")
-            if link_el is None:
-                continue
-            link = link_el.get("href") or ""
-            title = link_el.get_text(" ", strip=True)
-            if not link or len(title) < 3:
-                continue
-            snippet_el = li.select_one(".res-desc, .res-rich")
-            snippet = snippet_el.get_text(" ", strip=True) if snippet_el else ""
-            results.append({"title": title, "link": link, "snippet": snippet})
-            if len(results) >= self.MAX_SEARCH_RESULTS:
-                break
-        return results, (not results and self._looks_blocked(r, soup))
-
-    def _search_duckduckgo(self, query: str) -> tuple[list[dict[str, str]], bool]:
-        r = requests.post(
-            self.DDG_URL,
-            headers=self.HEADERS,
-            data={"q": query, "kl": "cn-zh"},
-            timeout=self.TIMEOUT,
-        )
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "lxml")
-        results: list[dict[str, str]] = []
-
-        for row in soup.select("tr"):
-            try:
-                links = row.select("a")
-                if not links:
-                    continue
-                title = links[0].get_text(strip=True)
-                link = links[0].get("href", "")
-                if not link or not title or len(title) < 3:
-                    continue
-                if "duckduckgo" in link.lower():
-                    continue
-                desc_span = row.select_one("td.result-snippet")
-                snippet = desc_span.get_text(strip=True) if desc_span else ""
-                results.append({"title": title, "link": link, "snippet": snippet})
-                if len(results) >= self.MAX_SEARCH_RESULTS:
-                    break
-            except Exception:
-                logger.debug("web_search._search 忽略了异常", exc_info=True)
-                continue
-
-        return results, (not results and self._looks_blocked(r, soup))
-
-    @staticmethod
-    def _real_url_from_shell(html: str) -> str:
-        """从搜索引擎的**跳转壳**里挖出真实地址。
-
-        360 的结果链接是 `so.com/link?m=...`，直接 GET 只会得到一个 280 字节的
-        空壳，正文里没有任何内容：
-
-            <script>window.location.replace("https://www.runoob.com/...")</script>
-
-        requests 不执行 JS，所以它停在壳上。真实地址就在这段脚本（或 noscript
-        里的 meta refresh）里，抠出来再抓一次。
-        """
-        m = re.search(r"""window\.location\.replace\(\s*["']([^"']+)["']""", html)
-        if not m:
-            m = re.search(
-                r"""http-equiv=["']refresh["'][^>]*?URL=['"]?([^'"\s>]+)""",
-                html, re.IGNORECASE,
+        chunks: list[str] = []
+        for r in results[: self.MAX_RESULTS]:
+            title = (r.get("title") or "").strip() or "(无标题)"
+            # summary 是给模型读的长摘要（600~800 字）；content 是正文，可能很长。
+            # 优先 content 并截断，没有就退回 summary / snippet。
+            body = (
+                (r.get("content") or "").strip()
+                or (r.get("summary") or "").strip()
+                or (r.get("snippet") or "").strip()
             )
-        url = (m.group(1) if m else "").strip()
-        return url if url.startswith("http") else ""
+            if not body:
+                continue
+            if len(body) > self.MAX_PAGE_CHARS:
+                body = body[: self.MAX_PAGE_CHARS] + "…"
+            url = (r.get("url") or "").strip()
+            source = f"【来源：{title}】" + (f"\n{url}" if url else "")
+            chunks.append(f"{source}\n{body}")
 
-    def _fetch_page(self, url: str, _depth: int = 0) -> str:
-        """Fetch a page and extract plain text."""
+        return "\n\n---\n\n".join(chunks)
+
+    def failure_message(self) -> str:
+        """这次失败该怎么跟用户说（由调用方决定要不要用它）。"""
+        return self.REASON_MESSAGES.get(self.last_reason, self.REASON_MESSAGES["error"])
+
+    # ── 真正发请求 ───────────────────────────────────────
+
+    def _search(self, query: str) -> list[dict[str, Any]]:
+        token = self._token()
+        if not token:
+            self.last_reason = "auth"
+            logger.warning("联网搜索没有配置 DEEPSEEK_TOKEN")
+            return []
+
+        payload = {
+            "query": query,
+            "count": max(self.MAX_RESULTS, 10),
+            "need_content": True,
+        }
         try:
-            r = requests.get(
-                url,
-                headers=self.HEADERS,
-                timeout=8,
-                allow_redirects=True,
+            resp = requests.post(
+                self.search_url(),
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=self.TIMEOUT,
             )
-            r.raise_for_status()
-            # Detect encoding properly
-            if r.encoding and r.encoding.lower() in ("iso-8859-1", "latin-1"):
-                r.encoding = r.apparent_encoding or "utf-8"
-        except Exception:
-            logger.debug("Failed to fetch page: %s", url[:60])
-            return ""
+        except requests.RequestException as exc:
+            self.last_reason = "error"
+            logger.warning("联网搜索请求失败: %s", type(exc).__name__)
+            return []
 
-        # 跳转壳：内容为空、真地址在脚本里。剥一层再抓（只递归一次，防死循环）。
-        if _depth == 0:
-            real = self._real_url_from_shell(r.text)
-            if real and real != url:
-                return self._fetch_page(real, _depth=1)
+        if resp.status_code != 200:
+            self.last_reason = self._reason_for_status(resp.status_code)
+            logger.warning(
+                "联网搜索 HTTP %s → %s: %s",
+                resp.status_code, self.last_reason, (resp.text or "")[:200],
+            )
+            return []
 
         try:
-            soup = BeautifulSoup(r.content, "lxml", from_encoding=r.encoding or "utf-8")
+            data = resp.json()
+        except ValueError:
+            self.last_reason = "error"
+            logger.warning("联网搜索返回的不是 JSON: %s", (resp.text or "")[:200])
+            return []
 
-            # Remove non-content elements
-            for tag in soup.select(
-                "script, style, nav, footer, header, .sidebar, .ad, .advertisement, "
-                ".nav, .footer, .header, .comment, .comments, noscript, iframe"
-            ):
-                tag.decompose()
+        results = data.get("results") or []
+        if not isinstance(results, list) or not results:
+            # 空结果**不计费**，所以这不是「出问题」，就是真没搜到
+            self.last_reason = "no_results"
+            logger.info("Search '%s' → 0 results", query[:40])
+            return []
 
-            # Try to find main content
-            main = (
-                soup.select_one("main")
-                or soup.select_one("article")
-                or soup.select_one(".content")
-                or soup.select_one("#content")
-                or soup.select_one(".post-content")
-                or soup.select_one(".article-content")
-                or soup.select_one(".entry-content")
-                or soup.body
-            )
-
-            if main:
-                # 优先取**段落**。整块 get_text 会把表格、信息框、导航条全卷进来 ——
-                # 维基百科身上尤其明显：开头的发音表会挤掉正文，喂给 AI 的
-                # 就是「Tson 平 kueh 入 湘语…」这种谁也读不懂的东西。
-                paras = [
-                    p.get_text(" ", strip=True) for p in main.select("p")
-                ]
-                paras = [p for p in paras if len(p) >= 20]
-                text = "\n".join(paras) if paras else main.get_text(separator="\n", strip=True)
-            else:
-                text = soup.get_text(separator="\n", strip=True)
-
-            # Clean up whitespace
-            text = re.sub(r"\n{3,}", "\n\n", text)
-            text = re.sub(r"[ \t]{2,}", " ", text)
-
-            # 抓到的可能是搜索引擎的**跳转中转页**（只有一句「请点这里如果页面
-            # 没有自动跳转」），拿去喂 AI 等于给了满篇废话。这种直接丢掉。
-            if self._is_redirect_stub(text):
-                logger.debug("跳过跳转中转页: %s", url[:60])
-                return ""
-
-            if len(text) > self.MAX_PAGE_CHARS:
-                text = text[:self.MAX_PAGE_CHARS] + "..."
-
-            return text
-        except Exception:
-            logger.debug("Failed to parse page: %s", url[:60])
-            return ""
+        self.last_reason = "ok"
+        logger.info("Search '%s' → %d results (deepseek)", query[:40], len(results))
+        return results
 
     @staticmethod
-    def _is_redirect_stub(text: str) -> bool:
-        """是不是「页面即将跳转」那种空壳页。"""
-        head = text[:200].lower()
-        return (
-            "redirect automatically" in head
-            or "正在跳转" in head
-            or "页面跳转" in head
-        ) or len(text.strip()) < 40
+    def _reason_for_status(status: int) -> str:
+        if status == 402:
+            return "quota"          # 余额不足
+        if status == 429:
+            return "rate_limited"   # QPS 超了
+        if status in (401, 403):
+            return "auth"
+        return "error"

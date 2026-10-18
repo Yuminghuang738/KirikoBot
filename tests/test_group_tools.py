@@ -299,6 +299,12 @@ class TestExplainSelfRawDump:
             self.llbot = llbot
             self.incoming = TestExplainSelfRawDump._Incoming()
 
+        def send(self, message):
+            """镜像 RobotServer.send：按 msg_type 走群或私聊。"""
+            if self.msg_type == "group":
+                return self.llbot.send_group_msg(self.group_id, message)
+            return self.llbot.send_private_msg(self.user_id, message)
+
     class _AI:
         def __init__(self):
             self.ai_message = {
