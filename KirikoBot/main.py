@@ -996,11 +996,26 @@ def api_balance():
 
 @app.route("/api/scheduler")
 def api_scheduler():
-    # 曾经这里还有 last_morning / next_morning：那是一套**遗留的固定 7:00 早报**，
-    # 和推送页里的「早间新闻」订阅项重复，会各发一次。现在早间新闻只由订阅项
-    # 控制（时间和开关都在推送页），这套固定早报连同它的手动触发接口一起删掉了。
-    return jsonify({"running": scheduler._running, "check_interval": scheduler.CHECK_INTERVAL,
-                    "active_groups": scheduler._get_active_groups()})
+    """调度器状态。
+
+    这里原来调的是 `scheduler._get_active_groups()` —— 那个方法只服务于群订阅
+    推送，推送整体移除时被一并删掉了，但接口忘了改，于是每次都 500。
+    现在直接查库，不再依赖调度器提供这个方法。
+    """
+    try:
+        rows = db.fetch_data(
+            "SELECT DISTINCT group_id FROM group_messages WHERE group_id IS NOT NULL"
+        )
+        active_groups = [r[0] for r in rows if r[0]]
+    except Exception:
+        logger.debug("api_scheduler active_groups query failed", exc_info=True)
+        active_groups = []
+
+    return jsonify({
+        "running": scheduler._running,
+        "check_interval": scheduler.CHECK_INTERVAL,
+        "active_groups": active_groups,
+    })
 
 @app.route("/api/stickers")
 def api_stickers():
