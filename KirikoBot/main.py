@@ -350,13 +350,22 @@ def _ambient_group_context(robot: RobotServer, disabled: set[str]) -> str:
 
 
 def _speaker_context(robot: RobotServer, disabled: set[str]) -> str:
-    """当前说话人的详细块：关系 + 画像 + 共同记忆。
+    """当前说话人的详细块：学习笔记 + 关系 + 画像 + 共同记忆。
 
     放进 user message 而不是 system prompt —— 它随「谁在说话」变化，
     放系统提示词里等于每换个人就废掉整段前缀缓存。
     """
+    learn: list[str] = []
+    if "learning" not in disabled:
+        try:
+            text = learning_service.get_context(db, robot.user_id)
+            if text:
+                learn.append(text)
+        except Exception:
+            logger.debug("learning context failed", exc_info=True)
+
     if robot.msg_type != "group" or not robot.group_id:
-        return ""
+        return "\n".join(learn)
 
     affection = None
     if "affection" not in disabled:
@@ -367,7 +376,7 @@ def _speaker_context(robot: RobotServer, disabled: set[str]) -> str:
         except Exception:
             logger.debug("affection record failed", exc_info=True)
 
-    parts: list[str] = []
+    parts: list[str] = list(learn)
     if affection is not None:
         try:
             block = affection_service.relationship_block(

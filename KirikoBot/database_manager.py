@@ -352,6 +352,13 @@ class DatabaseManager:
                         timestamp  DATETIME DEFAULT (datetime('now', 'localtime'))
                     )"""
                 )
+                # 「回复不当」判定修正前后的分界线：分界之前的笔记不再注入（保留，便于审计）。
+                # 只在第一次出现时写入，之后不变。
+                connect.execute(
+                    "INSERT OR IGNORE INTO app_state (key, value) VALUES "
+                    "('learning_rubric_cutoff_id', "
+                    " CAST(COALESCE((SELECT MAX(id) FROM learning_log), 0) AS TEXT))"
+                )
                 # Migration: add context columns if they don't exist yet
                 for col, col_type in [("user_msg", "TEXT DEFAULT ''"), ("ai_text", "TEXT DEFAULT ''"), ("tool_name", "TEXT DEFAULT ''")]:
                     try:

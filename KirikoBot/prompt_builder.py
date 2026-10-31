@@ -533,13 +533,8 @@ def build_system_prompt(
             except Exception:
                 logger.debug("profile context failed", exc_info=True)
 
-    if db is not None and learning_service is not None and "learning" not in disabled:
-        try:
-            learning_text = learning_service.get_context(db, robot.user_id)
-            if learning_text:
-                parts.append(learning_text)
-        except Exception:
-            logger.debug("learning context failed", exc_info=True)
+    # 学习笔记（需要留意的问题）也**不在这里**：它是用户级的，随「谁在说话」变化，
+    # 走说话人块（_speaker_context），和关系块放在一起。
 
     # 关系和当前说话人的画像**故意不在这里** —— 它们随"谁在说话"变化，
     # 属于每条消息都会变的内容，走 build_user_message 的 speaker 参数。
