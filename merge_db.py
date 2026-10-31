@@ -47,11 +47,6 @@ MERGE_TABLES: list[dict[str, Any]] = [
         "extra": [],
     },
     {
-        "table": "learning_log",
-        "dedup": ["user_id", "note", "timestamp"],
-        "extra": ["user_msg", "ai_text", "tool_name"],
-    },
-    {
         "table": "tarot_history",
         "dedup": ["user_id", "card_name", "timestamp"],
         "extra": [],

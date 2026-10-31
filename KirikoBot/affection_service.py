@@ -80,15 +80,6 @@ SENTIMENT_NEG_MAX = 0.6     # 单条负面上限
 SENTIMENT_DAILY_NET = 1.0   # 每日正面净额上限
 SENTIMENT_DAILY_NEG = 2.0   # 每日负面净额上限
 
-# ── Learning feedback score mapping ──────────────────────
-LEARNING_SCORE_MAP: dict[str, float] = {
-    "表现良好": 0.5,
-    "工具选择错误": -0.2,
-    "回复不当": -0.3,
-    "遗漏工具": -0.1,
-}
-
-
 def clamp_score(value: float) -> float:
     return max(SCORE_MIN, min(SCORE_MAX, float(value)))
 
@@ -401,14 +392,13 @@ class AffectionService:
     @staticmethod
     def apply_judge_delta(
         db: Any, user_id: str, group_id: str, user_name: str,
-        sentiment: float, learning: float = 0.0,
+        sentiment: float,
     ) -> float | None:
-        """判官给的分。两个分量要分开看：
+        """判官给的情绪分。
 
-        - **情绪分**单条最大 ±0.3 —— 它只是微调，不该成为刷分主力
+        - 单条最大 ±0.3 —— 它只是微调，不该成为刷分主力
           （原来 ±2.0 且不限总量，25 条消息就能刷满）
-        - **学习分**（表现良好 / 回复不当…）反映的是**机器人**的质量，保留原值
-        - 两者合计的**每日净额**钳到 ±1.0
+        - 正、负各有每日净额上限（正 +1.0，负 -2.0）
         """
         if not group_id:
             return None
@@ -416,7 +406,7 @@ class AffectionService:
             sentiment = min(sentiment, SENTIMENT_MAX)
         else:
             sentiment = max(sentiment, -SENTIMENT_NEG_MAX)
-        total = round(sentiment + learning, 2)
+        total = round(sentiment, 2)
         if abs(total) < 0.05:
             return None
         logs = AffectionService._today_logs(db, user_id, group_id)
@@ -431,11 +421,6 @@ class AffectionService:
             db, user_id, group_id, user_name, round(total, 2),
             positive=total > 0, negative=total < 0, event="sentiment",
         )
-
-    @staticmethod
-    def learning_delta(lesson_type: str | None) -> float:
-        """Score delta for a structured learning verdict type (0.0 if unknown/None)."""
-        return LEARNING_SCORE_MAP.get(lesson_type or "", 0.0)
 
     # ── System prompt context ─────────────────────────────
 

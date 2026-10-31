@@ -21,7 +21,6 @@ const PAGE_META={
   messages:['群消息','群里采集到的原始消息'],
   profiles:['用户画像','AI 分析出的群友特征'],
   affection:['好感度','互动评分与排行榜'],
-  learning:['自学习','从反馈中积累的经验'],
   reminders:['提醒','定时提醒管理'],
   tarot:['塔罗','塔罗抽牌记录'],
   stickers:['表情包','表情包库与整理'],
@@ -80,7 +79,6 @@ async function loadPage(name){
     case 'tarot': mc.innerHTML=await tarotHTML(); break;
     case 'chat': mc.innerHTML=await chatHTML(); break;
     case 'profiles': mc.innerHTML=await profilesHTML(); break;
-    case 'learning': mc.innerHTML=await learningHTML(); break;
     case 'stickers': mc.innerHTML=await stickersHTML(); break;
     case 'groups': mc.innerHTML=await groupsHTML(); break;
     case 'activity': mc.innerHTML=await activityHTML(); bindActivity(); break;
@@ -556,65 +554,6 @@ async function profilesHTML(){
   return h+`</div>`;
 }
 
-// ── Learning ──
-async function learningHTML(){
-  let d={notes:[]};try{d=await fetch('/api/learning').then(r=>r.json())}catch(_){}
-  let h=`<div class="page-head">
-    <div><div class="ph-title">自 <span class="em">学习</span></div>
-      <div class="ph-sub">机器人从互动反馈中积累的经验</div></div>
-    <div class="ph-right"><span class="tag u">${d.notes.length} 条</span>
-      <button class="btn primary" onclick="loadPage('learning')">🔄 刷新</button></div>
-  </div>
-  <div class="panel reveal" style="--i:0">
-    <div class="panel-header"><span class="hicon">➕</span>手动添加笔记</div>
-    <div class="add-form">
-      <input id="learnNote" placeholder="笔记内容…">
-      <input id="learnUserId" placeholder="用户ID" style="width:130px;flex:0 0 auto" value="dashboard">
-      <input id="learnTool" placeholder="工具名（可选）" style="width:130px;flex:0 0 auto">
-      <button onclick="addLearningNote()">➕ 添加</button>
-    </div>
-  </div>`;
-  if(!d.notes.length){
-    h+=`<div class="panel reveal" style="--i:1"><div class="empty"><span class="em-ico">🧠</span>暂无学习记录，机器人会在互动中自动积累经验 ✨</div></div>`;
-  } else {
-    h+=`<div class="panel reveal" style="--i:1">
-      <div class="panel-header"><span class="hicon">🧠</span>经验时间线</div>
-      <div class="panel-body scroll" style="max-height:66vh"><div class="timeline">`;
-    d.notes.forEach(x=>{
-      h+=`<div class="tl-item" id="learn-${x.id}">
-        <div class="tl-time">${esc(x.time||'')}</div>
-        <div class="tl-head">
-          ${x.tool_name?`<span class="tag t">${esc(x.tool_name)}</span>`:`<span class="tag">直接回复</span>`}
-          <span class="ph-sub">${esc(x.user_id||'')}</span>
-          <button class="btn sm danger" style="margin-left:auto" onclick="delLearningNote(${x.id})" title="删除此笔记">🗑️</button>
-        </div>
-        <div class="tl-body">💡 ${esc(x.note||'')}</div>
-        ${x.user_msg?`<div class="isub" style="margin-top:5px">👤 ${esc(String(x.user_msg).slice(0,70))}</div>`:''}
-        ${x.ai_text?`<div class="isub">🤖 ${esc(String(x.ai_text).slice(0,70))}</div>`:''}
-      </div>`;
-    });
-    h+=`</div></div></div>`;
-  }
-  return h;
-}
-
-async function addLearningNote(){
-  const note=($('learnNote')||{}).value?.trim();
-  if(!note){toast('请输入笔记内容','err');return}
-  const userId=($('learnUserId')||{}).value?.trim()||'dashboard';
-  const toolName=($('learnTool')||{}).value?.trim()||'';
-  try{
-    const r=await fetch('/api/learning',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note,user_id:userId,tool_name:toolName})});
-    const d=await r.json();
-    if(d.ok){toast('笔记已添加');loadPage('learning')}else toast('添加失败: '+(d.error||'未知'),'err')
-  }catch(_){toast('请求失败','err')}
-}
-
-async function delLearningNote(id){
-  if(!confirm('确定删除此学习笔记？'))return;
-  try{const r=await fetch('/api/learning/'+id,{method:'DELETE'});const d=await r.json();if(d.ok){const el=document.getElementById('learn-'+id);if(el)el.remove();toast('笔记已删除')}else toast('删除失败: '+(d.error||'未知'),'err')}catch(_){toast('请求失败','err')}
-}
-
 // ── Features ──
 let versionFilter={type:'all'};
 async function stickersHTML(){
@@ -894,7 +833,7 @@ async function deleteGroup(groupId){
     users:'涉及用户', group_messages:'群消息', history:'对话记录', reminders:'提醒',
     tool_usage:'工具调用', user_profiles:'用户画像', user_affection:'好感度',
     user_affection_log:'好感度流水',
-    group_settings:'群功能开关', learning_log:'学习笔记（按用户，跨群共享）',
+    group_settings:'群功能开关',
     user_settings:'用户功能开关（按用户）',
   };
   const rows=Object.keys(labels)
@@ -1782,7 +1721,7 @@ async function loadHistory(page){
 // ══════════════════════════════════════════════════════════
 
 const AI_SOURCE_LABEL={
-  chat:'主对话', followup:'工具追问', judge:'行为判定', learning:'自学习',
+  chat:'主对话', followup:'工具追问', judge:'行为判定',
   profile:'用户画像', news:'新闻翻译', vision:'图像理解', tarot:'塔罗',
   at_member:'@群友', feature_request:'功能建议', sticker_fallback:'表情包回退',
   quick:'其它后台',

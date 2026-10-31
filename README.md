@@ -95,7 +95,7 @@
 
 ### 🖥 Web 管理面板
 
-实时日志（SSE）· 对话记录 · 用户画像 · 好感度 · 自学习 · 提醒 · 塔罗 ·
+实时日志（SSE）· 对话记录 · 用户画像 · 好感度 · 提醒 · 塔罗 ·
 表情包库 · 群管理 · 群活跃 · 聊天回看 · AI 用量与成本 ·
 **群功能设置 + 频率限制** · LLBot 连接状态
 
@@ -203,7 +203,6 @@ KirikoBot-LLBot/
     ├── profile_service.py      # 用户画像（两层）+ 共同记忆
     ├── rate_limiter.py         # 回复频率限制
     ├── judge_service.py        # AI 判官（情绪 + 学习反馈）
-    ├── learning_service.py     # 自学习
     ├── feature_gate.py         # 按群/按用户的功能开关
     ├── scheduler.py            # 定时任务（提醒 + 每日维护）
     ├── web_search.py           # 联网搜索（DeepSeek Search API）

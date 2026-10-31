@@ -29,7 +29,7 @@ def quick_chat(
 ) -> str | None:
     """Single-turn DeepSeek call for background jobs.
 
-    The judge, learning, profile and news services each used to hand-roll their
+    The judge, profile and news services each used to hand-roll their
     own request. That is exactly how the `thinking` parameter ended up missing
     in three of them (silently defaulting to the expensive `high` effort), and
     every new global setting had to be added in four places. They all route

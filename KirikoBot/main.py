@@ -56,7 +56,6 @@ from llbot_webui import llbot_bp
 from msg_package import MsgPackage
 from news_crawler import NewsCrawler
 from log_stream import sse_handler, setup_sse_logging
-from learning_service import LearningService
 from music_service import MusicService
 from political_news import PoliticalNewsScraper
 from profile_service import ProfileService, normalize_profile
@@ -131,9 +130,8 @@ scheduler = BotScheduler(db, llbot, feature_gate)
 scheduler.start()
 sticker_collector = StickerCollector(db=db)
 profile_service = ProfileService()
-learning_service = LearningService()
 affection_service = AffectionService()
-judge_service = JudgeService(learning_service)
+judge_service = JudgeService()
 affection_tool = AffectionTool(pkg, db)
 affection_leaderboard_tool = AffectionLeaderboardTool(pkg, db)
 recall_tool = RecallMessageTool(db, llbot)
@@ -350,22 +348,13 @@ def _ambient_group_context(robot: RobotServer, disabled: set[str]) -> str:
 
 
 def _speaker_context(robot: RobotServer, disabled: set[str]) -> str:
-    """当前说话人的详细块：学习笔记 + 关系 + 画像 + 共同记忆。
+    """当前说话人的详细块：关系 + 画像 + 共同记忆。
 
     放进 user message 而不是 system prompt —— 它随「谁在说话」变化，
     放系统提示词里等于每换个人就废掉整段前缀缓存。
     """
-    learn: list[str] = []
-    if "learning" not in disabled:
-        try:
-            text = learning_service.get_context(db, robot.user_id)
-            if text:
-                learn.append(text)
-        except Exception:
-            logger.debug("learning context failed", exc_info=True)
-
     if robot.msg_type != "group" or not robot.group_id:
-        return "\n".join(learn)
+        return ""
 
     affection = None
     if "affection" not in disabled:
@@ -376,7 +365,7 @@ def _speaker_context(robot: RobotServer, disabled: set[str]) -> str:
         except Exception:
             logger.debug("affection record failed", exc_info=True)
 
-    parts: list[str] = list(learn)
+    parts: list[str] = []
     if affection is not None:
         try:
             block = affection_service.relationship_block(
@@ -523,20 +512,11 @@ def _trigger_profile_update(robot: RobotServer, disabled: set[str] | None = None
         logger.debug("main._trigger_profile_update 忽略了异常", exc_info=True)
 
 
-def _run_ai_judge(
-    robot: RobotServer, prev_turn: dict[str, str] | None,
-    learning_on: bool, affection_on: bool,
-) -> None:
-    """Async AI judge: ONE flash call for sentiment + previous-turn learning.
-    Silent on failure (no note, no delta) — must never affect the chat path."""
+def _run_ai_judge(robot: RobotServer) -> None:
+    """Async AI judge: ONE flash call for the sentiment of this message.
+    Silent on failure (no delta) — must never affect the chat path."""
     try:
-        if affection_on:
-            judge_service.judge_turn(
-                db, robot, prev_turn=prev_turn,
-                learning_on=learning_on, affection_on=True,
-            )
-        elif learning_on and prev_turn:
-            learning_service.evaluate_prev(db, robot.user_id, prev_turn, robot.msg)
+        judge_service.judge_turn(db, robot, affection_on=True)
     except Exception:
         logger.exception("AI judge failed for %s", robot.user_id)
 
@@ -614,17 +594,11 @@ def main_logic(robot: RobotServer) -> None:
             except Exception:
                 logger.debug("main.main_logic 忽略了异常", exc_info=True)
 
-        # ── AI judge (async): sentiment of THIS message + lesson for the previous turn.
-        # The pending turn is captured synchronously so the worker always judges the
-        # turn that preceded THIS message (no executor-timing race on _pending).
+        # ── AI judge (async): sentiment of THIS message → affection score ──
         has_text = bool(robot.msg.strip())
-        learning_on = "learning" not in disabled
         affection_on = bool(robot.group_id) and "affection" not in disabled and has_text
-        if learning_on or affection_on:
-            prev_turn = learning_service.take_pending(robot.user_id) if learning_on else None
-            if prev_turn and len(robot.msg.strip()) < learning_service.MIN_MSG_LENGTH:
-                prev_turn = None   # very short follow-ups are ignored (same rule as before)
-            executor.submit(_run_ai_judge, robot, prev_turn, learning_on, affection_on)
+        if affection_on:
+            executor.submit(_run_ai_judge, robot)
 
         # Trigger profile analysis for group messages (async, non-blocking)
         _trigger_profile_update(robot, disabled)
@@ -636,7 +610,7 @@ def main_logic(robot: RobotServer) -> None:
                              mood=_mood_signal(robot),
                              speaker=_speaker_context(robot, disabled))
         system_prompt = _build_system_prompt(
-            robot, db, profile_service, learning_service, affection_service, disabled,
+            robot, db, profile_service, affection_service, disabled,
         )
 
         # Every enabled tool is offered — the AI picks via native function calling
@@ -737,14 +711,6 @@ def main_logic(robot: RobotServer) -> None:
         if final_text:
             robot.reply(final_text)
 
-        # Record turn for learning (evaluated on next user message)
-        if "learning" not in disabled:
-            tool_name = ""
-            if tool_calls:
-                names = [tc.get("function", {}).get("name", "") for tc in (tool_calls if isinstance(tool_calls, list) else [tool_calls])]
-                tool_name = ",".join(names)
-            learning_service.record_turn(robot.user_id, robot.msg, ai.ai_text or "", tool_name)
-
     except Exception:
         logger.exception("Error for user %s", robot.user_id)
         try: robot.reply("抱歉，处理消息时遇到了问题，请稍后再试~")
@@ -839,49 +805,6 @@ def api_profiles():
         except Exception:
             row["memories"] = []
     return jsonify({"profiles": rows})
-
-@app.route("/api/learning")
-def api_learning():
-    rows = db.fetch_data(
-        "SELECT id, user_id, note, user_msg, ai_text, tool_name, timestamp FROM learning_log ORDER BY id DESC LIMIT 100"
-    )
-    return jsonify({"notes": [
-        {
-            "id": r[0], "user_id": r[1], "note": r[2],
-            "user_msg": r[3] or "", "ai_text": r[4] or "",
-            "tool_name": r[5] or "", "time": r[6],
-        }
-        for r in rows
-    ]})
-
-@app.route("/api/learning", methods=["POST"])
-def api_learning_create():
-    data = request.get_json(silent=True) or {}
-    user_id = (data.get("user_id") or "dashboard").strip()
-    note = (data.get("note") or "").strip()
-    if not note:
-        return jsonify({"ok": False, "error": "笔记内容不能为空"}), 400
-    tool_name = (data.get("tool_name") or "").strip()
-    user_msg = (data.get("user_msg") or "").strip()
-    ai_text = (data.get("ai_text") or "").strip()
-    try:
-        db.execute_action(
-            "INSERT INTO learning_log (user_id, note, tool_name, user_msg, ai_text) VALUES (?, ?, ?, ?, ?)",
-            (user_id, note, tool_name, user_msg, ai_text),
-        )
-        return jsonify({"ok": True, "msg": "学习笔记已添加"})
-    except Exception:
-        logger.exception("Failed to create learning note")
-        return jsonify({"ok": False, "error": "数据库写入失败"}), 500
-
-@app.route("/api/learning/<int:note_id>", methods=["DELETE"])
-def api_learning_delete(note_id: int):
-    try:
-        db.execute_action("DELETE FROM learning_log WHERE id = ?", (note_id,))
-        return jsonify({"ok": True, "deleted": note_id})
-    except Exception:
-        logger.exception("Failed to delete learning note #%d", note_id)
-        return jsonify({"ok": False, "error": "数据库删除失败"}), 500
 
 # ── Affection API ─────────────────────────────────
 
