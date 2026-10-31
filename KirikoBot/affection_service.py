@@ -51,10 +51,13 @@ SCORE_MAX = 100.0
 SCORE_DEFAULT = 50.0
 
 # ── Decay ────────────────────────────────────────────────
-DECAY_PER_WEEK = 1.5        # 一周没出现掉 1.5 分（原来是 0.5）
-DECAY_FLOOR = 20.0          # 封底从 50 降到 20 —— 普通/冷淡才可达
-LONG_ABSENCE_DAYS = 30      # 超过这个天数没出现
-LONG_ABSENCE_EXTRA = 3.0    # 额外再掉这么多（一次性，靠日志去重）
+# 衰减随离开时长加速（按「完整的第几周」计）：
+#   第 1 周        1.5 分/周
+#   第 2–3 周      3.0 分/周
+#   第 4 周起      5.0 分/周
+# 关系是逐渐变冷的：一个月没来大约掉到「亲密」以下，三个月左右掉到「普通」。
+DECAY_RATES = ((1, 1.5), (3, 3.0), (None, 5.0))   # (截止周数, 每周分数)
+DECAY_FLOOR = 20.0          # 封底：普通/冷淡都可达，但不会一直掉到 0
 
 # ── Daily caps ───────────────────────────────────────────
 DAILY_EVENT_CAP = 3.0       # 每天从「事件」拿到的总分上限
@@ -149,11 +152,19 @@ class AffectionService:
         days_since = (datetime.now() - last).days
         if days_since < 7:
             return score
-        weeks = days_since // 7
-        decay = weeks * DECAY_PER_WEEK
-        if days_since >= LONG_ABSENCE_DAYS:
-            decay += LONG_ABSENCE_EXTRA
-        return max(DECAY_FLOOR, score - decay)
+        return max(DECAY_FLOOR, score - AffectionService.decay_for_days(days_since))
+
+    @staticmethod
+    def decay_for_days(days_since: int) -> float:
+        """离开 days_since 天，累计应掉多少分（不考虑封底）。"""
+        weeks = max(0, days_since // 7)
+        total = 0.0
+        for week in range(1, weeks + 1):
+            for upto, rate in DECAY_RATES:
+                if upto is None or week <= upto:
+                    total += rate
+                    break
+        return total
 
     # ── CRUD helpers ──────────────────────────────────────
 

@@ -142,36 +142,50 @@ class TestJudgeSentiment:
 
 
 class TestDecay:
-    """掉分从 0.5/周 调到 1.5/周，封底从 50 降到 20 —— 「普通/冷淡」终于可达。"""
+    """衰减随离开时长加速：第 1 周 1.5，第 2–3 周每周 3，第 4 周起每周 5，封底 20。
+
+    结论（从 85 起算）：一个月约 72，两个月约 52，三个月约 32（普通档）。
+    之前是 1.5/周且只在读取时计算，线上 71 人中有 31 人离开超过 30 天，分数仍在友好以上。
+    """
 
     @staticmethod
     def _ago(days: int) -> str:
         from datetime import timedelta
         return (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
 
-    def test_a_week_costs_1_5(self):
+    def test_the_first_week_costs_1_5(self):
         assert AffectionService.apply_decay(90.0, self._ago(7)) == pytest.approx(88.5)
 
-    def test_three_weeks_costs_4_5(self):
-        assert AffectionService.apply_decay(90.0, self._ago(21)) == pytest.approx(85.5)
+    def test_weeks_two_and_three_cost_3_each(self):
+        assert AffectionService.decay_for_days(21) == pytest.approx(1.5 + 3 + 3)
+
+    def test_from_week_four_it_costs_5_a_week(self):
+        """第 4 周那一周（第 21–27 天之后）掉 5 分；第 5 周同样。"""
+        assert AffectionService.decay_for_days(28) - AffectionService.decay_for_days(21) == pytest.approx(5)
+        assert AffectionService.decay_for_days(35) - AffectionService.decay_for_days(28) == pytest.approx(5)
 
     def test_under_a_week_costs_nothing(self):
         assert AffectionService.apply_decay(90.0, self._ago(6)) == pytest.approx(90.0)
 
-    def test_it_can_reach_普通_and_冷淡(self):
-        """旧版封底 50，「普通/冷淡」永远到不了；现在能。"""
-        assert DECAY_FLOOR <= 20
+    def test_a_month_away_drops_a_close_friend_below_close(self):
+        """离开一个月，85 应该掉出「亲密」（65 以上）以外，至少不再是挚友。"""
+        score = AffectionService.apply_decay(85.0, self._ago(28))
+        assert score == pytest.approx(72.5)
+
+    def test_three_months_away_reaches_普通(self):
+        score = AffectionService.apply_decay(85.0, self._ago(84))
+        assert AffectionService.get_relationship(score)[0] == "普通"
+
+    def test_the_curve_accelerates(self):
+        """同样过一周，越久离开掉得越快。"""
+        early = AffectionService.decay_for_days(14) - AffectionService.decay_for_days(7)
+        late = AffectionService.decay_for_days(56) - AffectionService.decay_for_days(49)
+        assert late > early
+
+    def test_it_can_reach_冷淡_but_never_goes_below_the_floor(self):
         far = AffectionService.apply_decay(50.0, self._ago(365))
         assert far == pytest.approx(DECAY_FLOOR)
         assert AffectionService.get_relationship(far)[0] in ("普通", "冷淡")
-
-    def test_a_long_absence_adds_an_extra_penalty(self):
-        """30 天以上额外再掉 3 分。"""
-        three_weeks = AffectionService.apply_decay(90.0, self._ago(28))
-        five_weeks = AffectionService.apply_decay(90.0, self._ago(35))
-        # 28 天 → 4*1.5 = 6；35 天 → 5*1.5 + 3 = 10.5
-        assert three_weeks == pytest.approx(84.0)
-        assert five_weeks == pytest.approx(79.5)
 
     def test_it_never_goes_below_the_floor(self):
         assert AffectionService.apply_decay(30.0, self._ago(3650)) == pytest.approx(DECAY_FLOOR)
