@@ -51,10 +51,13 @@ SCORE_MAX = 100.0
 SCORE_DEFAULT = 50.0
 
 # ── Decay ────────────────────────────────────────────────
-DECAY_PER_WEEK = 1.5        # 一周没出现掉 1.5 分（原来是 0.5）
-DECAY_FLOOR = 20.0          # 封底从 50 降到 20 —— 普通/冷淡才可达
-LONG_ABSENCE_DAYS = 30      # 超过这个天数没出现
-LONG_ABSENCE_EXTRA = 3.0    # 额外再掉这么多（一次性，靠日志去重）
+# 衰减随离开时长加速（按「完整的第几周」计）：
+#   第 1 周        1.5 分/周
+#   第 2–3 周      3.0 分/周
+#   第 4 周起      5.0 分/周
+# 关系是逐渐变冷的：一个月没来大约掉到「亲密」以下，三个月左右掉到「普通」。
+DECAY_RATES = ((1, 1.5), (3, 3.0), (None, 5.0))   # (截止周数, 每周分数)
+DECAY_FLOOR = 20.0          # 封底：普通/冷淡都可达，但不会一直掉到 0
 
 # ── Daily caps ───────────────────────────────────────────
 DAILY_EVENT_CAP = 3.0       # 每天从「事件」拿到的总分上限
@@ -149,11 +152,19 @@ class AffectionService:
         days_since = (datetime.now() - last).days
         if days_since < 7:
             return score
-        weeks = days_since // 7
-        decay = weeks * DECAY_PER_WEEK
-        if days_since >= LONG_ABSENCE_DAYS:
-            decay += LONG_ABSENCE_EXTRA
-        return max(DECAY_FLOOR, score - decay)
+        return max(DECAY_FLOOR, score - AffectionService.decay_for_days(days_since))
+
+    @staticmethod
+    def decay_for_days(days_since: int) -> float:
+        """离开 days_since 天，累计应掉多少分（不考虑封底）。"""
+        weeks = max(0, days_since // 7)
+        total = 0.0
+        for week in range(1, weeks + 1):
+            for upto, rate in DECAY_RATES:
+                if upto is None or week <= upto:
+                    total += rate
+                    break
+        return total
 
     # ── CRUD helpers ──────────────────────────────────────
 
@@ -471,37 +482,49 @@ class AffectionService:
     def get_leaderboard(
         db: Any, group_id: str | None = None, limit: int = 10,
     ) -> list[dict[str, Any]]:
-        """Return top-N users by affection score, optionally filtered by group."""
+        """Top-N by **current** affection (decay applied), matching what the bot actually uses.
+
+        The stored score only moves when someone interacts, so reading it raw made the
+        leaderboard disagree with the relationship the bot shows in its prompt. Decay is
+        applied here, sorted on the decayed value, and the tier is recomputed from it.
+        """
         if group_id:
             rows = db.fetch_data(
                 "SELECT user_id, user_name, affection_score, interaction_count, "
-                "positive_count, negative_count, relationship "
-                "FROM user_affection WHERE group_id=? "
-                "ORDER BY affection_score DESC LIMIT ?",
-                (group_id, limit),
+                "positive_count, negative_count, last_interaction "
+                "FROM user_affection WHERE group_id=?",
+                (group_id,),
             )
         else:
             rows = db.fetch_data(
                 "SELECT user_id, user_name, affection_score, interaction_count, "
-                "positive_count, negative_count, relationship, group_id "
-                "FROM user_affection "
-                "ORDER BY affection_score DESC LIMIT ?",
-                (limit,),
+                "positive_count, negative_count, last_interaction, group_id "
+                "FROM user_affection",
             )
 
-        return [
-            {
+        scored = []
+        for r in rows:
+            current = AffectionService.apply_decay(float(r[2]), r[6])
+            scored.append((current, r))
+        scored.sort(key=lambda item: item[0], reverse=True)
+
+        out: list[dict[str, Any]] = []
+        for current, r in scored[:limit]:
+            label, emoji = AffectionService.get_relationship(current)
+            entry = {
                 "user_id": r[0],
                 "user_name": r[1],
-                "affection_score": round(float(r[2]), 1),
+                "affection_score": round(current, 1),
                 "interaction_count": int(r[3]),
                 "positive_count": int(r[4]),
                 "negative_count": int(r[5]),
-                "relationship": r[6],
-                "emoji": AffectionService.get_relationship(float(r[2]))[1],
+                "relationship": label,
+                "emoji": emoji,
             }
-            for r in rows
-        ]
+            if not group_id and len(r) > 7:
+                entry["group_id"] = r[7]
+            out.append(entry)
+        return out
 
     # ── Manual adjustment (for dashboard) ─────────────────
 
