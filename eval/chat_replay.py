@@ -61,6 +61,7 @@ class Variant:
     tight: bool = False          # 在 user message 末尾再压一次长度（近因效应）
     static_exemplars: bool = False  # 示例固定（所有回合相同）→ 可进系统提示词、利于缓存
     no_speaker: bool = False        # 去掉「当前说话人」的关系 + 画像块（测个性化的贡献）
+    learning: bool = False          # 把自学习笔记（【需要留意的问题】）放进说话人块，与线上一致
     no_memory: bool = False         # 保留关系+画像，只去掉共同记忆（测记忆的贡献）
     no_affection: bool = False      # 保留画像+记忆，只去掉关系（好感度）块（测好感度的贡献）
     legacy: bool = False            # 还原改动前的提示词：剥掉语感章节与群聊尾注（真正的「旧生产」基线）
@@ -89,6 +90,13 @@ VARIANTS: dict[str, Variant] = {
     "tight_nogroup": Variant("tight_nogroup", raw_limit=40, max_msgs=16, group_context=False,
                              style_rule=True, exemplars=8, tight=True,
                              note="style_tight 去掉群背景（只保留长历史）"),
+    # 自学习消融：learn_on 与线上一致（笔记进说话人块）；learn_off 去掉笔记，其余完全相同。
+    "learn_on": Variant("learn_on", raw_limit=40, max_msgs=16, group_context=True, style_rule=True,
+                        exemplars=8, tight=True, static_exemplars=True, learning=True,
+                        note="线上配置 + 自学习笔记"),
+    "learn_off": Variant("learn_off", raw_limit=40, max_msgs=16, group_context=True, style_rule=True,
+                         exemplars=8, tight=True, static_exemplars=True, learning=False,
+                         note="线上配置去掉自学习笔记"),
     "style_tight_static": Variant("style_tight_static", raw_limit=40, max_msgs=16,
                                   group_context=True, style_rule=True, exemplars=8,
                                   tight=True, static_exemplars=True,
@@ -290,6 +298,9 @@ def build_prompt(db: Any, s: Sample, v: Variant, conn: sqlite3.Connection):
         rel = ""
     speaker = "\n".join(x for x in (rel,
                         profile_svc.build_speaker_context(speaker_db, s.uid, s.gid, s.user_name, affection=aff)) if x)
+    if v.learning:
+        learn = ls.LearningService().get_context(db, s.uid)
+        speaker = "\n".join(x for x in (learn, speaker) if x)
     if v.no_speaker:
         speaker = ""
     ctx = ""
