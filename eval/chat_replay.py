@@ -59,6 +59,7 @@ class Variant:
     exemplars: int = 0           # 附带多少条真人群友的短消息作为语感示例
     tight: bool = False          # 在 user message 末尾再压一次长度（近因效应）
     static_exemplars: bool = False  # 示例固定（所有回合相同）→ 可进系统提示词、利于缓存
+    no_speaker: bool = False        # 去掉「当前说话人」的关系 + 画像块（测个性化的贡献）
     note: str = ""
 
 
@@ -88,6 +89,10 @@ VARIANTS: dict[str, Variant] = {
                                   group_context=True, style_rule=True, exemplars=8,
                                   tight=True, static_exemplars=True,
                                   note="style_tight，但示例固定（可进系统提示词、利于缓存）"),
+    "no_speaker": Variant("no_speaker", raw_limit=40, max_msgs=16, group_context=True,
+                          style_rule=True, exemplars=8, tight=True, static_exemplars=True,
+                          no_speaker=True,
+                          note="style_tight_static 去掉个性化块（关系+画像）"),
     "no_think_warm": Variant("no_think_warm", raw_limit=40, max_msgs=16, group_context=True,
                              thinking=False, temperature=1.0, top_p=1.0,
                              note="长历史 + 群背景 + 关思考，温度 1.0 才真正生效"),
@@ -216,6 +221,8 @@ def build_prompt(db: Any, s: Sample, v: Variant, conn: sqlite3.Connection):
     aff = aff_svc.get_or_create(db, s.uid, s.gid, s.user_name)
     speaker = "\n".join(x for x in (rel,
                         profile_svc.build_speaker_context(db, s.uid, s.gid, s.user_name, affection=aff)) if x)
+    if v.no_speaker:
+        speaker = ""
     ctx = ""
     if v.group_context:
         ctx = pb.format_group_context(s.group_rows, minutes=15)
@@ -284,11 +291,12 @@ def generate(system: str, history: list[dict], user: str, v: Variant, key: str) 
 
 
 JUDGE_SYSTEM = """你是严格的聊天质量裁判。你会看到一段 QQ 群聊的上下文、群友最后说的一句话，以及两个候选回复 A、B。
-请分别判断三个维度谁更好（只能填 A、B 或 平）：
+请分别判断四个维度谁更好（只能填 A、B 或 平）：
 - ctx：谁更接住了对方**这句话**（指代、接的梗、前文的事），而不是答非所问或重复旧话题
 - human：谁读起来更像一个真人在群里随口接话（口语、不端着、不像客服/AI 腔、不写小作文）
 - persona：谁更像「20岁大三女生、傲娇但讨喜、说话短」的 Kiriko
-只输出 JSON：{"ctx":"A|B|平","human":"A|B|平","persona":"A|B|平"}"""
+- personal：谁更像是**专门对这个人说话**（用得上这个人的特点、称呼、之前的事），而不是对谁都一样的套话
+只输出 JSON：{"ctx":"A|B|平","human":"A|B|平","persona":"A|B|平","personal":"A|B|平"}"""
 
 
 def judge(context_text: str, last_user: str, a: str, b: str, key: str) -> dict:
@@ -375,7 +383,7 @@ def run(args: argparse.Namespace) -> int:
     summary: dict[str, dict] = {}
     detail: list[dict] = []
     for v in variants[1:]:
-        tally = {"ctx": [0, 0, 0], "human": [0, 0, 0], "persona": [0, 0, 0]}  # [var, base, tie]
+        tally = {"ctx": [0, 0, 0], "human": [0, 0, 0], "persona": [0, 0, 0], "personal": [0, 0, 0]}  # [var, base, tie]
 
         def cmp(idx):
             s = samples[idx]
@@ -396,7 +404,10 @@ def run(args: argparse.Namespace) -> int:
         with ThreadPoolExecutor(max_workers=args.workers) as ex:
             cmps = [c for c in ex.map(cmp, range(len(samples))) if c]
         for idx, r1, r2 in cmps:
-            for dim in ("ctx", "human", "persona"):
+            for dim in ("ctx", "human", "persona", "personal"):
+                if r1.get(dim) not in ("A", "B", "平") or r2.get(dim) not in ("A", "B", "平"):
+                    tally.setdefault("_missing", [0, 0, 0])[0] += 1
+                    continue
                 # r1: A=base；r2: A=var
                 def score(res, letter):
                     return res.get(dim)
@@ -447,13 +458,13 @@ def _ctx_for_judge(db: Any, s: Sample, base: Variant) -> list[dict]:
 
 def _print_table(summary: dict) -> None:
     print("\n═══ 变体 vs 基线（胜/负/平，双顺序裁判）═══")
-    print(f"{'变体':<16}{'样本':>5}  {'上下文':>16}  {'人味':>16}  {'人设':>16}")
+    print(f"{'变体':<16}{'样本':>5}  {'上下文':>16}  {'人味':>16}  {'人设':>16}  {'个性化':>16}")
     for name, data in summary.items():
         if name.startswith("_"):
             continue
         w = data["win_vs_base"]
-        cells = [f"{w[d]['variant']:>2}/{w[d]['baseline']:>2}/{w[d]['tie']:>2}" for d in ("ctx", "human", "persona")]
-        print(f"{name:<16}{data['n']:>5}  {cells[0]:>16}  {cells[1]:>16}  {cells[2]:>16}")
+        cells = [f"{w[d]['variant']:>2}/{w[d]['baseline']:>2}/{w[d]['tie']:>2}" for d in ("ctx", "human", "persona", "personal")]
+        print(f"{name:<16}{data['n']:>5}  {cells[0]:>16}  {cells[1]:>16}  {cells[2]:>16}  {cells[3]:>16}")
     print("\n═══ 回复统计 ═══")
     for name, data in summary.items():
         st = data.get("stats", {})
