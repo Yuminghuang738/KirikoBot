@@ -67,9 +67,15 @@ EVENT_STREAK_CAP = 0.5      # 连续加分封顶
 EVENT_DEEP_NIGHT = 0.1      # 0-5 点出现
 EVENT_MEDIA = 0.1           # 发了图/表情包
 
-# ── Judge sentiment ──────────────────────────────────────
-SENTIMENT_MAX = 0.3         # 单条情绪分上限（原 2.0）
-SENTIMENT_DAILY_NET = 1.0   # 每日情绪净额上限
+# ── Judge sentiment（非对称）──────────────────────────────
+# 正面：单条最多 +0.3，每天净额最多 +1.0 —— 好感要慢慢攒。
+# 负面：单条最多 -0.6，每天净额最多 -2.0 —— 信任被破坏的速度通常快于建立。
+# 之前正负对称（±0.3）：线上 95 条正向 : 27 条负向，37 人有负面计数却仍在友好档以上，
+# 负面永远追不上日常的小正分。
+SENTIMENT_MAX = 0.3         # 单条正面上限
+SENTIMENT_NEG_MAX = 0.6     # 单条负面上限
+SENTIMENT_DAILY_NET = 1.0   # 每日正面净额上限
+SENTIMENT_DAILY_NEG = 2.0   # 每日负面净额上限
 
 # ── Learning feedback score mapping ──────────────────────
 LEARNING_SCORE_MAP: dict[str, float] = {
@@ -395,7 +401,10 @@ class AffectionService:
         """
         if not group_id:
             return None
-        sentiment = max(-SENTIMENT_MAX, min(SENTIMENT_MAX, sentiment))
+        if sentiment > 0:
+            sentiment = min(sentiment, SENTIMENT_MAX)
+        else:
+            sentiment = max(sentiment, -SENTIMENT_NEG_MAX)
         total = round(sentiment + learning, 2)
         if abs(total) < 0.05:
             return None
@@ -404,7 +413,7 @@ class AffectionService:
         if total > 0:
             total = min(total, SENTIMENT_DAILY_NET - net_today)
         else:
-            total = max(total, -SENTIMENT_DAILY_NET - net_today)
+            total = max(total, -SENTIMENT_DAILY_NEG - net_today)
         if abs(total) < 0.05:
             return None
         return AffectionService.update_score(
