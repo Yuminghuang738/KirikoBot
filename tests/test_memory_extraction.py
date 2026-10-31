@@ -161,3 +161,61 @@ class TestHistoryIndex:
             "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='history'")
         names = {r[0] for r in rows}
         assert "idx_history_user_group" in names
+
+
+class TestTriggerFiresForPrivateChats:
+    """线上事故：记忆提取只挂在群聊分支上，而对话绝大多数发生在私聊里，
+    部署后 26 次私聊回复、只有 1 次群聊回复，记忆一条都没有新增。"""
+
+    class _Robot:
+        def __init__(self, msg_type, group_id, user_id="u1", user_name="小明"):
+            self.msg_type = msg_type
+            self.group_id = group_id
+            self.user_id = user_id
+            self.user_name = user_name
+
+    @pytest.fixture
+    def wired(self, db, monkeypatch):
+        import main
+        submitted: list[str] = []
+
+        class Recorder:
+            def submit(self, fn, *args, **kwargs):
+                submitted.append(fn.__name__)
+
+        monkeypatch.setattr(main, "db", db)
+        monkeypatch.setattr(main, "executor", Recorder())
+        return main, submitted
+
+    def test_a_private_message_submits_memory_extraction(self, db, wired):
+        main, submitted = wired
+        _talk(db, "u1", ProfileService.MEMORY_GAP)
+        main._trigger_profile_update(self._Robot("private", None), set())
+        assert "extract_memories" in submitted
+
+    def test_private_chats_do_not_trigger_profile_analysis(self, db, wired):
+        """画像分析的原有行为不变：只在群里触发。"""
+        main, submitted = wired
+        _talk(db, "u1", ProfileService.MEMORY_GAP)
+        main._trigger_profile_update(self._Robot("private", None), set())
+        assert "analyze_user" not in submitted
+
+    def test_a_group_message_submits_both_jobs(self, db, wired):
+        main, submitted = wired
+        _talk(db, "u1", ProfileService.MEMORY_GAP)
+        main._trigger_profile_update(self._Robot("group", "g1"), set())
+        assert "extract_memories" in submitted
+        assert "analyze_user" in submitted
+
+    def test_the_profiles_toggle_still_disables_everything(self, db, wired):
+        main, submitted = wired
+        _talk(db, "u1", ProfileService.MEMORY_GAP)
+        main._trigger_profile_update(self._Robot("private", None), {"profiles"})
+        assert submitted == []
+
+    def test_bot_accounts_are_skipped(self, db, wired, monkeypatch):
+        main, submitted = wired
+        monkeypatch.setattr(main.Config, "BOT_QQ_LIST", ["bot1"], raising=False)
+        _talk(db, "bot1", ProfileService.MEMORY_GAP)
+        main._trigger_profile_update(self._Robot("private", None, user_id="bot1"), set())
+        assert submitted == []
