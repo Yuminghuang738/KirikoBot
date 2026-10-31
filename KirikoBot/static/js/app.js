@@ -1868,25 +1868,6 @@ async function loadThreads(gid, date, box){
   </div>`;
 }
 
-// ══════════════════════════════════════════════════════════
-//  Push subscriptions (群订阅推送)
-// ══════════════════════════════════════════════════════════
-
-const PUSH_TOPICS={
-  hitokoto:'💬 每日一言',
-  daily_roll_call:'📣 今日发言榜',
-  amp_head:'🎸 今日箱头',
-};
-const PUSH_HINT={
-  hitokoto:'一句随机的语录',
-  daily_roll_call:'@ 出当天发言最多的三个人',
-  amp_head:'每天介绍一款吉他音箱头：年代、音色、市价、选购建议',
-};
-// Topics that were requested at a specific hour start there instead of 07:00.
-const PUSH_DEFAULT_TIME={
-  amp_head:'08:00',
-};
-
 // ── Init ──
 startLogSSE();
 loadPage('overview');

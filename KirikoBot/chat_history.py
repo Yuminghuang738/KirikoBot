@@ -71,7 +71,7 @@ def save_turn(db: Any, uid: str, gid: str | None, user_msg: str, ai_text: str,
     harmless omission: it stays in the context as a question nobody ever
     answered.
 
-    Self-contained tools (web_search, tarot, hitokoto…) send their own reply
+    Self-contained tools (web_search, tarot, music_search…) send their own reply
     and leave `ai_text` empty, which is why `handled` distinguishes "a tool
     already answered this" from "produced nothing at all". The first keeps a
     marker so the turn is visibly closed; the second is dropped entirely,

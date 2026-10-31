@@ -27,7 +27,6 @@ QQRobot/
 ├── web_search.py         # 联网搜索
 ├── log_stream.py         # SSE 日志推送
 ├── sticker_collector.py  # 表情包收集
-├── extra_services.py     # 第三方服务（一言）
 ├── msg_package.py        # 消息组装
 ├── templates/dashboard.html  # 前端管理面板（单文件）
 ├── VERSION               # 当前版本号
@@ -816,7 +815,6 @@ CI 在 `.github/workflows/ci.yml`：跑 pytest + `compileall`。
 1. `database_manager.SUBSCRIPTION_TOPICS` —— **最容易漏**。`/api/subscriptions` 的 POST
    用它做白名单校验，不加进去前端保存会直接 400
 2. `scheduler._push_topic` 加分支 + 写一个 `_build_xxx()`
-3. `static/js/app.js` 的 `PUSH_TOPICS` / `PUSH_HINT`（要特定默认时间再加 `PUSH_DEFAULT_TIME`）
 4. 时间输入框的 fallback 也要跟着改，否则**显示的**是 07:00 而**存下去的**是别的值
 
 话题处理函数返回字符串或消息段列表都行（见 10.17）。
@@ -885,7 +883,7 @@ Wikipedia 有 API、URL 稳定、无反爬、且有**型号级**条目。
 它收到的是**两个问题**，然后挑了一个答。换任何模型都会这样。
 
 **根因**：`save_turn` 原本**无条件写 user 行，只在有回复文本时才写 assistant 行**。
-而自成一体工具（`web_search` / `tarot` / `music_search` / `hitokoto` / `sticker`…）
+而自成一体工具（`web_search` / `tarot` / `music_search` / `sticker`…）
 是自己把回复发出去的，`final_text` 保持空字符串 —— 于是每一轮工具调用都在历史里
 留下一条**永远不会被回答的 user 行**。
 
