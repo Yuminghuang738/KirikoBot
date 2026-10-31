@@ -16,9 +16,9 @@ from flask import Flask, Response, jsonify, render_template, request, send_from_
 
 from ai_server import AiServer
 from ai_tools import (
-    Tarot, Tarot_History, GamingNews,
+    Tarot, Tarot_History,
     WebSearchTool, StickerTool,
-    AtMemberTool, ReminderTool, TimeTool, PoliticalNewsTool,
+    AtMemberTool, ReminderTool, TimeTool,
     BalanceTool, MusicTool,
     ListRemindersTool, DeleteReminderTool,
     AffectionTool, AffectionLeaderboardTool,
@@ -49,15 +49,12 @@ from feature_gate import (
     FEATURE_DEFS, FeatureGate, VALID_SCOPES,
     disabled_tool_names, disabled_labels,
 )
-from hot_news import HotNewsScraper
 from judge_service import JudgeService
 from llbot_client import LLBotClient, MessageBuilder
 from llbot_webui import llbot_bp
 from msg_package import MsgPackage
-from news_crawler import NewsCrawler
 from log_stream import sse_handler, setup_sse_logging
 from music_service import MusicService
-from political_news import PoliticalNewsScraper
 from profile_service import ProfileService, normalize_profile
 import robot_server
 from robot_server import RobotServer
@@ -107,8 +104,6 @@ tools_def = AiTools()
 
 tarot = Tarot(db, pkg)
 tarot_history = Tarot_History(db, pkg)
-news_crawler = NewsCrawler()
-gaming_news = GamingNews(news_crawler, pkg)
 web_search = WebSearch()
 web_search_tool = WebSearchTool(web_search, pkg)
 sticker_tool = StickerTool(pkg)
@@ -117,13 +112,10 @@ reminder_tool = ReminderTool(db, pkg)
 list_reminders_tool = ListRemindersTool(db, pkg)
 delete_reminder_tool = DeleteReminderTool(db, pkg)
 time_tool = TimeTool(pkg)
-political_news_scraper = PoliticalNewsScraper()
-political_news_tool = PoliticalNewsTool(political_news_scraper, pkg)
 balance_service = BalanceService()
 balance_tool = BalanceTool(balance_service, pkg)
 music_service = MusicService()
 music_tool = MusicTool(music_service, pkg)
-hot_news_scraper = HotNewsScraper()
 
 # 群订阅推送已整体移除，调度器现在只管提醒和箱头库爬取
 scheduler = BotScheduler(db, llbot, feature_gate)
@@ -170,13 +162,12 @@ _start_time = time.time()
 # ── Tool routing ────────────────────────────────────────
 ROUTES = {
     "tarot": tarot.tarot_call, "tarot_history": tarot_history.tarot_history_call,
-    "gaming_news": gaming_news.gaming_news_call, "web_search": web_search_tool.web_search_call,
+    "web_search": web_search_tool.web_search_call,
     "sticker": sticker_tool.sticker_call,
     "at_member": at_member_tool.at_member_call, "set_reminder": reminder_tool.set_reminder_call,
     "list_reminders": list_reminders_tool.list_reminders_call,
     "delete_reminder": delete_reminder_tool.delete_reminder_call,
     "get_current_time": time_tool.get_current_time_call,
-    "political_news": political_news_tool.political_news_call,
     "check_balance": balance_tool.balance_call,
     "music_search": music_tool.music_search_call,
     "check_affection": affection_tool.check_affection_call,
@@ -191,7 +182,7 @@ ROUTES = {
 # Self-contained tools format and send their own reply — no AI follow-up needed
 SELF_CONTAINED_TOOLS = {
     "tarot", "sticker", "web_search", "at_member",
-    "political_news", "gaming_news", "tarot_history", "music_search",
+    "tarot_history", "music_search",
     # 这几个是纯数据类回答（统计/余额/好感度），直接发原文比让模型复述更准
     "group_stats", "check_balance", "check_affection", "affection_leaderboard",
     # explain_self sends the raw debug dump itself; a follow-up turn would only

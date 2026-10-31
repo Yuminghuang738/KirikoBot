@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import os
+import pathlib
 
 import pytest
 
@@ -29,6 +30,8 @@ REMOVED_TOOLS = (
     # 2026-10 第二批：天气、B站热搜、一言
     # —— 这三个要么 AI 自己就能答，要么使用率太低
     "weather", "bilibili_trending", "hitokoto",
+    # 2026-10 第三批：时政新闻、游戏新闻（B站热搜的服务与通用热搜爬虫一并删掉）
+    "political_news", "gaming_news",
 )
 # 这些 feature key 已随功能/重复的推送开关一起移除
 REMOVED_FEATURE_KEYS = (
@@ -37,6 +40,7 @@ REMOVED_FEATURE_KEYS = (
     "morning_news",   # 遗留的固定 7:00 早报
     "subscription",   # 与推送页重合的总开关
     "weather", "bilibili", "hitokoto",   # 对应工具已移除
+    "political_news", "gaming_news",     # 2026-10 第三批：对应工具已移除
 )
 
 
@@ -311,3 +315,49 @@ class TestAmpHeadLibraryIsGone:
 
         assert hasattr(scheduler.BotScheduler, "_check_reminders")
         assert hasattr(scheduler.BotScheduler, "_fire_reminder")
+
+
+class TestNewsIsGone:
+    """2026-10 第三批：时政新闻、游戏新闻、B站热搜（以及它们背后的通用热搜爬虫）整体移除。
+
+    三个模块文件删掉，主程序里不再实例化，工具清单与功能开关里也不再出现。
+    """
+
+    @pytest.mark.parametrize("module", ["political_news", "news_crawler", "hot_news"])
+    def test_the_modules_are_gone(self, module):
+        import importlib
+
+        with pytest.raises(ImportError):
+            importlib.import_module(module)
+
+    @pytest.mark.parametrize("name", ["gaming_news", "news_crawler", "political_news_scraper",
+                                      "political_news_tool", "hot_news_scraper"])
+    def test_main_does_not_instantiate_them(self, name):
+        import main
+
+        assert not hasattr(main, name), f"{name} 还在 main 里"
+
+    def test_the_bilibili_trending_class_is_gone(self):
+        import extra_services
+
+        assert not hasattr(extra_services, "BilibiliTrending")
+        # 一言服务不是这次要删的，保留
+        assert hasattr(extra_services, "HitokotoService")
+
+    def test_no_news_tool_in_the_schema(self):
+        from ai_tools_list import AiTools
+
+        names = {t["function"]["name"] for t in AiTools().ai_tools()}
+        assert "gaming_news" not in names and "political_news" not in names
+
+    def test_no_news_feature_switch(self):
+        from feature_gate import FEATURE_DEFS, TOOL_FEATURE
+
+        keys = {f["key"] for f in FEATURE_DEFS}
+        assert "gaming_news" not in keys and "political_news" not in keys
+        assert "gaming_news" not in TOOL_FEATURE and "political_news" not in TOOL_FEATURE
+
+    def test_the_dependency_is_gone(self):
+        req = pathlib.Path(APP_DIR, "requirements.txt").read_text(encoding="utf-8")
+        assert "beautifulsoup4" not in req.lower()
+

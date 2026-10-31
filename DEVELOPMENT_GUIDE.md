@@ -24,13 +24,10 @@ QQRobot/
 ├── weather_service.py    # 天气服务
 ├── balance_service.py    # DeepSeek 余额查询
 ├── profile_service.py    # 用户画像分析
-├── news_crawler.py       # 游戏新闻抓取
-├── political_news.py     # 时政新闻
-├── hot_news.py           # 热搜
 ├── web_search.py         # 联网搜索
 ├── log_stream.py         # SSE 日志推送
 ├── sticker_collector.py  # 表情包收集
-├── extra_services.py     # 第三方服务（一言、B站）
+├── extra_services.py     # 第三方服务（一言）
 ├── msg_package.py        # 消息组装
 ├── templates/dashboard.html  # 前端管理面板（单文件）
 ├── VERSION               # 当前版本号
@@ -732,7 +729,7 @@ CI 在 `.github/workflows/ci.yml`：跑 pytest + `compileall`。
 | `vision_analyze` | `vision` | 图像理解 |
 
 `AiServer` 有 `source` / `group_id` 两个属性用于归因（默认 `chat` / 空），
-复用它跑工具流程的地方（塔罗、@群友、新闻翻译）应显式覆盖 `ai.source`。
+复用它跑工具流程的地方（塔罗、@群友）应显式覆盖 `ai.source`。
 
 **为什么不直接在 `ai_server` 里连数据库**：`ai_metrics` 用可插拔 sink
 （`main.py` 里 `ai_metrics.set_sink(db.record_ai_call)`），所以 `ai_server`

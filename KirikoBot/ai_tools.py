@@ -164,38 +164,6 @@ class Tarot_History:
 
 
 # ══════════════════════════════════════════════════════════
-#  Gaming News
-# ══════════════════════════════════════════════════════════
-
-class GamingNews:
-    def __init__(self, crawler: Any, msg_package: Any) -> None:
-        self.crawler = crawler
-        self.msg_package = msg_package
-
-    def gaming_news_call(self, robot: Any, ai: Any) -> None:
-        try:
-            items = self.crawler.fetch_gaming_news()
-        except Exception:
-            logger.exception("News crawl failed")
-            items = []
-
-        if not items:
-            robot.reply("暂时没有获取到游戏新闻哦，请稍后再试~")
-        else:
-            lines = ["🎮 热点游戏新闻"]
-            for i, n in enumerate(items, 1):
-                lines.append(f"{i}. {n['title']}")
-                meta = f"   🏷 {n['category']} | 🕐 {n['time']}"
-                lines.append(meta)
-                if n.get("summary"):
-                    lines.append(f"   {n['summary'][:100]}")
-            robot.reply("\n".join(lines))
-
-        _set_tool_meta(ai, ai.ai_message.get("tool_calls"))
-        ai.user_text = robot.text
-
-
-# ══════════════════════════════════════════════════════════
 #  Web Search (RAG-style: search → fetch → feed AI → reply)
 # ══════════════════════════════════════════════════════════
 
@@ -646,68 +614,6 @@ class TimeTool:
         ai.tool_result_text = f"当前精确时间：{result}"
         _set_tool_meta(ai, ai.ai_message.get("tool_calls"))
         ai.user_text = ai.tool_result_text
-
-
-# ══════════════════════════════════════════════════════════
-#  Political News
-# ══════════════════════════════════════════════════════════
-
-class PoliticalNewsTool:
-    def __init__(self, scraper: Any, msg_package: Any) -> None:
-        self.scraper = scraper
-        self.msg_package = msg_package
-
-    def political_news_call(self, robot: Any, ai: Any) -> None:
-        try:
-            items = self.scraper.fetch_all()
-        except Exception:
-            logger.exception("Political news fetch failed")
-            items = []
-
-        if not items:
-            robot.reply("暂时没有获取到时政新闻哦，请稍后再试~")
-            _set_tool_meta(ai, ai.ai_message.get("tool_calls"))
-            ai.user_text = robot.text
-            return
-
-        # Build raw news text for translation
-        raw_lines = ["以下是最新国际时政新闻，请翻译成中文并美化排版："]
-        for i, n in enumerate(items, 1):
-            raw_lines.append(f"{i}. [{n['source']}] {n['title']}")
-            if n.get("desc"):
-                raw_lines.append(f"   摘要: {n['desc'][:200]}")
-        raw_text = "\n".join(raw_lines)
-
-        # Translate via flash model
-        from ai_server import AiServer
-        translator = AiServer(
-            system_text=(
-                "你是Kiriko的新闻翻译助手。将英文时政新闻翻译成中文，保持原意准确。"
-                "排版要求：每条新闻用'📰 标题'开头，来源用括号标注，适当加入🔥💥🌍⚡🗳️等表情符号增强可读性。"
-                "每条新闻之间空一行。不要编造或修改新闻事实，只做翻译和排版美化。"
-                "禁止使用表格，每条新闻一小段，不超过3行。"
-            ),
-            user_text=raw_text,
-            history_list=[],
-            tools=[],
-            model_type=Config.DEEPSEEK_MODEL,
-            thinking_type="disabled",
-        )
-        translator.ai_request()
-
-        if translator.ai_text:
-            logger.info("News translation completed (%d chars)", len(translator.ai_text))
-            robot.reply(translator.ai_text)
-        else:
-            # Fallback: show raw titles
-            lines = ["📰 时政要闻"]
-            for i, n in enumerate(items, 1):
-                src = f" [{n['source']}]" if n.get("source") else ""
-                lines.append(f"  {i}. {n['title']}{src}")
-            robot.reply("\n".join(lines))
-
-        _set_tool_meta(ai, ai.ai_message.get("tool_calls"))
-        ai.user_text = robot.text
 
 
 # ══════════════════════════════════════════════════════════

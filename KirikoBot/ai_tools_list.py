@@ -29,11 +29,6 @@ class AiTools:
             "description": "当用户表示想要知道自己占卜,算命或询问运势结果或塔罗牌抽取的历史记录,才调用此函数",
             "parameters": empty_params,
         }
-        function_gaming_news = {
-            "name": "gaming_news",
-            "description": "当用户表示想要获取游戏新闻、热点游戏资讯、游戏行业动态、游戏圈最新消息时，调用此函数获取最新的热点游戏新闻",
-            "parameters": empty_params,
-        }
         function_web_search = {
             "name": "web_search",
             "description": "当用户询问实时信息、最新资讯、需要联网查询的问题、或者你不知道答案且需要搜索时，调用此函数进行联网搜索。搜索词里涉及「最新/最近/今年」时，年份必须写用户消息里「当前时间」的那一年，不要用你自己训练时的年份",
@@ -87,11 +82,6 @@ class AiTools:
                 },
                 "required": ["target_name", "message"],
             },
-        }
-        function_political_news = {
-            "name": "political_news",
-            "description": "当用户询问时政新闻、国际新闻、政治新闻、全球时事、BBC新闻、最新时事等时调用，获取权威媒体的时政新闻",
-            "parameters": empty_params,
         }
         function_balance = {
             "name": "check_balance",
@@ -266,10 +256,8 @@ class AiTools:
 
         tool_tarot = {"type": "function", "function": function_tarot}
         tool_tarot_history = {"type": "function", "function": function_tarot_history}
-        tool_gaming_news = {"type": "function", "function": function_gaming_news}
         tool_web_search = {"type": "function", "function": function_web_search}
         tool_sticker = {"type": "function", "function": function_sticker}
-        tool_political_news = {"type": "function", "function": function_political_news}
         tool_at_member = {"type": "function", "function": function_at_member}
         tool_reminder = {"type": "function", "function": function_reminder}
         tool_list_reminders = {"type": "function", "function": function_list_reminders}
@@ -288,10 +276,8 @@ class AiTools:
         return [
             tool_tarot,
             tool_tarot_history,
-            tool_gaming_news,
             tool_web_search,
             tool_sticker,
-            tool_political_news,
             tool_balance,
             tool_at_member,
             tool_reminder,
