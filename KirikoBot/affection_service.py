@@ -471,37 +471,49 @@ class AffectionService:
     def get_leaderboard(
         db: Any, group_id: str | None = None, limit: int = 10,
     ) -> list[dict[str, Any]]:
-        """Return top-N users by affection score, optionally filtered by group."""
+        """Top-N by **current** affection (decay applied), matching what the bot actually uses.
+
+        The stored score only moves when someone interacts, so reading it raw made the
+        leaderboard disagree with the relationship the bot shows in its prompt. Decay is
+        applied here, sorted on the decayed value, and the tier is recomputed from it.
+        """
         if group_id:
             rows = db.fetch_data(
                 "SELECT user_id, user_name, affection_score, interaction_count, "
-                "positive_count, negative_count, relationship "
-                "FROM user_affection WHERE group_id=? "
-                "ORDER BY affection_score DESC LIMIT ?",
-                (group_id, limit),
+                "positive_count, negative_count, last_interaction "
+                "FROM user_affection WHERE group_id=?",
+                (group_id,),
             )
         else:
             rows = db.fetch_data(
                 "SELECT user_id, user_name, affection_score, interaction_count, "
-                "positive_count, negative_count, relationship, group_id "
-                "FROM user_affection "
-                "ORDER BY affection_score DESC LIMIT ?",
-                (limit,),
+                "positive_count, negative_count, last_interaction, group_id "
+                "FROM user_affection",
             )
 
-        return [
-            {
+        scored = []
+        for r in rows:
+            current = AffectionService.apply_decay(float(r[2]), r[6])
+            scored.append((current, r))
+        scored.sort(key=lambda item: item[0], reverse=True)
+
+        out: list[dict[str, Any]] = []
+        for current, r in scored[:limit]:
+            label, emoji = AffectionService.get_relationship(current)
+            entry = {
                 "user_id": r[0],
                 "user_name": r[1],
-                "affection_score": round(float(r[2]), 1),
+                "affection_score": round(current, 1),
                 "interaction_count": int(r[3]),
                 "positive_count": int(r[4]),
                 "negative_count": int(r[5]),
-                "relationship": r[6],
-                "emoji": AffectionService.get_relationship(float(r[2]))[1],
+                "relationship": label,
+                "emoji": emoji,
             }
-            for r in rows
-        ]
+            if not group_id and len(r) > 7:
+                entry["group_id"] = r[7]
+            out.append(entry)
+        return out
 
     # ── Manual adjustment (for dashboard) ─────────────────
 
