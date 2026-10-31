@@ -338,11 +338,11 @@ class TestNewsIsGone:
         assert not hasattr(main, name), f"{name} 还在 main 里"
 
     def test_the_bilibili_trending_class_is_gone(self):
-        import extra_services
+        """B站热搜类所在的模块（extra_services）随一言一起整体删除。"""
+        import importlib
 
-        assert not hasattr(extra_services, "BilibiliTrending")
-        # 一言服务不是这次要删的，保留
-        assert hasattr(extra_services, "HitokotoService")
+        with pytest.raises(ImportError):
+            importlib.import_module("extra_services")
 
     def test_no_news_tool_in_the_schema(self):
         from ai_tools_list import AiTools
@@ -360,4 +360,19 @@ class TestNewsIsGone:
     def test_the_dependency_is_gone(self):
         req = pathlib.Path(APP_DIR, "requirements.txt").read_text(encoding="utf-8")
         assert "beautifulsoup4" not in req.lower()
+
+
+class TestHitokotoIsGone:
+    """一言：推送订阅与工具都已移除，最后剩下的服务类也一并删掉。"""
+
+    def test_the_module_is_gone(self):
+        import importlib
+
+        with pytest.raises(ImportError):
+            importlib.import_module("extra_services")
+
+    def test_the_push_constants_are_gone(self):
+        src = pathlib.Path(APP_DIR, "static", "js", "app.js").read_text(encoding="utf-8")
+        for name in ("PUSH_TOPICS", "PUSH_HINT", "PUSH_DEFAULT_TIME"):
+            assert name not in src, f"{name} 还在前端里"
 
