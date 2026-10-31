@@ -10,7 +10,7 @@ affection_service.py 顶部），这个脚本跑一遍会把按新规则算出�
 
 Uses history table (role=user entries = actual bot conversations) for scoring.
 Keyword sentiment is extracted from the user's message content in history.
-Tool usage and learning feedback provide supplementary signals.
+Tool usage provides a supplementary signal.
 
 Scoring values match the reduced-scale constants in affection_service.py.
 """
@@ -143,29 +143,13 @@ def bootstrap_user(
     ).fetchone()[0]
     tool_bonus = min(tool_count * 0.05, 5.0)
 
-    # ── 3. Learning feedback ──────────────────────────────
-    learning_rows = db.execute(
-        "SELECT note FROM learning_log WHERE user_id = ?", (user_id,)
-    ).fetchall()
-    learning_bonus = 0.0
-    for (note,) in learning_rows:
-        if not note:
-            continue
-        if "表现良好" in note:
-            learning_bonus += 0.5
-        elif "回复不当" in note or "工具选择错误" in note:
-            learning_bonus -= 0.3
-        elif "遗漏工具" in note:
-            learning_bonus -= 0.1
-    learning_bonus = max(-3.0, min(5.0, learning_bonus))
-
     # ── 4. Interaction frequency bonus ────────────────────
     # Based on real @bot interactions, not all group messages
     # 100+ @bot interactions = full activity bonus
     activity_bonus = min(interaction_count / 10.0, 15.0)
 
     # ── 5. Compute final score ────────────────────────────
-    score = SCORE_DEFAULT + activity_bonus + sentiment_bonus + tool_bonus + learning_bonus
+    score = SCORE_DEFAULT + activity_bonus + sentiment_bonus + tool_bonus
     score = max(SCORE_MIN, min(SCORE_MAX, score))
     relationship, emoji = get_relationship(score)
 
@@ -183,7 +167,6 @@ def bootstrap_user(
         "activity_bonus": round(activity_bonus, 1),
         "sentiment_bonus": round(sentiment_bonus, 1),
         "tool_bonus": round(tool_bonus, 1),
-        "learning_bonus": round(learning_bonus, 1),
     }
 
 
@@ -241,8 +224,7 @@ def main() -> None:
             f"{r['interaction_count']:>5} "
             f"{r['activity_bonus']:>+5.0f} "
             f"{r['sentiment_bonus']:>+5.0f} "
-            f"{r['tool_bonus']:>+4.0f} "
-            f"{r['learning_bonus']:>+4.0f}"
+            f"{r['tool_bonus']:>+4.0f}"
         )
 
     print()

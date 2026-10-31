@@ -208,9 +208,6 @@ class TestPurgeGroup:
             (uid, gid, "小明"),
         )
         db.execute_action(
-            "INSERT INTO learning_log (user_id,note) VALUES (?,?)", (uid, "教训")
-        )
-        db.execute_action(
             "INSERT INTO feature_settings (scope_type,scope_id) VALUES ('group',?)", (gid,)
         )
 

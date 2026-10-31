@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 VALID_TABLES = {
     "history", "tarot_history", "tarot_content",
     "group_messages", "user_profiles", "tool_usage",
-    "reminders", "learning_log", "group_rate_limits", "profile_memories",
+    "reminders", "group_rate_limits", "profile_memories",
     "stickers",
     "user_affection", "user_affection_log",
     "feature_settings", "bot_messages", "ai_calls", "profile_history",
@@ -342,30 +342,6 @@ class DatabaseManager:
                     except sqlite3.OperationalError:
                         pass  # Column already exists
                 connect.execute(
-                    """CREATE TABLE IF NOT EXISTS learning_log(
-                        id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                        user_id    TEXT NOT NULL,
-                        note       TEXT NOT NULL,
-                        user_msg   TEXT DEFAULT '',
-                        ai_text    TEXT DEFAULT '',
-                        tool_name  TEXT DEFAULT '',
-                        timestamp  DATETIME DEFAULT (datetime('now', 'localtime'))
-                    )"""
-                )
-                # 「回复不当」判定修正前后的分界线：分界之前的笔记不再注入（保留，便于审计）。
-                # 只在第一次出现时写入，之后不变。
-                connect.execute(
-                    "INSERT OR IGNORE INTO app_state (key, value) VALUES "
-                    "('learning_rubric_cutoff_id', "
-                    " CAST(COALESCE((SELECT MAX(id) FROM learning_log), 0) AS TEXT))"
-                )
-                # Migration: add context columns if they don't exist yet
-                for col, col_type in [("user_msg", "TEXT DEFAULT ''"), ("ai_text", "TEXT DEFAULT ''"), ("tool_name", "TEXT DEFAULT ''")]:
-                    try:
-                        connect.execute(f"ALTER TABLE learning_log ADD COLUMN {col} {col_type}")
-                    except sqlite3.OperationalError:
-                        pass  # Column already exists
-                connect.execute(
                     """CREATE TABLE IF NOT EXISTS stickers(
                         id              INTEGER PRIMARY KEY AUTOINCREMENT,
                         filename        TEXT NOT NULL UNIQUE,
@@ -445,13 +421,14 @@ class DatabaseManager:
                 # DISABLED keys; missing key or missing row = enabled.
                 # ── 已废弃功能的表：直接删掉（幂等）──
                 # 群订阅推送、版本管理都整体移除了，留着表只会让代码看起来还有功能
-                for dead in ("group_subscriptions", "app_versions", "changelog", "amp_heads"):
+                # 自学习已移除：笔记表与其分界线一并删掉（运行时已不再读写）
+                for dead in ("group_subscriptions", "app_versions", "changelog", "amp_heads", "learning_log"):
                     connect.execute(f"DROP TABLE IF EXISTS {dead}")
                 # 箱头爬取的进度状态也清掉，免得面板/日志里冒出孤立键
                 try:
                     connect.execute(
                         "DELETE FROM app_state WHERE key IN "
-                        "('amp_crawl_last', 'amp_crawl_running')"
+                        "('amp_crawl_last', 'amp_crawl_running', 'learning_rubric_cutoff_id')"
                     )
                 except sqlite3.OperationalError:
                     pass  # app_state 可能还没建
@@ -2106,7 +2083,7 @@ class DatabaseManager:
     def group_purge_preview(self, group_id: str) -> dict[str, int]:
         """Row counts purge_group() would delete, for the confirm dialog.
 
-        `users` / `learning_log` / `user_settings` are per-user artifacts that
+        `users` / `user_settings` are per-user artifacts that
         are NOT group-scoped in the schema (a user can be in several groups),
         so they are reported separately and clearly.
         """
@@ -2131,17 +2108,9 @@ class DatabaseManager:
         counts["users"] = len(users)
         # 画像不再按群删，只清掉「删完就没依据了」的那些人
         counts["user_profiles"] = len(self._would_orphan_profiles(gid, users))
-        counts["learning_log"] = 0
         counts["user_settings"] = 0
         if users:
             marks = ",".join("?" * len(users))
-            try:
-                counts["learning_log"] = self.fetch_data(
-                    f"SELECT COUNT(*) FROM learning_log WHERE user_id IN ({marks})",
-                    tuple(users),
-                )[0][0]
-            except (sqlite3.Error, IndexError):
-                pass
             try:
                 counts["user_settings"] = self.fetch_data(
                     f"SELECT COUNT(*) FROM feature_settings "
@@ -2157,7 +2126,7 @@ class DatabaseManager:
 
         Covers all group-scoped tables plus the per-user artifacts of members
         seen in this group (profiles/affection are group-scoped already;
-        learning notes and per-user toggles are not). Sticker files are a
+        per-user toggles are not). Sticker files are a
         global gallery and are intentionally left alone.
         """
         gid = str(group_id)
@@ -2199,7 +2168,6 @@ class DatabaseManager:
         if users:
             marks = ",".join("?" * len(users))
             for sql, params, key in (
-                (f"DELETE FROM learning_log WHERE user_id IN ({marks})", tuple(users), "learning_log"),
                 (f"DELETE FROM feature_settings WHERE scope_type='user' AND scope_id IN ({marks})",
                  tuple(users), "user_settings"),
             ):

@@ -249,7 +249,6 @@ def build_prompt(db: Any, s: Sample, v: Variant, conn: sqlite3.Connection):
     import prompt_builder as pb
     import profile_service as ps
     import affection_service as afs
-    import learning_service as ls
 
     chat_history.MAX_HISTORY = v.max_msgs
     history = chat_history.load_history(_FakeDB(s.history_rows, v.raw_limit), s.uid, s.gid)
@@ -273,10 +272,9 @@ def build_prompt(db: Any, s: Sample, v: Variant, conn: sqlite3.Connection):
     r = _Robot()
     disabled: set[str] = set()
     profile_svc = ps.ProfileService()
-    learn_svc = ls.LearningService()
     aff_svc = afs.AffectionService()
 
-    system = pb.build_system_prompt(r, db, profile_svc, learn_svc, aff_svc, disabled)
+    system = pb.build_system_prompt(r, db, profile_svc, aff_svc, disabled)
     if v.legacy and "【说话的语感】" in system:
         a = system.index("【说话的语感】")
         b = system.index("【表情包】", a)

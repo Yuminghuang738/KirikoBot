@@ -134,13 +134,6 @@ class TestJudgeSentiment:
         lost = SCORE_DEFAULT - AffectionService.get_or_create(db, "u1", "g1", "小明")["affection_score"]
         assert lost <= SENTIMENT_DAILY_NEG + 0.01
 
-    def test_learning_delta_still_counts(self, db):
-        """学习分反映的是机器人质量，不该被情绪分的额度吃掉。"""
-        AffectionService.apply_judge_delta(db, "u1", "g1", "小明", sentiment=0.0, learning=0.5)
-        gained = AffectionService.get_or_create(db, "u1", "g1", "小明")["affection_score"] - SCORE_DEFAULT
-        assert gained == pytest.approx(0.5, abs=0.01)
-
-
 class TestDecay:
     """衰减随离开时长加速：第 1 周 1.5，第 2–3 周每周 3，第 4 周起每周 5，封底 20。
 

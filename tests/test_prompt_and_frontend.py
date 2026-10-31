@@ -94,12 +94,9 @@ class TestSystemPrompt:
             def build_context_prompt(self, *a, **k):
                 raise RuntimeError("boom")
 
-            def get_context(self, *a, **k):
-                raise RuntimeError("boom")
-
         prompt = build_system_prompt(
             _Robot(), db=object(), profile_service=Boom(),
-            learning_service=Boom(), affection_service=Boom(),
+            affection_service=Boom(),
         )
         assert PERSONA in prompt
 
@@ -108,12 +105,9 @@ class TestSystemPrompt:
             def build_context_prompt(self, *a, **k):
                 return "【上下文】测试标记"
 
-            def get_context(self, *a, **k):
-                return "【笔记】测试标记"
-
         prompt = build_system_prompt(
             _Robot(), db=object(), profile_service=Stub(),
-            learning_service=Stub(), affection_service=Stub(),
+            affection_service=Stub(),
         )
         assert "测试标记" in prompt
 

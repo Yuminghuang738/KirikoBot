@@ -24,7 +24,6 @@ QQRobot/
 ├── weather_service.py    # 天气服务
 ├── balance_service.py    # DeepSeek 余额查询
 ├── profile_service.py    # 用户画像分析
-├── learning_service.py   # 自学习模块
 ├── news_crawler.py       # 游戏新闻抓取
 ├── political_news.py     # 时政新闻
 ├── hot_news.py           # 热搜
@@ -475,7 +474,7 @@ VISION_MODEL="deepseek-flash"
 | `.tile.c1~c6` | 指标磁贴（图标气泡 + 大数字），颜色由 `cN` 决定 |
 | `.panel` / `.card` + `.panel-header`（含 `.hicon`） | 内容卡片 |
 | `.item`（`.iava/.imain/.ititle/.isub/.imeta/.iact`） | 富列表行，替代表格行 |
-| `.timeline` + `.tl-item` | 时间线（自学习页在用） |
+| `.timeline` + `.tl-item` | 时间线 |
 | `.chip` / `.chips` | 胶囊筛选按钮（配 `on` 状态） |
 | `.reveal` + `style="--i:N"` | 入场错峰动画，N 是序号 |
 | `.pill` | 小状态胶囊 |
@@ -545,7 +544,7 @@ mkdir -p /tmp/shot && cd /tmp/shot && npm i playwright && npx playwright install
   `user_affection_log`、`feature_requests`；
 - **功能开关**：`feature_settings` 里 `scope_type='group'` 该群的行；
 - **按用户的表**（schema 里没有 group_id，用户可能同时活跃在多个群，需注意）：
-  该群出现过的 user_id 对应的 `learning_log` 与 `scope_type='user'` 的 `feature_settings`；
+  该群出现过的 user_id 对应的 `scope_type='user'` 的 `feature_settings`；
 - 同时清掉 `DatabaseManager._member_cache[gid]`（内存成员缓存）；
 - **不动 `stickers`** —— 表情包是全局图库，且按内容去重，删了会影响其他群。
 
@@ -729,7 +728,7 @@ CI 在 `.github/workflows/ci.yml`：跑 pytest + `compileall`。
 |------|------------|------|
 | `AiServer.ai_request` | `chat` | 主对话 |
 | `AiServer.follow_up_request` | `chat`（kind=followup） | 工具回环的第二次请求 |
-| `quick_chat` | `judge` / `profile` / `news` / `learning` | 后台任务，由调用方传 `source=` |
+| `quick_chat` | `judge` / `profile` / `news` | 后台任务，由调用方传 `source=` |
 | `vision_analyze` | `vision` | 图像理解 |
 
 `AiServer` 有 `source` / `group_id` 两个属性用于归因（默认 `chat` / 空），

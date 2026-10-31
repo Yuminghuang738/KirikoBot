@@ -25,7 +25,6 @@ logger = logging.getLogger(__name__)
 FEATURE_DEFS: list[dict[str, str]] = [
     {"key": "affection",       "label": "好感度系统",   "category": "互动系统", "desc": "记录与 Kiriko 的好感度，影响回复语气"},
     {"key": "profiles",        "label": "用户画像",     "category": "互动系统", "desc": "分析群友发言生成人格画像"},
-    {"key": "learning",        "label": "学习系统",     "category": "互动系统", "desc": "记录对话经验并自我改进"},
     {"key": "vision",          "label": "图像识别",     "category": "视觉",     "desc": "理解表情包/图片内容并生成回复"},
     {"key": "sticker",         "label": "表情包发送",   "category": "视觉",     "desc": "聊天中发送表情包"},
     {"key": "sticker_collect", "label": "表情包采集",   "category": "视觉",     "desc": "自动收藏群友发的表情包"},
