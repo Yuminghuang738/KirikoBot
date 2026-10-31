@@ -499,6 +499,12 @@ def _trigger_profile_update(robot: RobotServer, disabled: set[str] | None = None
                 profile_service.analyze_user,
                 db, robot.user_id, robot.user_name, robot.group_id,
             )
+        # 共同记忆：和画像分开触发，按对话轮数增量提取（见 ProfileService.MEMORY_GAP）
+        if profile_service.should_extract_memory(db, robot.user_id):
+            executor.submit(
+                profile_service.extract_memories,
+                db, robot.user_id, robot.user_name,
+            )
     except Exception:
         logger.debug("main._trigger_profile_update 忽略了异常", exc_info=True)
 

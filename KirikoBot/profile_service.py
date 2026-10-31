@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 import json
+import re
 import logging
 from typing import Any
 
@@ -77,6 +78,11 @@ def normalize_profile(data: Any) -> dict[str, Any]:
     }
 
 
+# 共同记忆的负面兜底：模型偶尔无视提示词，写进库里就会变成翻旧账。宁可漏记，不可误记。
+MEMORY_NEGATIVE_RE = re.compile(
+    r"骂|辱|威胁|踢出|踢人|滚|傻逼|沙雕|蠢|死|杀|骚扰|挑衅|威逼|攻击|色情|涩涩|隐私|住址|电话")
+
+
 class ProfileService:
     """Analyzes user messages via DeepSeek to generate personality profiles."""
 
@@ -84,6 +90,24 @@ class ProfileService:
     MAX_SAMPLE_MSGS = 50    # max messages to send for analysis
     REANALYZE_GAP = 100     # re-analyze every N new messages
     MAX_MEMORIES = 3        # 每次分析最多产生几条共同记忆
+
+    # ── 共同记忆：增量提取（不再依赖画像分析，那一步很少触发，线上记忆一直是 0）──
+    MEMORY_GAP = 20         # 每累计 20 轮 bot 对话，提取一次
+    MEMORY_MAX_NEW = 2      # 每次最多新增几条
+    MEMORY_WINDOW = 30      # 送给模型的最近消息条数
+    MEMORY_SYSTEM = (
+        "你在帮 Kiriko 整理她和某个群友之间的「共同记忆」。下面是她们最近的对话，"
+        "Kiriko 是这一方。请找出**值得以后再提起的具体的事**，例如：约好了什么、"
+        "对方给 Kiriko 起的或两人之间的外号/梗、对方提过的具体经历或正在做的事、"
+        "对方明确表达过的喜欢或讨厌。\n"
+        "要求：\n"
+        "1. 只写对话里**明确出现**的，不要猜，不要编。\n"
+        "2. 写成「谁做了什么 / 发生过什么」的一句话，别写「聊过音乐」这种空话。\n"
+        "3. 最多 2 条；没有值得记的就给空数组。\n"
+        "4. **辱骂、威胁、骚扰、挑衅、对 Kiriko 的攻击，一律不记**：这些不是可以拿来开玩笑的"
+        "共同回忆，记下来以后只会变成翻旧账。也不记别人的隐私和负面评价。\n"
+        '只输出 JSON：{"memories":[{"content":"一句话","kind":"约定|外号|事件|偏好"}]}'
+    )
 
     SYSTEM_PROMPT = (
         "你是一个用户画像分析助手。根据这个人的聊天记录，提炼出**能用来跟这个人聊天**的信息。"
@@ -107,6 +131,7 @@ class ProfileService:
 
     def __init__(self) -> None:
         self._analyzing: set[str] = set()  # prevent duplicate analysis
+        self._extracting: set[str] = set()  # 记忆提取的并发保护
 
     @staticmethod
     def _is_bot(user_id: str) -> bool:
@@ -144,6 +169,77 @@ class ProfileService:
             return self._do_analyze(db, user_id, user_name, group_id)
         finally:
             self._analyzing.discard(user_id)
+
+    def should_extract_memory(self, db: Any, user_id: str) -> bool:
+        """累计够 MEMORY_GAP 轮 bot 对话，才提取一次。计数的是 bot 对话轮数，不是群聊条数。"""
+        if self._is_bot(user_id) or user_id in self._extracting:
+            return False
+        rows = db.fetch_data(
+            "SELECT COUNT(*) FROM history WHERE user_id = ? AND role = 'user'", (user_id,)
+        )
+        turns = int(rows[0][0]) if rows else 0
+        last = int(db.get_state(f"memory_turns:{user_id}", "0") or 0)
+        return turns - last >= self.MEMORY_GAP
+
+    def extract_memories(self, db: Any, user_id: str, user_name: str) -> list[str]:
+        """从最近的 bot 对话里提取共同记忆，写入 profile_memories。失败静默。"""
+        if user_id in self._extracting:
+            return []
+        self._extracting.add(user_id)
+        try:
+            rows = db.fetch_data(
+                "SELECT role, content FROM history WHERE user_id = ? "
+                "AND role IN ('user', 'assistant') AND content IS NOT NULL AND content <> '' "
+                "ORDER BY id DESC LIMIT ?",
+                (user_id, self.MEMORY_WINDOW),
+            )
+            rows.reverse()
+            convo = "\n".join(
+                f"{'Kiriko' if role == 'assistant' else user_name}: {str(content)[:160]}"
+                for role, content in rows
+            )
+            if not convo.strip():
+                return []
+            raw = quick_chat(self.MEMORY_SYSTEM, convo, max_tokens=300, temperature=0.2,
+                             timeout=30, source="memory")
+            saved = self._parse_and_save_memories(db, user_id, raw)
+            turns = db.fetch_data(
+                "SELECT COUNT(*) FROM history WHERE user_id = ? AND role = 'user'", (user_id,)
+            )
+            # 无论是否提取到东西都推进计数：避免同一批对话被反复提取
+            db.set_state(f"memory_turns:{user_id}", str(int(turns[0][0]) if turns else 0))
+            if saved:
+                logger.info("Memories for %s: %s", user_name, saved)
+            return saved
+        except Exception:
+            logger.debug("extract_memories failed for %s", user_id, exc_info=True)
+            return []
+        finally:
+            self._extracting.discard(user_id)
+
+    def _parse_and_save_memories(self, db: Any, user_id: str, raw: str | None) -> list[str]:
+        if not raw:
+            return []
+        text = raw.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1].rsplit("\n", 1)[0]
+        try:
+            data = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            logger.debug("memory JSON parse failed: %s", text[:120])
+            return []
+        items = data.get("memories") if isinstance(data, dict) else None
+        saved: list[str] = []
+        for item in (items or [])[: self.MEMORY_MAX_NEW]:
+            if not isinstance(item, dict):
+                continue
+            content = str(item.get("content") or "").strip()
+            kind = str(item.get("kind") or "事件").strip()[:8]
+            if not content or MEMORY_NEGATIVE_RE.search(content):
+                continue
+            if db.add_profile_memory(user_id, content, kind):
+                saved.append(content)
+        return saved
 
     def _do_analyze(
         self, db: Any, user_id: str, user_name: str, group_id: str = "",
@@ -293,7 +389,7 @@ class ProfileService:
         except Exception:
             memories = []
         if memories:
-            lines.append("你们之间：" + "；".join(m["content"] for m in memories))
+            lines.append("你们之间（可以自然提起，别硬塞，也别每次都提）：" + "；".join(m["content"] for m in memories))
             try:
                 db.mark_memory_used([m["id"] for m in memories])
             except Exception:
