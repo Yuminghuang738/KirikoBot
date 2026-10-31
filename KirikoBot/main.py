@@ -484,9 +484,13 @@ def _background_sticker_categorize(image_url: str) -> None:
 
 
 def _trigger_profile_update(robot: RobotServer, disabled: set[str] | None = None) -> None:
-    """Check if user needs profile analysis and submit if so."""
-    if robot.msg_type != "group" or not robot.group_id:
-        return
+    """Submit background profile work for this message.
+
+    Two independent jobs with different scopes:
+    - 共同记忆：私聊和群聊都触发。记忆的素材是 bot 对话，而线上绝大多数对话
+      发生在私聊里；之前只挂在群聊分支上，私聊永远不会提取（线上记忆一直停在 53 条）。
+    - 画像分析：仍然只在群聊里触发（原有行为）。
+    """
     # Skip bot accounts
     if robot.user_id in Config.BOT_QQ_LIST:
         return
@@ -494,17 +498,18 @@ def _trigger_profile_update(robot: RobotServer, disabled: set[str] | None = None
     if disabled and "profiles" in disabled:
         return
     try:
-        if profile_service.should_analyze(db, robot.user_id):
-            executor.submit(
-                profile_service.analyze_user,
-                db, robot.user_id, robot.user_name, robot.group_id,
-            )
-        # 共同记忆：和画像分开触发，按对话轮数增量提取（见 ProfileService.MEMORY_GAP）
+        # 共同记忆：按对话轮数增量提取（见 ProfileService.MEMORY_GAP）
         if profile_service.should_extract_memory(db, robot.user_id):
             executor.submit(
                 profile_service.extract_memories,
                 db, robot.user_id, robot.user_name,
             )
+        if robot.msg_type == "group" and robot.group_id:
+            if profile_service.should_analyze(db, robot.user_id):
+                executor.submit(
+                    profile_service.analyze_user,
+                    db, robot.user_id, robot.user_name, robot.group_id,
+                )
     except Exception:
         logger.debug("main._trigger_profile_update 忽略了异常", exc_info=True)
 
