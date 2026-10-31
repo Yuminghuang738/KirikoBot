@@ -27,6 +27,7 @@ import sqlite3
 import sys
 import tempfile
 import time
+import threading
 import zlib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
@@ -62,6 +63,7 @@ class Variant:
     no_speaker: bool = False        # 去掉「当前说话人」的关系 + 画像块（测个性化的贡献）
     no_memory: bool = False         # 保留关系+画像，只去掉共同记忆（测记忆的贡献）
     no_affection: bool = False      # 保留画像+记忆，只去掉关系（好感度）块（测好感度的贡献）
+    legacy: bool = False            # 还原改动前的提示词：剥掉语感章节与群聊尾注（真正的「旧生产」基线）
     note: str = ""
 
 
@@ -101,6 +103,9 @@ VARIANTS: dict[str, Variant] = {
     "aff_off": Variant("aff_off", raw_limit=40, max_msgs=16, group_context=True,
                        style_rule=True, exemplars=8, tight=True, static_exemplars=True,
                        no_affection=True, note="style_tight_static 去掉好感度（关系）块"),
+    "prod_old": Variant("prod_old", raw_limit=12, max_msgs=8, group_context=False,
+                        legacy=True,
+                        note="改动前的生产提示词：8 条历史、无群背景、无语感章节、无尾注"),
     "no_think_warm": Variant("no_think_warm", raw_limit=40, max_msgs=16, group_context=True,
                              thinking=False, temperature=1.0, top_p=1.0,
                              note="长历史 + 群背景 + 关思考，温度 1.0 才真正生效"),
@@ -272,6 +277,10 @@ def build_prompt(db: Any, s: Sample, v: Variant, conn: sqlite3.Connection):
     aff_svc = afs.AffectionService()
 
     system = pb.build_system_prompt(r, db, profile_svc, learn_svc, aff_svc, disabled)
+    if v.legacy and "【说话的语感】" in system:
+        a = system.index("【说话的语感】")
+        b = system.index("【表情包】", a)
+        system = system[:a] + system[b:]
     if v.style_rule or v.exemplars:
         system += "\n\n" + _style_block(conn, s, v)
     rel = aff_svc.relationship_block(db, s.uid, s.gid)
@@ -290,6 +299,8 @@ def build_prompt(db: Any, s: Sample, v: Variant, conn: sqlite3.Connection):
                                  speaker=speaker)
     if v.tight:
         user += "\n（就像群里随口接一句：十几个字，一两句就停，句末不加句号。）"
+    if v.legacy:
+        user = user.replace("\n（就像群里随口接一句：十几个字，一两句就停，句末不加句号。）", "")
     return system, history, user
 
 
@@ -435,10 +446,15 @@ def run(args: argparse.Namespace) -> int:
         for v in variants:
             jobs.append((idx, v))
 
+    # SQLite 连接不可并发使用：check_same_thread=False 只是允许跨线程，并发查询仍会报 API 误用。
+    # 构造提示词（本地读库，很快）串行化；真正耗时的 API 调用仍然并发。
+    db_lock = threading.Lock()
+
     def gen(job):
         idx, v = job
         s = samples[idx]
-        system, history, user = build_prompt(db, s, v, conn)
+        with db_lock:
+            system, history, user = build_prompt(db, s, v, conn)
         reply = generate(system, history, user, v, key)
         return {"sample": idx, "variant": v.name, "reply": reply,
                 "context_turns": len(history), "user": user[-400:]}
