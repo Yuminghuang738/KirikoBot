@@ -21,7 +21,8 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-MAX_HISTORY = 8  # fewer turns = less noise, more focus on current message
+# 单位是**消息条数**（user + assistant 各算一条）。8 条 = 4 轮，是实测的注意力瓶颈。
+MAX_HISTORY = 16  # 8 轮
 
 
 def load_history(db: Any, uid: str, gid: str | None) -> list[dict[str, Any]]:

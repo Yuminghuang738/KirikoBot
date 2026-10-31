@@ -548,18 +548,20 @@ class DatabaseManager:
     def deposit_tarot_history(self, user_id: str, card_name: str) -> None:
         self.deposit("tarot_history", "(user_id, card_name)", "(?, ?)", (user_id, card_name))
 
+    # 上下文取数上限（原始行）。通用 takeout() 写死了 LIMIT 12，而 tool 行也占名额，
+    # 实际只能拿到 4 轮。这里专用一条 SQL：只取 user/assistant，取 40 行，足够装满 16 条消息。
+    CHAT_HISTORY_RAW_LIMIT = 40
+
     def takeout_chat_history(self, user_id: str, group_id: str | None) -> list[tuple[Any, ...]]:
-        if group_id:
-            rows = self.takeout(
-                "history", "role, content, tool_calls, tool_call_id",
-                "user_id = ? AND group_id = ?", (user_id, group_id),
-            )
-        else:
-            rows = self.takeout(
-                "history", "role, content, tool_calls, tool_call_id",
-                "user_id = ? AND group_id IS NULL", (user_id,),
-            )
-        rows.reverse()
+        scope = "group_id = ?" if group_id else "group_id IS NULL"
+        params: tuple[Any, ...] = (user_id, group_id) if group_id else (user_id,)
+        rows = self.fetch_data(
+            "SELECT role, content, tool_calls, tool_call_id FROM history "
+            f"WHERE user_id = ? AND {scope} AND role IN ('user', 'assistant') "
+            "ORDER BY id DESC LIMIT ?",
+            (*params, self.CHAT_HISTORY_RAW_LIMIT),
+        )
+        rows.reverse()                       # 调用方拿到的是从旧到新
         return rows
 
     def takeout_tarot_history(self, user_id: str) -> list[tuple[Any, ...]]:

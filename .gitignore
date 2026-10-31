@@ -113,3 +113,6 @@ llbot-docker.sh
 # The copy under KirikoBot/ is a stale leftover from an older layout; the
 # compose file actually in use lives at the repository root.
 KirikoBot/docker-compose.yml
+
+# 评测输出含真实群友原话，禁止入库
+eval/out/

@@ -320,11 +320,11 @@ def _mood_signal(robot: RobotServer) -> str:
 def _ambient_group_context(robot: RobotServer, disabled: set[str]) -> str:
     """The recent group transcript attached to every group message.
 
-    On by default: the bot only receives messages addressed to it, and leaving
-    the "go read the room" decision to the model meant it almost never
-    happened (read_context: 12 calls vs 1000+ for other tools), so replies
-    kept answering the wrong thing. A person in a group follows the
-    conversation continuously — this is the cheap version of that.
+    Off by default (GROUP_CONTEXT_ENABLED=0). This was flipped on and off more
+    than once: on, it costs ~400 chars of every group message; off, the model
+    must decide to call read_context itself, and it almost never does
+    (57 calls against 3370 replies). Turn it on with GROUP_CONTEXT_ENABLED=1
+    and re-measure with eval/chat_replay.py before deciding.
 
     Reuses the same feature key as the read_context tool, so turning 语境读取
     off in the panel disables both the background and the tool.
