@@ -275,3 +275,50 @@ class TestAsymmetricSentiment:
             AffectionService.update_score(db, "u1", "g1", "A", -SENTIMENT_DAILY_NEG)
         score = AffectionService.get_or_create(db, "u1", "g1", "A")["affection_score"]
         assert AffectionService.get_relationship(score)[0] in ("普通", "冷淡")
+
+
+class TestLeaderboardUsesCurrentScores:
+    """排行榜和机器人的关系判断必须一致：都用衰减后的分数。
+    之前排行榜读存储分，一个离开两个月的「挚友」（存储 85）还排第一，而机器人已经把他当成「普通」。"""
+
+    @staticmethod
+    def _ago(days):
+        from datetime import timedelta
+        return (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+
+    def _put(self, db, uid, name, score, last):
+        db.execute_action(
+            "INSERT INTO user_affection (user_id, group_id, user_name, affection_score, "
+            "interaction_count, positive_count, negative_count, last_interaction, relationship, notes) "
+            "VALUES (?, 'g1', ?, ?, 5, 1, 0, ?, 'x', '')", (uid, name, score, last))
+
+    def test_a_long_absent_friend_drops_in_the_ranking(self, db):
+        self._put(db, "a", "久不来", 85.0, self._ago(84))      # 实际约 32.5
+        self._put(db, "b", "常来", 70.0, self._ago(0))
+        board = AffectionService.get_leaderboard(db, "g1", limit=10)
+        assert [b["user_name"] for b in board] == ["常来", "久不来"]
+
+    def test_the_label_matches_what_the_bot_uses(self, db):
+        self._put(db, "a", "久不来", 85.0, self._ago(84))
+        board = AffectionService.get_leaderboard(db, "g1", limit=10)
+        bot_view = AffectionService.get_relationship(
+            AffectionService.apply_decay(85.0, self._ago(84)))[0]
+        assert board[0]["relationship"] == bot_view
+
+    def test_the_score_shown_is_the_decayed_one(self, db):
+        self._put(db, "a", "久不来", 85.0, self._ago(84))
+        board = AffectionService.get_leaderboard(db, "g1", limit=10)
+        assert board[0]["affection_score"] == pytest.approx(32.5, abs=0.2)
+
+    def test_recent_friends_are_unchanged(self, db):
+        self._put(db, "a", "今天来", 80.0, self._ago(0))
+        board = AffectionService.get_leaderboard(db, "g1", limit=10)
+        assert board[0]["affection_score"] == pytest.approx(80.0, abs=0.1)
+
+    def test_the_limit_applies_after_sorting_by_current_score(self, db):
+        for i in range(5):
+            self._put(db, f"u{i}", f"人{i}", 90.0 - i, self._ago(0))
+        self._put(db, "old", "老挚友", 99.0, self._ago(120))   # 当前约 20，应排在最后
+        board = AffectionService.get_leaderboard(db, "g1", limit=3)
+        assert "老挚友" not in [b["user_name"] for b in board]
+        assert len(board) == 3
