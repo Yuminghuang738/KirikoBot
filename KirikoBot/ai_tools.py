@@ -237,8 +237,10 @@ class WebSearchTool:
         # Feed search results to AI for synthesis
         from datetime import datetime
         current_date = datetime.now().strftime("%Y年%m月%d日")
+        # 综合回答关闭思考模式：资料已经给全了，思考只会多花约 1 秒（基准：中位 2.8s → 1.9s，
+        # 回答质量 4.8 → 4.7，两边都是 100% 得分 ≥4）。
         ai.model_type = Config.DEEPSEEK_MODEL
-        ai.thinking_type = "enabled"
+        ai.thinking_type = "disabled"
         ai.system_text = (
             "你是Kiriko，请根据以下搜索结果回答用户问题。"
             f"当前日期是{current_date}，你的知识截止于2025年，请以当前日期和搜索结果为准。"

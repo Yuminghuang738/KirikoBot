@@ -36,7 +36,7 @@ class AiTools:
         }
         function_web_search = {
             "name": "web_search",
-            "description": "当用户询问实时信息、最新资讯、需要联网查询的问题、或者你不知道答案且需要搜索时，调用此函数进行联网搜索",
+            "description": "当用户询问实时信息、最新资讯、需要联网查询的问题、或者你不知道答案且需要搜索时，调用此函数进行联网搜索。搜索词里涉及「最新/最近/今年」时，年份必须写用户消息里「当前时间」的那一年，不要用你自己训练时的年份",
             "parameters": {
                 "type": "object",
                 "properties": {

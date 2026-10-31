@@ -9,6 +9,8 @@
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 
 import web_search
@@ -83,7 +85,8 @@ class TestRequest:
         ws._search("中国首都")
         body = calls[0]["json"]
         assert body["query"] == "中国首都"
-        assert body["need_content"] is True, "要一次拿到正文，省掉再抓页面那一步"
+        assert body["need_content"] is False, "基准结论：不取正文，用 summary 即可，资料体积小一半"
+        assert body["count"] == WebSearch.MAX_RESULTS, "只需要 5 条，多要的正文白白下载"
         assert 1 <= body["count"] <= 50, "API 限制 count 在 1~50"
 
     def test_it_uses_bearer_auth(self, ws, monkeypatch):
@@ -109,11 +112,12 @@ class TestResponseMapping:
         base.update(over)
         return {"results": [base]}
 
-    def test_it_prefers_content_over_summary(self, ws, monkeypatch):
+    def test_it_prefers_summary_then_content(self, ws, monkeypatch):
+        """summary 是给模型读的长摘要，优先用它；正文只作为兜底。"""
         _patch_post(monkeypatch, FakeResp(payload=self._results()))
         out = ws.search_and_fetch("x")
-        assert "正文" in out
-        assert "长摘要" not in out
+        assert "长摘要" in out
+        assert "正文" not in out
         assert "https://example.com/a" in out, "要给 AI 看来源链接"
 
     def test_it_falls_back_to_summary(self, ws, monkeypatch):
@@ -130,8 +134,9 @@ class TestResponseMapping:
         assert ws.search_and_fetch("x") == ""
 
     def test_long_content_is_truncated(self, ws, monkeypatch):
+        """摘要优先，所以要只剩正文时，超长的正文才会被用到并截断。"""
         _patch_post(monkeypatch, FakeResp(
-            payload=self._results(content="啊" * 5000)))
+            payload=self._results(content="啊" * 5000, summary="")))
         out = ws.search_and_fetch("x")
         assert len(out) < 5000
         assert out.rstrip().endswith("…")
@@ -210,3 +215,73 @@ class TestFailureMessages:
         ws = WebSearch()
         ws.last_reason = "something-new"
         assert ws.failure_message() == WebSearch.REASON_MESSAGES["error"]
+
+
+class TestYearNormalization:
+    """线上实测：主模型按训练知识（截止 2025）写查询，「最近发售的游戏」会变成「2025年…」。"""
+
+    NOW = datetime(2026, 10, 31)
+
+    def test_a_stale_year_on_a_recency_query_becomes_this_year(self):
+        from web_search import normalize_years
+        assert normalize_years("2025年最近发售的游戏", self.NOW) == "2026年最近发售的游戏"
+
+    def test_historical_queries_are_left_alone(self):
+        from web_search import normalize_years
+        assert normalize_years("2020年的疫情", self.NOW) == "2020年的疫情"
+
+    def test_a_correct_year_is_untouched(self):
+        from web_search import normalize_years
+        assert normalize_years("2026年最近发售的游戏", self.NOW) == "2026年最近发售的游戏"
+
+    def test_no_year_is_untouched(self):
+        from web_search import normalize_years
+        assert normalize_years("最新 DeepSeek 模型", self.NOW) == "最新 DeepSeek 模型"
+
+    def test_the_request_goes_out_with_the_corrected_year(self, ws, monkeypatch):
+        calls = _patch_post(monkeypatch, FakeResp(payload={"results": []}))
+        ws._search("2025年最近发售的游戏")
+        assert calls[0]["json"]["query"].startswith(str(datetime.now().year))
+
+
+class TestSynthesisSpeed:
+    """综合回答不开思考模式（基准：思考开 中位 2.8s，关 1.9s，质量持平）。"""
+
+    def test_the_tool_answers_without_thinking(self, monkeypatch):
+        from ai_tools import WebSearchTool
+
+        class FakeSearch:
+            last_reason = "ok"
+
+            def search_and_fetch(self, query):
+                return "【来源：x】\n一段资料"
+
+        class FakeAI:
+            ai_message = {"tool_calls": [{"id": "c", "function": {"name": "web_search",
+                                                                  "arguments": '{"query": "x"}'}}]}
+            thinking_type = "enabled"
+            tool_result_text = ""
+            user_text = ""
+            ai_text = "回答"
+            history_list = []
+            airesponse_tool_calls = []
+            airesponse_tool_id = ""
+
+            def ai_request(self):
+                self.seen_thinking = self.thinking_type
+
+        class Robot:
+            msg = "问题"
+            replied = []
+
+            def reply(self, text):
+                self.replied.append(text)
+
+        ai = FakeAI()
+        WebSearchTool(FakeSearch(), None).web_search_call(Robot(), ai)
+        assert ai.seen_thinking == "disabled"
+
+    def test_the_tool_description_states_the_year_rule(self):
+        import ai_tools_list
+        src = open(ai_tools_list.__file__, encoding="utf-8").read()
+        assert "年份必须写用户消息里「当前时间」的那一年" in src

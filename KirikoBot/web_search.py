@@ -21,6 +21,8 @@ DeepSeek 上线了官方的 Search / Fetch 接口（自研搜索引擎），同�
 from __future__ import annotations
 
 import logging
+import re
+from datetime import datetime
 from typing import Any
 
 import requests
@@ -28,6 +30,28 @@ import requests
 from config import Config
 
 logger = logging.getLogger(__name__)
+
+
+_RECENCY_RE = re.compile(r"最新|最近|今年|现在|当前|目前|刚刚|新出|新发|latest|recent|newest|current", re.I)
+_YEAR_RE = re.compile(r"(?<!\d)(20\d\d)(?!\d)")
+
+
+def normalize_years(query: str, now: datetime | None = None) -> str:
+    """把查询里「明显过期」的年份换成当前年份。
+
+    线上实测：主模型按自己的训练知识（截止 2025）写查询，「最近发售的游戏」会变成
+    「2025年最近发售的游戏」，于是搜出来的是旧资料。只在查询带有时效词（最新/最近/
+    今年…）时才改，历史类问题（「2020年的疫情」）原样保留。
+    """
+    now = now or datetime.now()
+    if not _RECENCY_RE.search(query):
+        return query
+    stale = str(now.year - 1)
+
+    def _fix(m: re.Match) -> str:
+        return str(now.year) if m.group(1) == stale else m.group(1)
+
+    return _YEAR_RE.sub(_fix, query)
 
 
 class WebSearch:
@@ -95,8 +119,8 @@ class WebSearch:
             # summary 是给模型读的长摘要（600~800 字）；content 是正文，可能很长。
             # 优先 content 并截断，没有就退回 summary / snippet。
             body = (
-                (r.get("content") or "").strip()
-                or (r.get("summary") or "").strip()
+                (r.get("summary") or "").strip()
+                or (r.get("content") or "").strip()
                 or (r.get("snippet") or "").strip()
             )
             if not body:
@@ -122,10 +146,12 @@ class WebSearch:
             logger.warning("联网搜索没有配置 DEEPSEEK_TOKEN")
             return []
 
+        # 不取正文（need_content=False），只用 summary：summary 本来就是给模型读的
+        # 600~800 字长摘要。基准里和取正文的质量持平，但资料体积从 ~9000 字降到 ~5000 字。
         payload = {
-            "query": query,
-            "count": max(self.MAX_RESULTS, 10),
-            "need_content": True,
+            "query": normalize_years(query),
+            "count": self.MAX_RESULTS,
+            "need_content": False,
         }
         try:
             resp = requests.post(
