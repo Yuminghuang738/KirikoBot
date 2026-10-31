@@ -127,10 +127,12 @@ class TestJudgeSentiment:
         assert gained <= SENTIMENT_DAILY_NET + 0.01, "一天最多涨这么点，再多也没有"
 
     def test_negative_sentiment_also_clips(self, db):
+        """负面有自己的日上限（非对称：比正面大，见 TestAsymmetricSentiment）。"""
+        from affection_service import SENTIMENT_DAILY_NEG
         for _ in range(20):
             AffectionService.apply_judge_delta(db, "u1", "g1", "小明", sentiment=-0.3)
         lost = SCORE_DEFAULT - AffectionService.get_or_create(db, "u1", "g1", "小明")["affection_score"]
-        assert lost <= SENTIMENT_DAILY_NET + 0.01
+        assert lost <= SENTIMENT_DAILY_NEG + 0.01
 
     def test_learning_delta_still_counts(self, db):
         """学习分反映的是机器人质量，不该被情绪分的额度吃掉。"""
@@ -217,3 +219,45 @@ class TestRecalibration:
         """旧分数本身就是错的，拿它做基准等于把刷出来的结果请回来。"""
         from affection_service import recalibrated_score
         assert recalibrated_score(days_seen=1, streak=1) == recalibrated_score(days_seen=1, streak=1)
+
+
+class TestAsymmetricSentiment:
+    """信任被破坏的速度快于建立。之前正负对称，负面永远追不上日常的小正分。"""
+
+    def test_a_hostile_message_hurts_more_than_a_thank_you_helps(self, db):
+        from affection_service import SENTIMENT_MAX, SENTIMENT_NEG_MAX
+        assert SENTIMENT_NEG_MAX > SENTIMENT_MAX
+
+        AffectionService.apply_judge_delta(db, "u1", "g1", "A", sentiment=0.8)
+        up = AffectionService.get_or_create(db, "u1", "g1", "A")["affection_score"] - SCORE_DEFAULT
+        AffectionService.apply_judge_delta(db, "u2", "g1", "B", sentiment=-0.8)
+        down = SCORE_DEFAULT - AffectionService.get_or_create(db, "u2", "g1", "B")["affection_score"]
+        assert down > up, f"辱骂应比感谢影响更大：down={down} up={up}"
+
+    def test_a_single_hostile_message_is_clipped_at_the_negative_max(self, db):
+        from affection_service import SENTIMENT_NEG_MAX
+        AffectionService.apply_judge_delta(db, "u1", "g1", "A", sentiment=-9.0)
+        lost = SCORE_DEFAULT - AffectionService.get_or_create(db, "u1", "g1", "A")["affection_score"]
+        assert lost == pytest.approx(SENTIMENT_NEG_MAX, abs=0.01)
+
+    def test_the_daily_negative_cap_is_larger_than_the_positive_one(self, db):
+        from affection_service import SENTIMENT_DAILY_NEG, SENTIMENT_DAILY_NET
+        assert SENTIMENT_DAILY_NEG > SENTIMENT_DAILY_NET
+        for _ in range(20):
+            AffectionService.apply_judge_delta(db, "u1", "g1", "A", sentiment=-0.6)
+        lost = SCORE_DEFAULT - AffectionService.get_or_create(db, "u1", "g1", "A")["affection_score"]
+        assert lost == pytest.approx(SENTIMENT_DAILY_NEG, abs=0.01)
+
+    def test_hostile_days_actually_move_a_friend_down_the_tiers(self, db):
+        """业务结论：一个持续辱骂的人，应该能从「友好」掉到「普通」以下，而不是永远卡在友好。"""
+        from affection_service import SENTIMENT_DAILY_NEG
+        # 每天一次辱骂，单日封顶 -SENTIMENT_DAILY_NEG；连续 4 天 ≈ -8，应掉到 40 以下
+        for _ in range(4):
+            AffectionService.update_score(db, "u1", "g1", "A", -SENTIMENT_DAILY_NEG)
+        score = AffectionService.get_or_create(db, "u1", "g1", "A")["affection_score"]
+        assert score < 45
+        # 再 4 天 ≈ 从 42 掉到 34，已经进了「普通」以下区间的边缘；再来两天就到冷淡
+        for _ in range(4):
+            AffectionService.update_score(db, "u1", "g1", "A", -SENTIMENT_DAILY_NEG)
+        score = AffectionService.get_or_create(db, "u1", "g1", "A")["affection_score"]
+        assert AffectionService.get_relationship(score)[0] in ("普通", "冷淡")
