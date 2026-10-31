@@ -431,32 +431,27 @@ class AffectionService:
         score = record["affection_score"]
         label, emoji = AffectionService.get_relationship(score)
 
-        lines = [f"【关系】{emoji}{label} {score:.0f}/100"]
-        if record.get("streak_days"):
-            lines.append(f"连续出现 {record['streak_days']} 天")
-        if record.get("interaction_count"):
-            lines.append(
-                f"聊过 {record['interaction_count']} 次"
-                f"（夸过 {record['positive_count']} / 怼过 {record['negative_count']}）"
-            )
-
-        # 行为清单：说的是"可以做什么"，不是"什么感觉"
-        if score >= 85:
-            lines.append(
-                "可以吐槽、可以打断、可以已读乱回；他提过的事你会记着并主动问。"
-            )
-        elif score >= 65:
-            lines.append("语气自然亲切，会主动关心两句、会提他上次说的事。")
-        elif score >= 40:
-            lines.append("普通朋友，正常聊天就行，不用刻意热络。")
-        elif score >= 20:
-            lines.append("还不太熟，话少一点，不用主动搭话。")
-        else:
-            lines.append("印象一般，只答不问，别硬凑近乎。")
+        # 只给「档位 + 一句可执行的行为」。不放统计数字：实测「聊过 542 次 / 怼过 21」这类
+        # 数字会被模型直接拿来说事，去掉后才有可测的正向贡献（见 eval/chat_replay.py）。
+        lines = [f"【你和他的关系】{label}"]
+        lines.append(AffectionService.behavior_for(score))
 
         if record.get("notes"):
             lines.append(f"备注：{record['notes']}")
         return "\n".join(lines)
+
+    @staticmethod
+    def behavior_for(score: float) -> str:
+        """每个关系档位对应的一句具体行为指引（可执行，不是形容词）。"""
+        if score >= 85:
+            return "很熟：可以接他的梗、吐槽他、直接叫名字，他提过的事你记着，顺口问一句。"
+        if score >= 65:
+            return "熟：语气放松，记得他之前说过的事，可以顺口提一句。"
+        if score >= 40:
+            return "一般朋友：正常接话，不翻旧账，不主动问他的私事。"
+        if score >= 20:
+            return "不太熟：简短接一句，不主动聊他的事。"
+        return "印象不好：一两个字能答就别多说，不接梗。"
 
     # 兼容旧调用名（prompt_builder 之外的调用点还在用）
     build_context_prompt = relationship_block

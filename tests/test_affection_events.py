@@ -184,13 +184,13 @@ class TestRelationshipBlock:
         AffectionService.manual_adjust(db, "u1", "g1", 40.0)   # 50 → 90
         block = AffectionService.relationship_block(db, "u1", "g1")
         assert "挚友" in block
-        assert "可以吐槽" in block
+        assert "可以接他的梗" in block, "挚友档要给出具体的亲近行为"
 
     def test_a_stranger_gets_told_not_to_force_it(self, db):
         AffectionService.manual_adjust(db, "u1", "g1", -35.0)  # 50 → 15
         block = AffectionService.relationship_block(db, "u1", "g1")
-        assert "冷淡" in block
-        assert "只答不问" in block
+        assert "印象不好" in block
+        assert "别多说" in block and "不接梗" in block
 
     def test_private_has_no_relationship_block(self, db):
         assert AffectionService.relationship_block(db, "u1", None) == ""
