@@ -96,12 +96,14 @@ class LearningService:
             f"- AI调用的工具：{tool_info}\n"
             f"- AI回复内容：{prev['ai_text']}\n"
             f"- 用户随后反馈：{follow_up_msg}\n\n"
-            "根据用户反馈判断AI表现。可能的教训类型：\n"
+            "先判断用户的反应：明确不满/纠正/要求重来 → 才记教训；认可或顺着继续 → 表现良好；"
+            "换话题、继续玩梗、发新图、无法判断 → 输出 NONE（不记录）。\n"
+            "可能的教训类型：\n"
             "- 工具选择错误：用户想要A功能但AI调用了B工具\n"
             "- 遗漏工具：用户明确需要某功能但AI直接回复未调用工具\n"
-            "- 回复不当：AI回复偏离用户意图或语气不当\n"
+            "- 回复不当：用户明确表示AI的回复不对、没听懂或语气让人不舒服（仅此而已，换话题不算）\n"
             "- 表现良好：AI正确理解并满足了用户需求\n"
-            "用一句话总结（20-50字），格式：'[类型] 具体教训'。只输出教训文本。"
+            "用一句话总结（20-50字），格式：'[类型] 具体教训'。只输出教训文本或 NONE。"
         )
 
         note = quick_chat(
@@ -113,7 +115,7 @@ class LearningService:
             logger.info("Learning evaluation skipped (API unavailable)")
             return None
 
-        if not note or len(note) < 3:
+        if not note or len(note) < 3 or note.strip().upper() == "NONE":
             return None
 
         if not self.save_note(db, user_id, note, prev):
@@ -122,22 +124,38 @@ class LearningService:
         logger.info("Learned [%s]: %s", user_id, note)
         return note
 
+    # 注入的只有这些：工具选择/遗漏是可以直接改正的具体问题。「回复不当」以前的误判
+    # 太多（人工抽查 60 条，只有 1 条是真正的不满），所以只注入截止编号之后的新判定。
+    INJECT_TYPES = ("工具选择错误", "遗漏工具")
+    MAX_INJECT = 8
+
     def get_context(self, db: Any, user_id: str) -> str:
-        """Get accumulated learning notes for injection into system context."""
+        """注入到说话人块的「需要留意的问题」。只给有效的负向笔记，去重。"""
         try:
+            cutoff = int(db.get_state("learning_rubric_cutoff_id", "0") or 0)
             rows = db.fetch_data(
-                "SELECT note FROM learning_log WHERE user_id=? ORDER BY id DESC LIMIT ?",
-                (user_id, self.MAX_NOTES),
+                "SELECT note FROM learning_log WHERE user_id = ? AND ("
+                "  note LIKE '[工具选择错误]%' OR note LIKE '[遗漏工具]%'"
+                "  OR (note LIKE '[回复不当]%' AND id > ?)"
+                ") ORDER BY id DESC LIMIT ?",
+                (user_id, cutoff, self.MAX_INJECT * 3),
             )
         except Exception:
             return ""
 
-        if not rows:
-            return ""
-
-        notes = [r[0] for r in rows if r[0]]
+        seen: set[str] = set()
+        notes: list[str] = []
+        for (note,) in rows:
+            text = (note or "").strip()
+            key = text.split("] ", 1)[-1]          # 去掉类型标签后比较内容
+            if not text or key in seen:
+                continue
+            seen.add(key)
+            notes.append(text)
+            if len(notes) >= self.MAX_INJECT:
+                break
         if not notes:
             return ""
 
-        return ("【你之前踩过的坑】（心里记住就行，别说“根据我的学习笔记”这类话）\n"
+        return ("【需要留意的问题】（以后注意着点，别说“根据我的学习笔记”这类话）\n"
                 + "\n".join(f"  · {n}" for n in notes))
