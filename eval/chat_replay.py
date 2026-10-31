@@ -389,6 +389,23 @@ def stats(texts: list[str]) -> dict[str, float]:
     }
 
 
+def rich_user_ids(conn: sqlite3.Connection) -> set[str]:
+    """画像丰富 = 至少有一条共同记忆，或稳定画像里有内容的字段 ≥ 3 个。"""
+    import json
+    import profile_service as ps
+    mem = {r[0] for r in conn.execute("SELECT DISTINCT user_id FROM profile_memories")}
+    out: set[str] = set()
+    for uid, pj in conn.execute("SELECT user_id, profile_json FROM user_profiles"):
+        try:
+            st = ps.normalize_profile(json.loads(pj or "{}")).get("stable") or {}
+        except Exception:
+            st = {}
+        filled = sum(bool(st.get(k)) for k in ("nickname", "avoid", "catchphrase", "dislikes", "traits", "likes", "notes"))
+        if uid in mem or filled >= 3:
+            out.add(uid)
+    return out
+
+
 def run(args: argparse.Namespace) -> int:
     key = os.getenv("DEEPSEEK_TOKEN") or _read_token()
     if not key:
@@ -419,6 +436,9 @@ def run(args: argparse.Namespace) -> int:
                 "SELECT user_id, content, kind FROM profile_memories ORDER BY user_id, id"):
             print(f"   [{kind}] {content}")
     mem_uids = None
+    if args.rich_users:
+        mem_uids = rich_user_ids(conn)
+        print(f"只评测画像丰富的用户：{len(mem_uids)} 人")
     if args.memory_cutoff and args.only_memory_users:
         mem_uids = {r[0] for r in conn.execute("SELECT DISTINCT user_id FROM profile_memories")}
         print(f"只评测有记忆的用户：{len(mem_uids)} 人")
@@ -564,6 +584,8 @@ def main() -> int:
                    help="截止时间，如 2026-09-01：只用它之前的对话提取记忆，并只评测它之后的回合")
     p.add_argument("--only-memory-users", action="store_true",
                    help="与 --memory-cutoff 合用：只评测已写入记忆的用户（记忆的直接效果）")
+    p.add_argument("--rich-users", action="store_true",
+                   help="只评测画像足够丰富的用户（有记忆，且稳定画像至少 3 个字段有内容）")
     p.add_argument("--followup", action="store_true",
                    help="只抽追问/指代类短句（注意力敏感子集）")
     p.add_argument("--list-variants", action="store_true")
