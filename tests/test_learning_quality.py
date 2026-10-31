@@ -210,3 +210,35 @@ class TestPositiveNeedsEvidence:
 
     def test_absence_of_complaint_is_not_approval(self):
         assert "不要因为「没有抱怨」就判表现良好" in self._prompt()
+
+
+class TestLegacyRubricRequiresExplicitComplaint:
+    """私聊的学习判定（旧路径）：「回复不当」只能在用户明确不满时记录；工具失误是客观的，不需要抱怨。
+    线上独立抽查：改前有效教训精确率 35%，改后 41%（样本 40 对，幅度小，结论保守）。"""
+
+    def _prompt(self, monkeypatch):
+        import learning_service as ls
+        seen = {}
+
+        def fake(system, prompt, **k):
+            seen["p"] = prompt
+            return None
+
+        monkeypatch.setattr(ls, "quick_chat", fake)
+
+        class Db:
+            def execute_action(self, *a, **k):
+                pass
+
+        ls.LearningService().evaluate_prev(Db(), "u1", {"user_msg": "x", "ai_text": "y", "tool": ""}, "z")
+        return seen["p"]
+
+    def test_reply_complaints_need_explicit_displeasure(self, monkeypatch):
+        assert "只能在用户**明确表达不满**时记录" in self._prompt(monkeypatch)
+
+    def test_tool_misses_do_not_need_a_complaint(self, monkeypatch):
+        p = self._prompt(monkeypatch)
+        assert "不需要用户抱怨" in p and "遗漏工具" in p
+
+    def test_no_explicit_displeasure_means_not_recorded_as_a_reply_complaint(self, monkeypatch):
+        assert "不要因为「AI 本可以更好」而记「回复不当」" in self._prompt(monkeypatch)
