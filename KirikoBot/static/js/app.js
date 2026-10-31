@@ -1722,7 +1722,7 @@ async function loadHistory(page){
 
 const AI_SOURCE_LABEL={
   chat:'主对话', followup:'工具追问', judge:'行为判定',
-  profile:'用户画像', news:'新闻翻译', vision:'图像理解', tarot:'塔罗',
+  profile:'用户画像', vision:'图像理解', tarot:'塔罗',
   at_member:'@群友', feature_request:'功能建议', sticker_fallback:'表情包回退',
   quick:'其它后台',
 };
@@ -1873,15 +1873,11 @@ async function loadThreads(gid, date, box){
 // ══════════════════════════════════════════════════════════
 
 const PUSH_TOPICS={
-  morning_news:'☀️ 早间新闻',
-  gaming_news:'🎮 游戏速递',
   hitokoto:'💬 每日一言',
   daily_roll_call:'📣 今日发言榜',
   amp_head:'🎸 今日箱头',
 };
 const PUSH_HINT={
-  morning_news:'时政要闻 + 游戏资讯 + 每日一言',
-  gaming_news:'只推游戏圈热点',
   hitokoto:'一句随机的语录',
   daily_roll_call:'@ 出当天发言最多的三个人',
   amp_head:'每天介绍一款吉他音箱头：年代、音色、市价、选购建议',

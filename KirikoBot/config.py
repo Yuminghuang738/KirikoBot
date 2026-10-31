@@ -45,7 +45,7 @@ class Config:
     # (low / high / max). The API defaults to `high`, whose invisible
     # reasoning tokens dominate chat latency; `low` keeps tool selection
     # good enough while roughly halving the time to reply.
-    # Background calls (news translation, vision, judge, profiling) pass
+    # Background calls (vision, judge, profiling) pass
     # thinking: disabled explicitly and are unaffected by this setting.
     DEEPSEEK_REASONING_EFFORT: Final[str] = os.getenv("DEEPSEEK_REASONING_EFFORT") or "low"
     # OPTIONAL extra notes appended AFTER the built-in persona. Kiriko's
