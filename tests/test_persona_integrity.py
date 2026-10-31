@@ -207,9 +207,11 @@ class TestToneAndNoQuestions:
         assert "不是主色调" in section
 
     def test_replies_are_kept_short(self):
+        """短回复的契约：十几个字、一两句就停；具体语感在【说话的语感】里。"""
         section = self._section("【怎么说话】", "【不要用问句】")
-        assert "字以内" in section
-        assert "最多两句" in section
+        assert "十几个字" in section
+        assert "一两句" in section
+        assert "语感" in section
 
     def test_she_is_described_as_good_tempered(self):
         section = self._section("【你的性格】", "【你和群友的关系】")

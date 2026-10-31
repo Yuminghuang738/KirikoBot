@@ -124,7 +124,7 @@ class TestUserMessage:
         assert "小明" in text and "在吗" in text and "测试群" in text
 
     def test_empty_message_falls_back(self):
-        assert build_user_message(_Robot(msg="   ")) .endswith("[空消息]")
+        assert "说：[空消息]" in build_user_message(_Robot(msg="   "))
         assert "[图片消息]" in build_user_message(_Robot(msg="", has_images=True))
 
 
