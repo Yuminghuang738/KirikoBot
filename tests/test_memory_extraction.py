@@ -219,3 +219,68 @@ class TestTriggerFiresForPrivateChats:
         _talk(db, "bot1", ProfileService.MEMORY_GAP)
         main._trigger_profile_update(self._Robot("private", None, user_id="bot1"), set())
         assert submitted == []
+
+
+class TestModelOutageDoesNotLoseTheWindow:
+    """线上事故：记忆计数键停在第 3496 轮，那次提取存了 0 条。
+    原因：模型调用失败（None）时计数仍被推进到当前轮数，20 轮的机会永久丢失，且无日志。"""
+
+    def test_a_failed_call_does_not_consume_the_whole_window(self, db, svc):
+        _talk(db, "u1", ProfileService.MEMORY_GAP)
+        svc.replies.append(None)               # 模型调用失败
+        svc.extract_memories(db, "u1", "小明")
+        # 关键：下一次门槛不能被推到「已经用完的整个窗口之后」
+        last = int(db.get_state("memory_turns:u1", "0"))
+        assert last < ProfileService.MEMORY_GAP, "失败时计数不能推进到当前轮数"
+
+    def test_a_failed_call_retries_after_a_short_gap(self, db, svc):
+        _talk(db, "u1", ProfileService.MEMORY_GAP)
+        svc.replies.append(None)
+        svc.extract_memories(db, "u1", "小明")
+        _talk(db, "u1", ProfileService.MEMORY_RETRY_GAP)
+        assert svc.should_extract_memory(db, "u1") is True, "失败后应当很快重试，而不是等一整个窗口"
+
+    def test_a_failed_call_does_not_retry_on_every_message(self, db, svc):
+        _talk(db, "u1", ProfileService.MEMORY_GAP)
+        svc.replies.append(None)
+        svc.extract_memories(db, "u1", "小明")
+        assert svc.should_extract_memory(db, "u1") is False, "紧接着的一条消息不该再次触发"
+
+    def test_a_successful_empty_answer_still_advances_the_window(self, db, svc):
+        _talk(db, "u1", ProfileService.MEMORY_GAP)
+        svc.replies.append('{"memories": []}')
+        svc.extract_memories(db, "u1", "小明")
+        assert db.get_state("memory_turns:u1") == str(ProfileService.MEMORY_GAP)
+
+    def test_an_unparseable_answer_still_advances_the_window(self, db, svc):
+        """模型回了东西但格式不对：也推进，否则它每条消息都会被重新送去。"""
+        _talk(db, "u1", ProfileService.MEMORY_GAP)
+        svc.replies.append("不是JSON的一段话")
+        svc.extract_memories(db, "u1", "小明")
+        assert db.get_state("memory_turns:u1") == str(ProfileService.MEMORY_GAP)
+
+
+class TestNegativeFilterIsNotOverBroad:
+    """上一轮的过滤器用了「死」「电话」，把正常记忆也拦了。这里锁住两边：
+    具体的攻击要拦，日常说法要放行。"""
+
+    @pytest.mark.parametrize("ok", [
+        "他说自己早上八点半上班，起床像死了一样",
+        "他提过在跟妈妈打电话",
+        "他说练琴累死了",
+        "他吐槽学校的快递杀到半夜",
+        "他提到要去看自己的电话卡套餐",
+    ])
+    def test_everyday_phrasing_is_kept(self, ok):
+        from profile_service import MEMORY_NEGATIVE_RE
+        assert MEMORY_NEGATIVE_RE.search(ok) is None, f"误伤日常记忆：{ok}"
+
+    @pytest.mark.parametrize("bad", [
+        "欧石楠对Kiriko说过「你妈死了」这句伤人的话",
+        "欧石楠以踢出群威胁Kiriko",
+        "某人骂人骂得很难听",
+        "对方发了别人的住址",
+    ])
+    def test_real_attacks_are_still_refused(self, bad):
+        from profile_service import MEMORY_NEGATIVE_RE
+        assert MEMORY_NEGATIVE_RE.search(bad), f"该拦的没拦：{bad}"

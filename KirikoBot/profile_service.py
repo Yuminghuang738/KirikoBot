@@ -79,8 +79,11 @@ def normalize_profile(data: Any) -> dict[str, Any]:
 
 
 # 共同记忆的负面兜底：模型偶尔无视提示词，写进库里就会变成翻旧账。宁可漏记，不可误记。
+# 只拦具体的攻击/威胁/骚扰说法。宽词（死、电话、杀）会误伤「累死了」「跟妈妈打电话」这种正常记忆，
+# 所以不用单字。
 MEMORY_NEGATIVE_RE = re.compile(
-    r"骂|辱|威胁|踢出|踢人|滚|傻逼|沙雕|蠢|死|杀|骚扰|挑衅|威逼|攻击|色情|涩涩|隐私|住址|电话")
+    r"骂人|骂[Kk]iriko|骂她|骂机器人|辱骂|威胁|踢出群|踢人|滚蛋|滚开|傻逼|废物|骚扰|挑衅|威逼|攻击我|色情|涩涩|"
+    r"你妈死|去死|你死|死吧|住址|身份证|家庭住址")
 
 
 # 每个列表字段保留的上限（合并后不会无限膨胀）
@@ -137,6 +140,7 @@ class ProfileService:
     MEMORY_GAP = 20         # 每累计 20 轮 bot 对话，提取一次
     MEMORY_MAX_NEW = 2      # 每次最多新增几条
     MEMORY_WINDOW = 30      # 送给模型的最近消息条数
+    MEMORY_RETRY_GAP = 3    # 模型调用失败后，过几轮再试
     MEMORY_SYSTEM = (
         "你在帮 Kiriko 整理她和某个群友之间的「共同记忆」。下面是她们最近的对话，"
         "Kiriko 是这一方。请找出**值得以后再提起的具体的事**，例如：约好了什么、"
@@ -244,12 +248,21 @@ class ProfileService:
                 return []
             raw = quick_chat(self.MEMORY_SYSTEM, convo, max_tokens=300, temperature=0.2,
                              timeout=30, source="memory")
-            saved = self._parse_and_save_memories(db, user_id, raw)
             turns = db.fetch_data(
                 "SELECT COUNT(*) FROM history WHERE user_id = ? AND role = 'user'", (user_id,)
             )
-            # 无论是否提取到东西都推进计数：避免同一批对话被反复提取
-            db.set_state(f"memory_turns:{user_id}", str(int(turns[0][0]) if turns else 0))
+            turn_count = int(turns[0][0]) if turns else 0
+            if raw is None:
+                # 模型调用失败：不能推进完整窗口（否则这 20 轮的记忆机会永久丢失）。
+                # 只把计数设成「再过 RETRY_GAP 轮重试」，既不丢窗口，也不会 API 挂掉时每条消息都重试。
+                db.set_state(f"memory_turns:{user_id}",
+                             str(turn_count - self.MEMORY_GAP + self.MEMORY_RETRY_GAP))
+                logger.info("Memory extraction for %s failed (API); retry in %d turns",
+                            user_name, self.MEMORY_RETRY_GAP)
+                return []
+            saved = self._parse_and_save_memories(db, user_id, raw)
+            # 模型给出了回复（不论解析是否成功）：推进完整窗口，避免同一批对话被反复送去模型
+            db.set_state(f"memory_turns:{user_id}", str(turn_count))
             if saved:
                 logger.info("Memories for %s: %s", user_name, saved)
             return saved
