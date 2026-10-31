@@ -58,34 +58,30 @@ class Tarot:
 
     def _resend_today(self, robot: Any, ai: Any, card: dict[str, Any],
                       display_name: str, is_for_self: bool) -> None:
-        """Tell them they already drew today, and show that same card again."""
+        """今天已经抽过：把同一张牌再发一次，只发这一条。
+
+        不再额外请 AI 解读（之前会发第二条）。「一天一张」「牌好坏都算数」这两句
+        直接写进这条消息里，所以模型不需要再开口。
+        """
         from llbot_client import MessageBuilder
 
         builder = MessageBuilder()
-        if not is_for_self:
-            builder.text(f"🔮 {display_name}的牌今天已经抽过了。\n\n")
+        if is_for_self:
+            builder.text("🔮 今天已经抽过啦，一天只能抽一张，还是这张哦～\n\n")
+        else:
+            builder.text(f"🔮 {display_name}的牌今天已经抽过了，一天只能抽一张，还是这张。\n\n")
         if card.get("card_path"):
             builder.image(card["card_path"])
-        builder.text(f"\n🎴 {display_name}今天抽到的还是这张：{card['card_name']}")
-        if card.get("card_text"):
-            builder.text(f"\n{card['card_text']}")
+        builder.text(f"\n🎴 {display_name}今天抽到的：{card['card_name']}\n{card.get('card_text') or ''}")
+        builder.text("\n（牌好是坏都算数，抽到什么就是什么。）")
         robot.send(builder.build())
+        ai.handled_summary = self._summary(card, display_name, resent=True)
 
-        ai.model_type = Config.DEEPSEEK_MODEL
-        ai.thinking_type = "disabled"
-        from prompt_builder import build_role_prompt
-        ai.system_text = build_role_prompt(Config.TAROT_ROLE)
-        ai.user_text = (
-            f"{display_name}今天已经抽过牌了，抽到的是「{card['card_name']}」，"
-            f"牌面：{card.get('card_text') or ''}。"
-            "牌已经发出去了。请告诉对方今天只能抽一次，一天一张，"
-            "并且用这句话把这张牌再解读一遍——不管这牌是好是坏，抽到什么就是什么，"
-            "不要因为对方想要别的结果就重抽或者改口。"
-        )
-        ai.ai_request()
-        if ai.ai_text:
-            reply = MessageBuilder().text(ai.ai_text.strip())
-            robot.send(reply.build())
+    @staticmethod
+    def _summary(card: dict[str, Any], display_name: str, resent: bool = False) -> str:
+        """这一轮实际发出去的内容的摘要，写进历史，让之后的对话知道抽到了什么。"""
+        head = "重新发送了今天的牌" if resent else "抽牌"
+        return f"[塔罗牌·{head}] {display_name}：{card['card_name']}，{card.get('card_text') or ''}"
 
     def tarot_call(self, robot: Any, ai: Any) -> None:
         tool_calls = ai.ai_message.get("tool_calls")
@@ -121,7 +117,8 @@ class Tarot:
 
         card = self._draw_card()
 
-        # Send card image + name
+        # 只发一条：牌面 + 牌名 + 简短解释（数据库里的关键词，本身就只有十来个字）。
+        # 不再额外请 AI 写第二条解读。
         from llbot_client import MessageBuilder
         builder = MessageBuilder()
         if not is_for_self and target_name:
@@ -131,33 +128,13 @@ class Tarot:
         builder.text(f"\n🎴 {display_name}的塔罗牌：{card['card_name']}\n{card['card_text']}")
         robot.send(builder.build())
 
-        # AI interpretation
-        ai.model_type = Config.DEEPSEEK_MODEL
-        ai.thinking_type = "disabled"
-        from prompt_builder import build_role_prompt
-        ai.system_text = build_role_prompt(Config.TAROT_ROLE)
-        ai.user_text = (
-            f"抽牌人：{display_name}，抽牌结果：{card['card_name']}，牌面：{card['card_text']}。"
-            f"请为{display_name}解读这张牌。"
-        )
-        ai.ai_request()
-
-        if ai.ai_text:
-            # @ the target person in the reply
-            reply_builder = MessageBuilder()
-            if not is_for_self and target_name:
-                reply_builder.text(f"@{target_name} ")
-            reply_builder.text(ai.ai_text.strip())
-            robot.send(reply_builder.build())
-
-        # Deposit history for the REQUESTER (not target)
+        # 历史：主流程会保存这一轮，这里只给它一段「实际发出去的内容」作为助手的回复，
+        # 不再自己写 user/assistant/tool 行（那样会和主流程重复，出现连续两条 user）。
         try:
             self.database_manager.deposit_tarot_history(robot.user_id, card["card_name"])
-            self.database_manager.deposit_chat_history("user", robot.user_id, robot.group_id, robot.msg, "", "")
-            self.database_manager.deposit_chat_history("assistant", robot.user_id, robot.group_id, ai.ai_text, json.dumps(ai.airesponse_tool_calls), "")
-            self.database_manager.deposit_chat_history("tool", robot.user_id, robot.group_id, ai.user_text, "", ai.airesponse_tool_id)
         except Exception:
             logger.exception("Failed to deposit tarot history")
+        ai.handled_summary = self._summary(card, display_name)
 
 
 class Tarot_History:

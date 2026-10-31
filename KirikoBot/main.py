@@ -711,7 +711,10 @@ def main_logic(robot: RobotServer) -> None:
             final_text = filler_for(robot.msg)
             logger.warning("Model returned no text; sending a filler line instead")
 
-        _save_turn(robot.user_id, robot.group_id, robot.msg, final_text,
+        # 自回工具自己发了消息：历史里存它「实际发出去的内容」（如抽到的牌），
+        # 而不是空的「已调用工具处理」标记，否则之后的对话不知道刚才发了什么。
+        saved_text = final_text or getattr(ai, "handled_summary", "") or ""
+        _save_turn(robot.user_id, robot.group_id, robot.msg, saved_text,
                    reasoning=ai.reasoning_content or "",
                    tool_chain=_tool_chain_json(tool_calls),
                    # A self-contained tool replied on its own, so this turn is

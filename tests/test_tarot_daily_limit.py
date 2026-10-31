@@ -157,34 +157,96 @@ class TestTheToolHonoursTheLimit:
         tool.tarot_call(robot, self._AI())
         assert not resent, "nothing drawn today, so no 'already drawn' path"
 
-    def test_the_limit_message_says_one_a_day(self, db, monkeypatch):
-        """The model is told to explain the rule, not just silently repeat."""
+    class _Capture:
+        """记录每一次 send，供断言「只发了一条」「内容是什么」。"""
+
+        def __init__(self):
+            self.sent: list[str] = []
+
+        def send_group_msg(self, gid, msg):
+            self.sent.append(json.dumps(msg, ensure_ascii=False))
+            return True
+
+        def send_private_msg(self, uid, msg):
+            self.sent.append(json.dumps(msg, ensure_ascii=False))
+            return True
+
+    def _robot(self, cap):
+        robot = self._Robot()
+        robot.llbot = cap
+        return robot
+
+    def test_a_repeat_draw_sends_exactly_one_message_and_no_ai_call(self, db):
+        """重抽：只发同一张牌一次，不再请 AI 说第二段话（之前会发两条）。"""
         from ai_tools import Tarot
 
         seed_card(db)
         db.deposit_tarot_history("u1", "愚者_正位")
-        tool = Tarot(db, None)
+        cap = self._Capture()
         ai = self._AI()
+        calls = []
+        ai.ai_request = lambda: calls.append(1)
+        Tarot(db, None)._resend_today(self._robot(cap), ai, db.get_today_tarot("u1"), "小明", True)
 
-        class LLBot:
-            def send_group_msg(self, *a):
-                return True
+        assert len(cap.sent) == 1, "只能发一条消息"
+        assert calls == [], "不应再调用 AI"
+        assert "一天只能抽一张" in cap.sent[0]
+        assert "抽到什么就是什么" in cap.sent[0]
+        assert "愚者_正位" in cap.sent[0]
 
-            def send_private_msg(self, *a):
-                return True
+    def test_a_first_draw_sends_exactly_one_message_and_no_ai_call(self, db):
+        """首抽：牌面 + 简短解释，只发这一条；不再请 AI 写解读。"""
+        from ai_tools import Tarot
 
-        robot = self._Robot()
-        robot.llbot = LLBot()
-        tool._resend_today(robot, ai, db.get_today_tarot("u1"), "小明", True)
-        assert "今天只能抽一次" in ai.user_text
-        assert "抽到什么就是什么" in ai.user_text
-        assert "不要因为对方想要别的结果就重抽或者改口" in ai.user_text
+        seed_card(db, "愚者_正位", "新的开始、天真、自由", "/cards/fool.png")
+        cap = self._Capture()
+        ai = self._AI()
+        calls = []
+        ai.ai_request = lambda: calls.append(1)
+        Tarot(db, None).tarot_call(self._robot(cap), ai)
+
+        assert len(cap.sent) == 1, "只能发一条消息"
+        assert calls == [], "不应再调用 AI"
+        assert "愚者_正位" in cap.sent[0]
+        assert "新的开始、天真、自由" in cap.sent[0], "简短解释要在第一条里"
+
+    def test_the_handled_summary_carries_the_card_into_history(self, db):
+        """历史里要留下「抽到了什么」，否则之后的对话不知道刚才发了哪张牌。"""
+        from ai_tools import Tarot
+
+        seed_card(db, "愚者_正位", "新的开始、天真、自由")
+        ai = self._AI()
+        Tarot(db, None).tarot_call(self._robot(self._Capture()), ai)
+        assert "愚者_正位" in ai.handled_summary
+        assert "新的开始" in ai.handled_summary
+
+    def test_the_tool_no_longer_writes_chat_history_itself(self, db):
+        """主流程已经保存这一轮；塔罗再写一遍会出现连续两条 user 行。"""
+        from ai_tools import Tarot
+
+        seed_card(db)
+        Tarot(db, None).tarot_call(self._robot(self._Capture()), self._AI())
+        assert db.takeout_chat_history("u1", "g1") == [], "工具不该自己写历史"
+
+    def test_the_history_keeps_the_card_not_an_empty_marker(self, db):
+        """端到端：自回工具的这一轮，历史里是摘要，不是「[已调用工具处理]」。"""
+        from chat_history import load_history, save_turn
+        from ai_tools import Tarot
+
+        seed_card(db, "愚者_正位", "新的开始、天真、自由")
+        ai = self._AI()
+        Tarot(db, None).tarot_call(self._robot(self._Capture()), ai)
+        save_turn(db, "u1", "g1", "帮我抽张塔罗", ai.handled_summary, "", "", True)
+
+        history = load_history(db, "u1", "g1")
+        assistant = [h["content"] for h in history if h["role"] == "assistant"]
+        assert assistant and "愚者_正位" in assistant[-1]
+        assert "[已调用工具处理]" not in assistant[-1]
 
     def test_the_card_stands_whether_good_or_bad(self):
         """The rule is about the card, not about the outcome."""
         from ai_tools import Tarot
 
-        assert "不管这牌是好是坏" in Tarot._resend_today.__doc__ or True
         source = Tarot._resend_today.__code__.co_consts
         text = " ".join(str(c) for c in source if isinstance(c, str))
         assert "好是坏" in text
