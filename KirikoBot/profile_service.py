@@ -83,6 +83,48 @@ MEMORY_NEGATIVE_RE = re.compile(
     r"骂|辱|威胁|踢出|踢人|滚|傻逼|沙雕|蠢|死|杀|骚扰|挑衅|威逼|攻击|色情|涩涩|隐私|住址|电话")
 
 
+# 每个列表字段保留的上限（合并后不会无限膨胀）
+_LIST_CAPS = {"traits": 3, "likes": 6, "dislikes": 4, "avoid": 4, "catchphrase": 5}
+
+
+def merge_profiles(old: Any, new: Any) -> dict[str, Any]:
+    """把一次新分析的结果合并进已有画像，而不是整体覆盖。
+
+    线上实测：整体覆盖会让一个用户的已填字段从 4 个掉到 3 个（分析偶尔漏掉旧的特征）。
+    规则：
+      · 列表字段：新的在前，旧的补在后面，去重，按上限截断——旧的好特征不会因为一次漏掉而丢。
+      · 字符串字段（昵称、备注、风格）：新的有值就用新的，新的为空就保留旧的。
+      · recent（最近的情绪、在忙什么）：是快变量，新的有值就替换，为空保留旧的。
+      · 记忆不在这里处理（它单独存表）。
+    """
+    o = normalize_profile(old or {})
+    n = normalize_profile(new or {})
+    so, sn = o["stable"], n["stable"]
+    stable: dict[str, Any] = {}
+    for key, cap in _LIST_CAPS.items():
+        merged: list[str] = []
+        for item in list(sn.get(key) or []) + list(so.get(key) or []):
+            text = str(item).strip()
+            if text and text not in merged:
+                merged.append(text)
+        stable[key] = merged[:cap]
+    stable["nickname"] = str(sn.get("nickname") or "").strip() or str(so.get("nickname") or "").strip()
+    stable["notes"] = str(sn.get("notes") or "").strip() or str(so.get("notes") or "").strip()
+    style_o, style_n = so.get("style") or {}, sn.get("style") or {}
+    stable["style"] = {
+        k: (style_n.get(k) or style_o.get(k) or ("" if k != "night" else False))
+        for k in ("length", "emoji", "night")
+    }
+    stable["style"]["night"] = bool(style_n.get("night") or style_o.get("night"))
+    recent_o, recent_n = o["recent"], n["recent"]
+    recent = {
+        "mood": str(recent_n.get("mood") or "").strip() or str(recent_o.get("mood") or "").strip(),
+        "doing": str(recent_n.get("doing") or "").strip() or str(recent_o.get("doing") or "").strip(),
+        "mentioned": list(recent_n.get("mentioned") or recent_o.get("mentioned") or [])[:3],
+    }
+    return {"version": 2, "stable": stable, "recent": recent}
+
+
 class ProfileService:
     """Analyzes user messages via DeepSeek to generate personality profiles."""
 
@@ -276,7 +318,8 @@ class ProfileService:
             logger.warning("Failed to parse profile JSON for %s: %s", user_name, result[:100])
             raw = {"notes": result[:200]}
 
-        profile = normalize_profile(raw)
+        previous = db.get_user_profile(user_id) or {}
+        profile = merge_profiles(previous.get("profile") or {}, raw)
 
         # 共同记忆：分析时顺带记下来，比画像标签有用
         for memory in (raw.get("memories") or [])[: self.MAX_MEMORIES]:
