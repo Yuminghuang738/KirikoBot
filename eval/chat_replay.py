@@ -60,6 +60,8 @@ class Variant:
     tight: bool = False          # 在 user message 末尾再压一次长度（近因效应）
     static_exemplars: bool = False  # 示例固定（所有回合相同）→ 可进系统提示词、利于缓存
     no_speaker: bool = False        # 去掉「当前说话人」的关系 + 画像块（测个性化的贡献）
+    no_memory: bool = False         # 保留关系+画像，只去掉共同记忆（测记忆的贡献）
+    no_affection: bool = False      # 保留画像+记忆，只去掉关系（好感度）块（测好感度的贡献）
     note: str = ""
 
 
@@ -93,6 +95,12 @@ VARIANTS: dict[str, Variant] = {
                           style_rule=True, exemplars=8, tight=True, static_exemplars=True,
                           no_speaker=True,
                           note="style_tight_static 去掉个性化块（关系+画像）"),
+    "mem_off": Variant("mem_off", raw_limit=40, max_msgs=16, group_context=True,
+                       style_rule=True, exemplars=8, tight=True, static_exemplars=True,
+                       no_memory=True, note="style_tight_static 去掉共同记忆（其余不变）"),
+    "aff_off": Variant("aff_off", raw_limit=40, max_msgs=16, group_context=True,
+                       style_rule=True, exemplars=8, tight=True, static_exemplars=True,
+                       no_affection=True, note="style_tight_static 去掉好感度（关系）块"),
     "no_think_warm": Variant("no_think_warm", raw_limit=40, max_msgs=16, group_context=True,
                              thinking=False, temperature=1.0, top_p=1.0,
                              note="长历史 + 群背景 + 关思考，温度 1.0 才真正生效"),
@@ -116,7 +124,8 @@ class Sample:
 FOLLOWUP_RE = re.compile(r"(这|那|它|他|她|刚才|上面|前面|你说|那个|这个|还是|然后|所以|那咋|咋办|怎么|为啥|为什么|呢[？?]?$)")
 
 
-def pick_samples(conn: sqlite3.Connection, n: int, seed: int, followup_only: bool = False) -> list[Sample]:
+def pick_samples(conn: sqlite3.Connection, n: int, seed: int, followup_only: bool = False,
+                 min_ts: str = "", only_uids: set[str] | None = None) -> list[Sample]:
     """抽取「用户群聊 @ 消息 → 机器人文字回复」回合。图片、工具回复、过短消息剔除。"""
     cur = conn.execute(
         """
@@ -141,6 +150,10 @@ def pick_samples(conn: sqlite3.Connection, n: int, seed: int, followup_only: boo
             break
         if followup_only and not (len(text) <= 14 or FOLLOWUP_RE.search(text)):
             continue
+        if min_ts and ts < min_ts:
+            continue
+        if only_uids is not None and uid not in only_uids:
+            continue
         hist = conn.execute(
             "SELECT role, content, tool_calls, tool_call_id, id FROM history "
             "WHERE user_id = ? AND group_id = ? AND id < ? ORDER BY id DESC LIMIT 40",
@@ -156,6 +169,37 @@ def pick_samples(conn: sqlite3.Connection, n: int, seed: int, followup_only: boo
             history_rows=[h[:4] for h in hist],
         ))
     return out
+
+
+def extract_memories_before(db: Any, conn: sqlite3.Connection, cutoff: str, key: str,
+                            min_turns: int = 10) -> int:
+    """只用 cutoff 之前的 bot 对话提取共同记忆，写入 eval 副本。返回写入的用户数。"""
+    import profile_service as ps
+    svc = ps.ProfileService()
+    uids = [r[0] for r in conn.execute(
+        "SELECT user_id FROM history WHERE role = 'user' AND group_id IS NOT NULL "
+        "AND timestamp < ? GROUP BY user_id HAVING COUNT(*) >= ?", (cutoff, min_turns))]
+    wrote = 0
+    for uid in uids:
+        rows = conn.execute(
+            "SELECT role, content FROM history WHERE user_id = ? AND role IN ('user','assistant') "
+            "AND content IS NOT NULL AND content <> '' AND timestamp < ? ORDER BY id DESC LIMIT ?",
+            (uid, cutoff, svc.MEMORY_WINDOW)).fetchall()
+        rows.reverse()
+        name = conn.execute("SELECT user_name FROM group_messages WHERE user_id = ? "
+                            "ORDER BY id DESC LIMIT 1", (uid,)).fetchone()
+        who = name[0] if name else "某人"
+        convo = "\n".join(f"{'Kiriko' if role == 'assistant' else who}: {str(c)[:160]}"
+                          for role, c in rows)
+        if not convo.strip():
+            continue
+        raw = _post({"model": MODEL, "temperature": 0.2, "max_tokens": 300, "stream": False,
+                     "thinking": {"type": "disabled"},
+                     "messages": [{"role": "system", "content": svc.MEMORY_SYSTEM},
+                                  {"role": "user", "content": convo}]}, key)
+        saved = svc._parse_and_save_memories(db, uid, raw)
+        wrote += 1 if saved else 0
+    return wrote
 
 
 def fetch_group_rows(conn: sqlite3.Connection, s: Sample, limit: int = 20) -> list[dict]:
@@ -180,6 +224,19 @@ class _FakeDB:
 
     def takeout_chat_history(self, uid, gid):
         return list(reversed(self._rows))   # 生产里 takeout 后会 reverse 成 oldest-first
+
+
+class _NoMemoryDB:
+    """只把共同记忆查询压成空，其余原样转发（给 mem_off 对照用）。"""
+
+    def __init__(self, inner: Any):
+        self._inner = inner
+
+    def get_profile_memories(self, *a, **kw):
+        return []
+
+    def __getattr__(self, name):
+        return getattr(self._inner, name)
 
 
 def build_prompt(db: Any, s: Sample, v: Variant, conn: sqlite3.Connection):
@@ -219,8 +276,11 @@ def build_prompt(db: Any, s: Sample, v: Variant, conn: sqlite3.Connection):
         system += "\n\n" + _style_block(conn, s, v)
     rel = aff_svc.relationship_block(db, s.uid, s.gid)
     aff = aff_svc.get_or_create(db, s.uid, s.gid, s.user_name)
+    speaker_db = _NoMemoryDB(db) if v.no_memory else db
+    if v.no_affection:
+        rel = ""
     speaker = "\n".join(x for x in (rel,
-                        profile_svc.build_speaker_context(db, s.uid, s.gid, s.user_name, affection=aff)) if x)
+                        profile_svc.build_speaker_context(speaker_db, s.uid, s.gid, s.user_name, affection=aff)) if x)
     if v.no_speaker:
         speaker = ""
     ctx = ""
@@ -352,7 +412,18 @@ def run(args: argparse.Namespace) -> int:
     variants = [VARIANTS[n] for n in names]
     base = variants[0]
 
-    samples = pick_samples(conn, args.n, args.seed, followup_only=args.followup)
+    if args.memory_cutoff:
+        n_users = extract_memories_before(db, conn, args.memory_cutoff, key)
+        print(f"记忆预提取（截止 {args.memory_cutoff}）：{n_users} 个用户写入了记忆")
+        for uid, content, kind in conn.execute(
+                "SELECT user_id, content, kind FROM profile_memories ORDER BY user_id, id"):
+            print(f"   [{kind}] {content}")
+    mem_uids = None
+    if args.memory_cutoff and args.only_memory_users:
+        mem_uids = {r[0] for r in conn.execute("SELECT DISTINCT user_id FROM profile_memories")}
+        print(f"只评测有记忆的用户：{len(mem_uids)} 人")
+    samples = pick_samples(conn, args.n, args.seed, followup_only=args.followup,
+                           min_ts=args.memory_cutoff, only_uids=mem_uids)
     print(f"抽到 {len(samples)} 个真实回合，变体：{', '.join(names)}")
 
     # 1) 为每个样本、每个变体构造提示词并生成回复
@@ -489,6 +560,10 @@ def main() -> int:
     p.add_argument("--seed", type=int, default=7)
     p.add_argument("--workers", type=int, default=6)
     p.add_argument("--variants", default="baseline,long_history")
+    p.add_argument("--memory-cutoff", default="",
+                   help="截止时间，如 2026-09-01：只用它之前的对话提取记忆，并只评测它之后的回合")
+    p.add_argument("--only-memory-users", action="store_true",
+                   help="与 --memory-cutoff 合用：只评测已写入记忆的用户（记忆的直接效果）")
     p.add_argument("--followup", action="store_true",
                    help="只抽追问/指代类短句（注意力敏感子集）")
     p.add_argument("--list-variants", action="store_true")
