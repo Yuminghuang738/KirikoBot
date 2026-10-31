@@ -373,6 +373,12 @@ class DatabaseManager:
                         collected_at    DATETIME DEFAULT (datetime('now', 'localtime'))
                     )"""
                 )
+                # 对话历史按 (用户, 群) 取最近几条，记忆门控也按用户计数：没有这个索引时
+                # 每条群消息都会全表 COUNT(*)，数据一大就慢。
+                connect.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_history_user_group "
+                    "ON history(user_id, group_id, id)"
+                )
                 connect.execute(
                     """CREATE TABLE IF NOT EXISTS user_affection(
                         id                INTEGER PRIMARY KEY AUTOINCREMENT,
