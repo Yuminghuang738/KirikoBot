@@ -150,6 +150,13 @@ class Config:
     # Verified present via get_ai_characters: lucy-voice-f38 = 傲娇少女.
     VOICE_DEFAULT_CHARACTER: Final[str] = os.getenv("VOICE_DEFAULT_CHARACTER") or "lucy-voice-f38"
 
+    # ── DeepSeek Harness (DSH) 超级大脑扩展 ──────────────
+    # 当遇到复杂编程、运行代码、深度分析或重度长任务时，作为 Agent 工具委派给本地 DSH 实例。
+    DSH_ENABLED: Final[bool] = os.getenv("DSH_ENABLED", "1") == "1"
+    DSH_TIMEOUT: Final[int] = int(os.getenv("DSH_TIMEOUT") or 120)
+    DSH_PATCH_PATH: Final[str] = os.getenv("DSH_PATCH_PATH") or os.path.expanduser("~/.dsh/profiles/web/cordis.patch.yml")
+    DSH_WORKSPACE_DIR: Final[str] = os.getenv("DSH_WORKSPACE_DIR") or "/tmp/kiriko_dsh_workspace"
+
     @classmethod
     def validate(cls) -> None:
         required: dict[str, str | None] = {

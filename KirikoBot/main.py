@@ -23,7 +23,7 @@ from ai_tools import (
     ListRemindersTool, DeleteReminderTool,
     AffectionTool, AffectionLeaderboardTool,
     RecallMessageTool, GroupStatsTool, ReadContextTool,
-    ExplainSelfTool, VoiceTool,
+    ExplainSelfTool, VoiceTool, DshAgentTool,
 )
 from affection_service import AffectionService
 from balance_service import BalanceService
@@ -131,6 +131,7 @@ group_stats_tool = GroupStatsTool(db, pkg)
 read_context_tool = ReadContextTool(db, pkg)
 explain_self_tool = ExplainSelfTool(db, pkg)
 voice_tool = VoiceTool(db, pkg, llbot)
+dsh_agent_tool = DshAgentTool(db)
 
 # Persist the bot's own outgoing messages so transcripts are complete and
 # "recall the last thing I said" works across restarts.
@@ -177,6 +178,7 @@ ROUTES = {
     "read_context": read_context_tool.read_context_call,
     "explain_self": explain_self_tool.explain_self_call,
     "send_voice": voice_tool.voice_call,
+    "dsh_agent": dsh_agent_tool.dsh_agent_call,
 }
 
 # Self-contained tools format and send their own reply — no AI follow-up needed
@@ -190,6 +192,8 @@ SELF_CONTAINED_TOOLS = {
     "explain_self",
     # send_voice *is* the reply; a follow-up would add a typed duplicate.
     "send_voice",
+    # dsh_agent autonomously executes deep agent tasks and sends its own reply
+    "dsh_agent",
 }
 
 # ── History (only recent context, filtered for clarity) ──
