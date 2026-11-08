@@ -59,6 +59,7 @@ services:
     command: ["waitress-serve", "--host=0.0.0.0", "--port=5000", "--threads=16", "main:app"]
     ports:
       - "5000:5000"
+      - "3085:3085"
     env_file:
       - ./KirikoBot/.env
     volumes:

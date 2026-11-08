@@ -1875,134 +1875,42 @@ startLogSSE();
 loadPage('overview');
 setInterval(refreshLLBotPill,30000);
 
-// ── DSH Console View ──
+// ── DSH Console View (原生 WebUI 完整内嵌) ──
 async function dshHTML() {
-  let d = {available: false, version: '', workspace: '', patch_file: '', sessions: []};
-  let p = {bundles: []};
+  let token = '';
+  let port = 3085;
   try {
     const res = await fetch('/api/dsh/status');
-    d = await res.json();
-    const pluginRes = await fetch('/api/dsh/plugins');
-    p = await pluginRes.json();
+    const d = await res.json();
+    token = d.web_token || '';
+    port = d.web_port || 3085;
   } catch (err) {
     console.error('获取 DSH 状态失败:', err);
   }
 
-  const sessions = (d && d.sessions) || [];
-  const bundles = (p && p.bundles) || [];
-
-  let sessionsRows = sessions.map(s => `
-    <tr>
-      <td><span class="mono">${esc(s.target)}</span></td>
-      <td><span class="mono">${esc(s.session_id)}</span></td>
-    </tr>
-  `).join('');
-
-  let bundleItems = bundles.map(b => `<li><span class="mono">${esc(b)}</span></li>`).join('');
+  const host = location.hostname || '100.93.52.78';
+  const query = token ? `?token=${encodeURIComponent(token)}` : '';
+  const dshUrl = `http://${host}:${port}/${query}`;
 
   return `<div class="page-head">
     <div>
-      <div class="ph-title">🧠 <span class="em">超级大脑 (DSH) 控制台</span></div>
-      <div class="ph-sub">DeepSeek Harness 运行时监控、活跃会话、已加载组件与任务下发</div>
+      <div class="ph-title">🧠 <span class="em">超级大脑 (DSH)</span></div>
+      <div class="ph-sub">DeepSeek Harness 官方 WebUI 完整内嵌 · 会话树、插件生态、自主智能体全功能</div>
     </div>
     <div class="ph-right">
-      <button class="btn" onclick="loadPage('dsh')">🔄 刷新</button>
+      <button class="btn" onclick="var f=document.getElementById('dshFrame');if(f)f.src=f.src">🔄 重新加载</button>
+      <a class="btn accent" href="${esc(dshUrl)}" target="_blank" rel="noopener">↗ 新标签打开</a>
     </div>
   </div>
-
-  <div class="cards" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
-    <div class="card">
-      <div class="c-head">⚙️ 运行时状态</div>
-      <div class="c-body">
-        <p><strong>服务状态：</strong> ${d.available ? '<span class="pill ok">● 运行正常</span>' : '<span class="pill danger">● 未就绪</span>'}</p>
-        <p><strong>DSH 版本：</strong> <span class="mono">${esc(d.version || '0.2.2-rc.1')}</span></p>
-        <p><strong>执行超时：</strong> ${esc(d.timeout || 120)} 秒</p>
-        <p><strong>工作区路径：</strong> <span class="mono" style="word-break: break-all;">${esc(d.workspace || '—')}</span></p>
-        <p><strong>Patch 文件：</strong> <span class="mono" style="word-break: break-all;">${esc(d.patch_file || '—')}</span></p>
-      </div>
+  <div class="embed-shell">
+    <div class="embed-bar">
+      <span>🔗 ${esc(dshUrl)}</span>
+      <span class="eb-right"><span class="pill info">DSH 原生 Web 界面就绪</span></span>
     </div>
-
-    <div class="card">
-      <div class="c-head">📦 已加载插件 / Bundles</div>
-      <div class="c-body">
-        <p><strong>Bundles 数量：</strong> <span class="pill info">${bundles.length} 个</span></p>
-        <ul style="padding-left: 20px; margin-top: 8px; max-height: 140px; overflow-y: auto;">
-          ${bundleItems || '<li><span class="c-sub">暂无加载的 Bundle</span></li>'}
-        </ul>
-      </div>
-    </div>
-  </div>
-
-  <div class="panel" style="margin-top: 20px;">
-    <div class="panel-header">
-      <span>🗂️ 跨交互活跃会话映射</span>
-      <span class="ph-right"><span class="tag u">共 ${sessions.length} 个绑定</span></span>
-    </div>
-    <div class="panel-body tight">
-      <table class="data-table">
-        <thead><tr><th style="width: 35%;">会话对象 (群/用户)</th><th>Session ID (多轮上下文保持)</th></tr></thead>
-        <tbody>${sessionsRows || '<tr><td colspan="2" class="tc c-sub" style="padding: 24px;">暂无活跃的 DSH 会话记录</td></tr>'}</tbody>
-      </table>
-    </div>
-  </div>
-
-  <div class="panel" style="margin-top: 20px;">
-    <div class="panel-header">🚀 手动任务试运行</div>
-    <div class="panel-body">
-      <div style="margin-bottom: 8px; color: var(--text-sub); font-size: 13px;">直接通过控制台向后台 DSH 智能体派发计算、分析或代码执行任务：</div>
-      <textarea id="dshTask" placeholder="例如：请计算 2 的 32 次方减 1 是多少并说明原理" style="width: 100%; min-height: 80px; padding: 10px; border-radius: 6px; border: 1px solid var(--border); font-family: inherit; font-size: 14px; box-sizing: border-box; resize: vertical;"></textarea>
-      <div style="margin-top: 10px; display: flex; gap: 10px; align-items: center;">
-        <button class="btn accent" id="runDshTask">▶ 发起任务执行</button>
-        <span id="dshLoading" style="display: none; font-size: 13px; color: var(--text-sub);">⏳ 超级大脑思考与执行中，请稍候...</span>
-      </div>
-      <div id="dshResultBox" style="margin-top: 15px; display: none;">
-        <div style="font-weight: bold; margin-bottom: 6px; font-size: 13px;">执行输出结果：</div>
-        <pre id="dshResult" style="background: var(--bg-hover); padding: 14px; border-radius: 6px; border: 1px solid var(--border); white-space: pre-wrap; word-break: break-word; font-family: monospace; font-size: 13px; margin: 0;"></pre>
-      </div>
-    </div>
+    <iframe id="dshFrame" src="${esc(dshUrl)}" title="DeepSeek Harness WebUI" referrerpolicy="no-referrer"></iframe>
   </div>`;
 }
 
-async function bindDSH() {
-  const btn = document.getElementById('runDshTask');
-  if (!btn) return;
-  btn.onclick = async () => {
-    const input = document.getElementById('dshTask');
-    const task = (input && input.value || '').trim();
-    if (!task) {
-      toast('请输入任务内容', 'err');
-      return;
-    }
-    const box = document.getElementById('dshResultBox');
-    const resElem = document.getElementById('dshResult');
-    const loading = document.getElementById('dshLoading');
-
-    btn.disabled = true;
-    loading.style.display = 'inline';
-    box.style.display = 'none';
-
-    try {
-      const resp = await fetch('/api/dsh/execute', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({task, session_key: 'console:manual'})
-      });
-      const data = await resp.json();
-      box.style.display = 'block';
-      if (data.ok) {
-        resElem.textContent = data.result || '（任务执行完成，未返回文本输出）';
-        toast('任务执行成功');
-      } else {
-        resElem.textContent = '执行失败: ' + (data.error || '未知错误');
-        toast('执行失败: ' + (data.error || '未知错误'), 'err');
-      }
-    } catch (e) {
-      box.style.display = 'block';
-      resElem.textContent = '网络请求异常: ' + e;
-      toast('网络异常: ' + e, 'err');
-    } finally {
-      btn.disabled = false;
-      loading.style.display = 'none';
-    }
-  };
+function bindDSH() {
+  // 由 iframe 全功能自主接管，无需额外事件绑定
 }
