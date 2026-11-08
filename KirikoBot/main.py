@@ -1472,6 +1472,103 @@ def api_rate_limits_reset(group_id: str):
 def serve_sticker(filename: str):
     return send_from_directory(STICKER_DIR, filename)
 
+# ── DSH (DeepSeek Harness) Console APIs ───────────────
+@app.route("/api/dsh/status")
+def api_dsh_status():
+    """获取 DSH 运行时状态、版本、配置与工作区概览。"""
+    available = dsh_agent_tool.client.is_available()
+    bin_path = dsh_agent_tool.client._dsh_bin or ""
+    version = ""
+    if available and bin_path:
+        try:
+            r = subprocess.run([bin_path, "--version"], capture_output=True, text=True, timeout=5)
+            version = r.stdout.strip()
+        except Exception:
+            version = "unknown"
+
+    workspace = os.path.abspath(Config.DSH_WORKSPACE_DIR)
+    patch_file = os.path.expanduser(Config.DSH_PATCH_PATH)
+
+    # 读取活跃会话映射
+    sessions = []
+    try:
+        rows = db.fetch_data("SELECT key, value FROM app_state WHERE key LIKE 'dsh_session:%' ORDER BY key")
+        for k, v in rows:
+            sessions.append({
+                "target": k.replace("dsh_session:", ""),
+                "session_id": v,
+            })
+    except Exception:
+        pass
+
+    return jsonify({
+        "available": available,
+        "dsh_bin": bin_path,
+        "version": version,
+        "workspace": workspace,
+        "patch_file": patch_file,
+        "timeout": Config.DSH_TIMEOUT,
+        "sessions": sessions,
+    })
+
+
+@app.route("/api/dsh/plugins")
+def api_dsh_plugins():
+    """读取 DSH 的 profile 插件列表与依赖。"""
+    profile_dir = os.path.expanduser("~/.dsh/profiles/headless")
+    pkg_file = os.path.join(profile_dir, "package.json")
+    dsh_profile_file = os.path.join(profile_dir, "dsh.profile")
+
+    bundles = []
+    dependencies = {}
+    if os.path.exists(pkg_file):
+        try:
+            with open(pkg_file, encoding="utf-8") as f:
+                data = json.load(f)
+                dependencies = data.get("dependencies", {})
+                bundles = data.get("dsh", {}).get("profile", {}).get("bundles", [])
+        except Exception as e:
+            logger.debug("读取 package.json 失败: %s", e)
+
+    if not bundles and os.path.exists(dsh_profile_file):
+        try:
+            with open(dsh_profile_file, encoding="utf-8") as f:
+                d = json.load(f)
+                bundles = d.get("bundles", [])
+        except Exception:
+            pass
+
+    return jsonify({
+        "bundles": bundles,
+        "dependencies": dependencies,
+        "profile_dir": profile_dir,
+    })
+
+
+@app.route("/api/dsh/execute", methods=["POST"])
+def api_dsh_execute():
+    """从 Web 控制台手动向 DSH 委派执行任务并返回结果。"""
+    data = request.get_json(silent=True) or {}
+    task = str(data.get("task") or "").strip()
+    session_key = str(data.get("session_key") or "web_console").strip()
+    timeout = int(data.get("timeout") or 120)
+
+    if not task:
+        return jsonify({"ok": False, "error": "任务内容不能为空"}), 400
+
+    try:
+        result = dsh_agent_tool.client.run_task(task, session_key=session_key, timeout=timeout)
+        return jsonify({
+            "ok": True,
+            "task": task,
+            "session_key": session_key,
+            "result": result,
+        })
+    except Exception as e:
+        logger.exception("Web 控制台触发 DSH 任务失败")
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 def _webhook_signature_ok(raw_body: bytes) -> bool:
     """Verify LLBot's `x-signature` on an incoming event.
 
