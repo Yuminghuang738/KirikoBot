@@ -1,0 +1,198 @@
+"""DeepSeek Harness (DSH) Bridge Client.
+
+将复杂任务、代码编写/运行、深度分析与长程任务作为 Agent 工具桥接给本地 DSH 实例执行。
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import shutil
+import subprocess
+from typing import Any
+
+from config import Config
+
+logger = logging.getLogger(__name__)
+
+
+def _resolve_dsh_api_key() -> str:
+    """提取给 DSH 使用的 API 密钥。"""
+    # 1. 优先读取已有的环境变量
+    key = os.getenv("DEEPSEEK_API_KEY")
+    if key and key.strip():
+        return key.strip()
+
+    # 2. 尝试从 ~/.dsh/.credentials.yaml 中读取
+    cred_path = os.path.expanduser("~/.dsh/.credentials.yaml")
+    if os.path.exists(cred_path):
+        try:
+            with open(cred_path, encoding="utf-8") as f:
+                for line in f:
+                    if "DEEPSEEK_API_KEY:" in line:
+                        k = line.split("DEEPSEEK_API_KEY:", 1)[1].strip()
+                        k = k.strip("} ").strip("\"'")
+                        if k:
+                            return k
+        except Exception:
+            logger.debug("从 credentials.yaml 读取 DEEPSEEK_API_KEY 失败", exc_info=True)
+
+    # 3. 回退到 Config.DEEPSEEK_TOKEN
+    return (Config.DEEPSEEK_TOKEN or "").strip()
+
+
+class DshClient:
+    """DSH 任务调度与会话管理客户端。"""
+
+    def __init__(self, db: Any = None) -> None:
+        self.db = db
+        self._dsh_bin = shutil.which("dsh")
+
+    def is_available(self) -> bool:
+        """检查当前环境是否支持运行 DSH 实例。"""
+        if not Config.DSH_ENABLED:
+            return False
+        if not self._dsh_bin:
+            return False
+        return bool(_resolve_dsh_api_key())
+
+    def _get_stored_session(self, session_key: str) -> str | None:
+        if not self.db or not session_key:
+            return None
+        try:
+            sid = self.db.get_state(f"dsh_session:{session_key}", "")
+            return sid.strip() or None
+        except Exception:
+            return None
+
+    def _save_session(self, session_key: str, session_id: str) -> None:
+        if not self.db or not session_key or not session_id:
+            return
+        try:
+            self.db.set_state(f"dsh_session:{session_key}", session_id.strip())
+        except Exception:
+            logger.debug("保存 DSH session_id 失败", exc_info=True)
+
+    def run_task(
+        self,
+        task: str,
+        session_key: str = "",
+        timeout: int | None = None,
+    ) -> str:
+        """委派给 DSH 执行任务，返回最终文本结果。"""
+        if not self.is_available():
+            return "本地 DSH 超级大脑环境尚未配置就绪（未检测到可用的 dsh 运行时或 API 密钥）。"
+
+        task = (task or "").strip()
+        if not task:
+            return "任务内容为空。"
+
+        timeout = timeout or Config.DSH_TIMEOUT
+        workspace = os.path.abspath(Config.DSH_WORKSPACE_DIR)
+        os.makedirs(workspace, exist_ok=True)
+
+        api_key = _resolve_dsh_api_key()
+        env = os.environ.copy()
+        env["DEEPSEEK_API_KEY"] = api_key
+        # 清除 SOCKS 代理等干扰变量
+        for proxy_var in ("all_proxy", "ALL_PROXY", "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY"):
+            env.pop(proxy_var, None)
+
+        session_id = self._get_stored_session(session_key)
+
+        cmd = [
+            self._dsh_bin,
+            "--profile", "headless",
+            "--approval-policy", "never",
+        ]
+
+        # 如果有自定义 patch 配置，应用该 patch
+        patch_path = os.path.expanduser(Config.DSH_PATCH_PATH)
+        if os.path.exists(patch_path):
+            cmd.extend(["--patch", patch_path])
+
+        if session_id:
+            # 已有 Session，继续多轮上下文
+            cmd.extend(["--session-id", session_id, task])
+            try:
+                proc = subprocess.run(
+                    cmd,
+                    cwd=workspace,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+                if proc.returncode == 0:
+                    out = proc.stdout.strip()
+                    if out:
+                        return out
+                # 若旧 session 过期失效，清空记录并降级启动新 session
+                logger.warning("DSH 恢复会话 %s 失败 (code=%s)，尝试创建新会话", session_id, proc.returncode)
+                if self.db and session_key:
+                    self.db.set_state(f"dsh_session:{session_key}", "")
+            except subprocess.TimeoutExpired:
+                return "任务执行时间过长，已在后台中止。"
+            except Exception as e:
+                logger.exception("执行 DSH 续写任务失败")
+                return f"DSH 执行异常：{e}"
+
+        # 首次执行或新会话：通过 --json 捕获生成的 session_id
+        cmd_init = [
+            self._dsh_bin,
+            "--profile", "headless",
+            "--approval-policy", "never",
+            "--json",
+        ]
+        if os.path.exists(patch_path):
+            cmd_init.extend(["--patch", patch_path])
+        cmd_init.append(task)
+
+        new_session_id = None
+        final_answer: list[str] = []
+
+        try:
+            with subprocess.Popen(
+                cmd_init,
+                cwd=workspace,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            ) as proc:
+                try:
+                    stdout, stderr = proc.communicate(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    return "任务执行时间过长，已在后台中止。"
+
+                for line in stdout.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                        msg_type = data.get("type")
+                        if msg_type == "session":
+                            new_session_id = data.get("sessionId")
+                        elif msg_type == "text":
+                            final_answer.append(data.get("text", ""))
+                    except Exception:
+                        pass
+
+                if new_session_id and session_key:
+                    self._save_session(session_key, new_session_id)
+
+                reply = "".join(final_answer).strip()
+                if reply:
+                    return reply
+
+                if proc.returncode != 0:
+                    logger.warning("DSH 进程非零退出：%s, stderr: %s", proc.returncode, stderr[:200])
+                    return "超级大脑执行遇到了一点问题，没有产出有效回答。"
+
+                return "任务已执行完毕，但未产生文字输出。"
+
+        except Exception as e:
+            logger.exception("执行 DSH 初始化任务失败")
+            return f"执行超级大脑任务失败：{e}"
