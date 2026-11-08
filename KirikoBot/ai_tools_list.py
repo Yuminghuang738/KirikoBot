@@ -257,18 +257,20 @@ class AiTools:
         function_send_file = {
             "name": "send_file",
             "description": (
-                "发送文件给用户。当找到文件、生成文件或用户明确索要文件时调用此工具。"
+                "发送文件或图片给用户。当用户明确要求发送某文件、索要某产物、或者在上一轮任务执行后"
+                "追问“重发一下”、“把文件发我”、“把谱子发过来”时，必须果断调用此工具补发产物。"
+                "参数 file_path 若不知道具体路径填 'last' 即可自动补发最近生成的产物。"
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "本地文件的绝对路径或相对路径",
+                        "description": "文件的绝对路径、相对路径，或填 'last' 代表上一轮生成的产物",
                     },
                     "display_name": {
                         "type": "string",
-                        "description": "QQ中显示的文件名（可选，默认使用原文件名）",
+                        "description": "QQ中显示的文件名（可选）",
                     },
                 },
                 "required": ["file_path"],
