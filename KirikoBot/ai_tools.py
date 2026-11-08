@@ -9,6 +9,7 @@ import time
 from typing import Any
 
 from config import Config
+from dsh_client import DshClient
 
 logger = logging.getLogger(__name__)
 
@@ -1312,3 +1313,40 @@ class VoiceTool:
             return Config.VOICE_DEFAULT_CHARACTER
         return sorted(available)[0]
 
+
+# ══════════════════════════════════════════════════════════
+#  DSH Agent (超级大脑自主智能体)
+# ══════════════════════════════════════════════════════════
+
+class DshAgentTool:
+    """SELF_CONTAINED：自主执行重度/复杂任务（跑代码、深度研报、长文本分析），直接发回结果。"""
+
+    def __init__(self, db: Any) -> None:
+        self.db = db
+        self.client = DshClient(db)
+
+    def dsh_agent_call(self, robot: Any, ai: Any) -> None:
+        tool_calls = ai.ai_message.get("tool_calls")
+        _set_tool_meta(ai, tool_calls)
+
+        task = ""
+        if tool_calls:
+            try:
+                args = json.loads(tool_calls[0]["function"].get("arguments", "{}"))
+                task = args.get("task", "")
+            except (json.JSONDecodeError, TypeError):
+                task = ""
+        if not task:
+            task = robot.msg
+
+        # 先随口回一句安抚，告知正在调用超级大脑，避免长任务等待产生卡死感
+        robot.reply("收到，这个问题需要深度思考和跑代码，我让超级大脑跑一下，稍等哦～")
+
+        session_key = f"{robot.msg_type}:{robot.group_id or robot.user_id}"
+        result = self.client.run_task(task, session_key=session_key)
+
+        # 拟人分段短句发回结果
+        robot.reply_chunked(result)
+
+        ai.handled_summary = f"[超级大脑] 任务完成：{task[:50]}"
+        ai.user_text = f"超级大脑执行：{task}\n结果：{result[:300]}"
