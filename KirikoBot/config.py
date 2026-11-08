@@ -153,7 +153,8 @@ class Config:
     # ── DeepSeek Harness (DSH) 超级大脑扩展 ──────────────
     # 当遇到复杂编程、运行代码、深度分析或重度长任务时，作为 Agent 工具委派给本地 DSH 实例。
     DSH_ENABLED: Final[bool] = os.getenv("DSH_ENABLED", "1") == "1"
-    DSH_TIMEOUT: Final[int] = int(os.getenv("DSH_TIMEOUT") or 120)
+    # 默认 600 秒（10 分钟），确保复杂编程、深度代码运行与长程分析不被误超时掐断
+    DSH_TIMEOUT: Final[int] = int(os.getenv("DSH_TIMEOUT") or 600)
     DSH_PATCH_PATH: Final[str] = os.getenv("DSH_PATCH_PATH") or os.path.expanduser("~/.dsh/profiles/web/cordis.patch.yml")
     DSH_WORKSPACE_DIR: Final[str] = os.getenv("DSH_WORKSPACE_DIR") or "/tmp/kiriko_dsh_workspace"
 
