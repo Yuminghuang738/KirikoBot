@@ -255,6 +255,11 @@ class RobotServer:
             logger.info("send_file 识别为图片类型，走图片气泡消息发送: %s", effective_path)
             return self.reply_image(effective_path)
 
+        # 非图片二进制文件（PDF/ZIP等）：由于 NTQQ 的 upload_file 接口偶发富媒体传输风控拦截，
+        # 自动生成基于内网/Tailscale 的直接下载链接作为兜底，确保群友 100% 能够下载到产物
+        download_url = f"http://100.93.52.78:5000/download/{name}"
+        self.reply(f"📎 产物文件「{name}」已生成！\n若客户端未弹出文件下载，可直接在浏览器打开链接下载：\n{download_url}")
+
         if self.msg_type == "group":
             return self.llbot.upload_group_file(self.group_id or "", effective_path, name)
         else:
