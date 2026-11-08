@@ -155,18 +155,12 @@ class DshClient:
         api_key = _resolve_dsh_api_key()
         env = os.environ.copy()
         env["DEEPSEEK_API_KEY"] = api_key
-        # 确保 appuser 的 HOME 目录正确指向可写的主目录
-        if "HOME" not in env or env["HOME"] == "/":
-            env["HOME"] = "/home/appuser"
-        # DSH 会自动从 DSH_PATCH_PATH 读取补丁配置，无需在命令行传 --patch
+        env["HOME"] = "/home/appuser"
         if patch_path and os.path.exists(patch_path):
             env["DSH_PATCH_PATH"] = patch_path
 
-        cmd = [
-            self._dsh_bin,
-            "--profile", "headless",
-            "--approval-policy", "never",
-        ]
+        cmd = [self._dsh_bin, "--profile", "headless", "--approval-policy", "never"]
+
 
         if session_id:
             # 已有 Session，继续多轮上下文
