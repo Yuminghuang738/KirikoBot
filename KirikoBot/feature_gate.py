@@ -40,6 +40,7 @@ FEATURE_DEFS: list[dict[str, str]] = [
     {"key": "explain_self",    "label": "执行回放",     "category": "群功能",   "desc": "调试用：把上一轮的思维链原文/工具调用/回复原文照录发出来，不经 AI 转述"},
     {"key": "voice",           "label": "语音回复",     "category": "群功能",   "desc": "偶尔直接用语音说话，而不是打字（需要 QQ 的 AI 语音功能）"},
     {"key": "dsh_agent",       "label": "超级大脑",     "category": "重度任务", "desc": "调用本地 DeepSeek Harness 智能体执行复杂编程与深度分析"},
+    {"key": "send_file",       "label": "发送文件",     "category": "群功能",   "desc": "允许机器人向群聊或私聊发送本地文件"},
 ]
 
 FEATURE_KEYS: list[str] = [f["key"] for f in FEATURE_DEFS]
@@ -66,6 +67,7 @@ TOOL_FEATURE: dict[str, str] = {
     "explain_self": "explain_self",
     "send_voice": "voice",
     "dsh_agent": "dsh_agent",
+    "send_file": "send_file",
 }
 
 
