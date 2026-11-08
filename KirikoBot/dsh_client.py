@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def _resolve_dsh_api_key() -> str:
-    """提取给 DSH 使用的 API 密钥。"""
+    """提取给 DSH 使用的 API 密钥（与 Kiriko 统一使用同一凭证）。"""
     # 1. 优先读取已有的环境变量
     key = os.getenv("DEEPSEEK_API_KEY")
     if key and key.strip():
@@ -37,8 +37,58 @@ def _resolve_dsh_api_key() -> str:
         except Exception:
             logger.debug("从 credentials.yaml 读取 DEEPSEEK_API_KEY 失败", exc_info=True)
 
-    # 3. 回退到 Config.DEEPSEEK_TOKEN
+    # 3. 回退到 Config.DEEPSEEK_TOKEN（确保与 KirikoBot 完全对齐）
     return (Config.DEEPSEEK_TOKEN or "").strip()
+
+
+def _resolve_base_url() -> str:
+    """从 Config.DEEPSEEK_API 推出 API 根地址。"""
+    api = (Config.DEEPSEEK_API or "https://api.deepseek.com").strip()
+    for suffix in ("/v1/chat/completions", "/chat/completions"):
+        if api.endswith(suffix):
+            api = api[: -len(suffix)]
+            break
+    return api.rstrip("/")
+
+
+def ensure_dsh_patch_file(workspace_dir: str) -> str:
+    """动态生成与 KirikoBot 凭据与端点 100% 对齐的 DSH patch 文件。"""
+    patch_file = os.path.join(workspace_dir, "auto_dsh_patch.yml")
+    base_url = _resolve_base_url()
+    model_name = Config.DEEPSEEK_MODEL or "deepseek-flash"
+
+    # 如果存在用户显式指定的 DSH_PATCH_PATH 且文件存在，优先使用
+    custom_patch = os.path.expanduser(Config.DSH_PATCH_PATH)
+    if os.path.exists(custom_patch) and custom_patch != patch_file:
+        return custom_patch
+
+    patch_content = (
+        f"- id: llm-deepseek\n"
+        f"  name: \"@deepseek-ai/dsh-llm-deepseek-api-key\"\n"
+        f"  config:\n"
+        f"    baseURL: {base_url}\n"
+        f"    apiKeyEnv: DEEPSEEK_API_KEY\n"
+        f"    models:\n"
+        f"      - id: {model_name}\n"
+        f"        name: {model_name}\n"
+        f"        contextWindow: 1000000\n"
+        f"        maxTokens: 64000\n"
+        f"        inputModalities:\n"
+        f"          - text\n"
+        f"          - image\n"
+        f"- id: agent-default-model\n"
+        f"  name: \"@deepseek-ai/dsh-agent-default-model\"\n"
+        f"  config:\n"
+        f"    provider: deepseek-official\n"
+        f"    model: {model_name}\n"
+    )
+    try:
+        with open(patch_file, "w", encoding="utf-8") as f:
+            f.write(patch_content)
+        return patch_file
+    except Exception:
+        logger.debug("动态生成 auto_dsh_patch.yml 失败", exc_info=True)
+        return custom_patch
 
 
 class DshClient:
@@ -106,9 +156,9 @@ class DshClient:
             "--approval-policy", "never",
         ]
 
-        # 如果有自定义 patch 配置，应用该 patch
-        patch_path = os.path.expanduser(Config.DSH_PATCH_PATH)
-        if os.path.exists(patch_path):
+        # 确保自动生成或定位对齐的 DSH patch 配置
+        patch_path = ensure_dsh_patch_file(workspace)
+        if patch_path and os.path.exists(patch_path):
             cmd.extend(["--patch", patch_path])
 
         if session_id:
