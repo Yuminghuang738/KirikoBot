@@ -143,6 +143,46 @@ class TestSendFileToolWorkflow:
         assert sent[0][0] == str(dummy_file)
         assert sent[0][1] == "图表.png"
 
+    def test_send_file_resends_last_artifact_when_file_path_is_last(self, tmp_path):
+        dummy_tab = tmp_path / "nirvana_tab.pdf"
+        dummy_tab.write_text("pdf bytes", encoding="utf-8")
+
+        sent = []
+
+        class RobotStub:
+            msg_type = "private"
+            group_id = None
+            user_id = "u123"
+            def reply(self, t): pass
+            def send_file(self, fpath, display_name=""):
+                sent.append((fpath, display_name))
+                return True
+
+        class FakeDB:
+            def get_state(self, key, default=""):
+                if key == "last_artifact:private:u123":
+                    return str(dummy_tab)
+                return default
+
+        class AIStub:
+            ai_message = {
+                "tool_calls": [{
+                    "id": "c2",
+                    "function": {"name": "send_file", "arguments": json.dumps({"file_path": "刚才的谱子"})},
+                }]
+            }
+            handled_summary = ""
+            user_text = ""
+            airesponse_tool_id = ""
+            airesponse_tool_calls = []
+
+        tool = SendFileTool(FakeDB())
+        tool.send_file_call(RobotStub(), AIStub())
+
+        assert len(sent) == 1
+        assert sent[0][0] == str(dummy_tab)
+        assert "nirvana_tab.pdf" in sent[0][1]
+
 
 class TestDshAgentFileAutoSend:
     """验证当 Harness 找到或生成文件并带有 [FILE:/path] 标记时，自动触发文件上传。"""
