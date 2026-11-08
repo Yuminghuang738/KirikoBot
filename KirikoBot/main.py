@@ -563,8 +563,21 @@ def main_logic(robot: RobotServer) -> None:
             logger.info("🎯 图片先描述再走正常回复 (private) from %s", robot.user_name)
             _describe_image_into_message(robot, first_image_url)
 
-        # Only respond to @bot or private (after sticker flow)
-        if not robot.at_judgement and robot.msg_type != "private":
+        # In groups, respond to @bot or when quoting a message sent by the bot (多轮追问)
+        is_reply_to_bot = False
+        if robot.msg_type == "group" and getattr(robot.incoming, "reply", None):
+            try:
+                quoted_seq = robot.incoming.reply.message_seq
+                is_reply_to_bot = llbot.is_own_message(quoted_seq, robot.incoming.reply.text)
+                if not is_reply_to_bot and quoted_seq is not None:
+                    quoted = db.find_quoted(robot.group_id, quoted_seq)
+                    if quoted and quoted.get("is_own"):
+                        is_reply_to_bot = True
+            except Exception:
+                logger.debug("check is_reply_to_bot failed", exc_info=True)
+
+        # Only respond to @bot or quoting bot or private (after sticker flow)
+        if not robot.at_judgement and not is_reply_to_bot and robot.msg_type != "private":
             return
 
         # Skip bot accounts (self + other bots like QQ 小冰)
@@ -700,7 +713,7 @@ def main_logic(robot: RobotServer) -> None:
                    # answered even though final_text stayed empty.
                    handled=handled)
         if final_text:
-            robot.reply(final_text)
+            robot.reply_chunked(final_text)
 
     except Exception:
         logger.exception("Error for user %s", robot.user_id)
