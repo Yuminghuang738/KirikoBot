@@ -141,25 +141,26 @@ class DshClient:
         workspace = os.path.abspath(Config.DSH_WORKSPACE_DIR)
         os.makedirs(workspace, exist_ok=True)
 
+        session_id = self._get_stored_session(session_key)
+
+        # 确保自动生成或定位对齐的 DSH patch 配置
+        patch_path = ensure_dsh_patch_file(workspace)
+
         api_key = _resolve_dsh_api_key()
         env = os.environ.copy()
         env["DEEPSEEK_API_KEY"] = api_key
-        # 清除 SOCKS 代理等干扰变量
-        for proxy_var in ("all_proxy", "ALL_PROXY", "http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY"):
-            env.pop(proxy_var, None)
-
-        session_id = self._get_stored_session(session_key)
+        # 确保 appuser 的 HOME 目录正确指向可写的主目录
+        if "HOME" not in env or env["HOME"] == "/":
+            env["HOME"] = "/home/appuser"
+        # DSH 会自动从 DSH_PATCH_PATH 读取补丁配置，无需在命令行传 --patch
+        if patch_path and os.path.exists(patch_path):
+            env["DSH_PATCH_PATH"] = patch_path
 
         cmd = [
             self._dsh_bin,
             "--profile", "headless",
             "--approval-policy", "never",
         ]
-
-        # 确保自动生成或定位对齐的 DSH patch 配置
-        patch_path = ensure_dsh_patch_file(workspace)
-        if patch_path and os.path.exists(patch_path):
-            cmd.extend(["--patch", patch_path])
 
         if session_id:
             # 已有 Session，继续多轮上下文
@@ -193,10 +194,8 @@ class DshClient:
             "--profile", "headless",
             "--approval-policy", "never",
             "--json",
+            task,
         ]
-        if os.path.exists(patch_path):
-            cmd_init.extend(["--patch", patch_path])
-        cmd_init.append(task)
 
         new_session_id = None
         final_answer: list[str] = []
