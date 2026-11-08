@@ -155,6 +155,8 @@ class Config:
     DSH_ENABLED: Final[bool] = os.getenv("DSH_ENABLED", "1") == "1"
     # 默认 600 秒（10 分钟），确保复杂编程、深度代码运行与长程分析不被误超时掐断
     DSH_TIMEOUT: Final[int] = int(os.getenv("DSH_TIMEOUT") or 600)
+    # DSH 思考强度（默认 low 快速挡），大幅降低无意义空转与响应延迟（可选 low/medium/high/off）
+    DSH_REASONING_EFFORT: Final[str] = os.getenv("DSH_REASONING_EFFORT") or "low"
     DSH_PATCH_PATH: Final[str] = os.getenv("DSH_PATCH_PATH") or os.path.expanduser("~/.dsh/profiles/web/cordis.patch.yml")
     DSH_WORKSPACE_DIR: Final[str] = os.getenv("DSH_WORKSPACE_DIR") or "/tmp/kiriko_dsh_workspace"
 
