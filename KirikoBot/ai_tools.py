@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import random
+import re
 import threading
 import time
 from typing import Any
@@ -1319,7 +1320,7 @@ class VoiceTool:
 # ══════════════════════════════════════════════════════════
 
 class DshAgentTool:
-    """SELF_CONTAINED：自主执行重度/复杂任务（跑代码、深度研报、长文本分析），直接发回结果。"""
+    """SELF_CONTAINED：自主执行重度/复杂任务（跑代码、找文件、深度研报、长文本分析），直接发回结果与文件。"""
 
     def __init__(self, db: Any) -> None:
         self.db = db
@@ -1339,14 +1340,72 @@ class DshAgentTool:
         if not task:
             task = robot.msg
 
+        # 如果任务涉及查找文件或生成文件，追加提示让 Harness 输出统一标记
+        is_file_request = any(k in task for k in ("找文件", "搜文件", "发送文件", "发给我", "导出", "生成文件", "下载"))
+        augmented_task = task
+        if is_file_request:
+            augmented_task += (
+                "\n（注意：如果你找到或生成了用户需要的文件，请在回答末尾以单独一行标记输出："
+                "`[FILE:文件的绝对路径]`，系统会自动将该文件上传发送给用户。）"
+            )
+
         # 先随口回一句安抚，告知正在调用超级大脑，避免长任务等待产生卡死感
-        robot.reply("收到，这个问题需要深度思考和跑代码，我让超级大脑跑一下，稍等哦～")
+        robot.reply("收到，这个问题需要深度思考和处理，我让超级大脑跑一下，稍等哦～")
 
         session_key = f"{robot.msg_type}:{robot.group_id or robot.user_id}"
-        result = self.client.run_task(task, session_key=session_key)
+        result = self.client.run_task(augmented_task, session_key=session_key)
 
-        # 拟人分段短句发回结果
-        robot.reply_chunked(result)
+        # 检查是否包含文件发送标记 [FILE:/path/to/file]
+        found_files = re.findall(r"\[FILE:\s*([^\]]+)\]", result)
+        clean_result = re.sub(r"\[FILE:\s*[^\]]+\]", "", result).strip()
+
+        # 拟人分段短句发回文本结果
+        robot.reply_chunked(clean_result or "搞定啦，结果如上～")
+
+        # 自动触发文件发送
+        for fpath in found_files:
+            fpath = fpath.strip().strip("\"'")
+            if os.path.isfile(fpath):
+                logger.info("DshAgent 自动发送文件: %s", fpath)
+                robot.send_file(fpath)
 
         ai.handled_summary = f"[超级大脑] 任务完成：{task[:50]}"
         ai.user_text = f"超级大脑执行：{task}\n结果：{result[:300]}"
+
+
+# ══════════════════════════════════════════════════════════
+#  Send File (独立文件发送工具)
+# ══════════════════════════════════════════════════════════
+
+class SendFileTool:
+    """SELF_CONTAINED：直接调用 OneBot 接口发送本地文件。"""
+
+    def __init__(self, db: Any) -> None:
+        self.db = db
+
+    def send_file_call(self, robot: Any, ai: Any) -> None:
+        tool_calls = ai.ai_message.get("tool_calls")
+        _set_tool_meta(ai, tool_calls)
+
+        args = {}
+        if tool_calls:
+            try:
+                args = json.loads(tool_calls[0]["function"].get("arguments", "{}"))
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+
+        file_path = str(args.get("file_path") or "").strip()
+        display_name = str(args.get("display_name") or "").strip()
+
+        if not file_path or not os.path.isfile(file_path):
+            robot.reply(f"没找到这个文件呢：{os.path.basename(file_path) if file_path else '未指定'}")
+            ai.handled_summary = "[发送文件] 文件不存在"
+            return
+
+        ok = robot.send_file(file_path, display_name=display_name)
+        if ok:
+            robot.reply(f"文件「{display_name or os.path.basename(file_path)}」已经发出去啦～")
+            ai.handled_summary = f"[发送文件] 成功：{display_name or os.path.basename(file_path)}"
+        else:
+            robot.reply("文件发送失败了（可能是文件太大或安全拦截）")
+            ai.handled_summary = "[发送文件] 发送失败"
