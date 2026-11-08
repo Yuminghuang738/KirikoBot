@@ -95,9 +95,9 @@ def ensure_dsh_patch_file(workspace_dir: str) -> str:
         return custom_patch
 
 
-# ── DSH 行为守则与安全防护（提速、避坑、防破坏） ───────────
+# ── DSH 行为守则与安全防护（提速、避坑、防破坏、自治交付） ───────────
 DSH_GUARDRAILS = """
-【DSH 智能体执行准则（速度、安全与复用）】
+【DSH 智能体执行与自主交付准则】
 1. 提速与执行效率（最重要的原则）：
    - 快速出结果：思维链聚焦于具体执行，绝不进行冗长无意义的来回反思或打转；
    - 网络资源下载：在中国大陆网络环境下，拉取依赖或下载网络资源时，必须优先使用国内可用镜像源或高速 CDN（如清华源/阿里云/国内镜像/Apple CDN），严禁盲目直接访问已被阻断的国外原站（如 Wikipedia/Archive.org 根站）；
@@ -106,11 +106,15 @@ DSH_GUARDRAILS = """
    - 严禁任何破坏性系统命令（如 rm -rf /、mkfs、修改系统关键目录）；
    - 严禁读取、打印或向外泄露任何敏感凭据与文件（如 .env、.pem、.key、id_rsa、token、password 等）；
    - 严禁扫描局域网敏感端口或尝试提权渗透；所有读写限制在当前工作区与临时目录内。
-3. 会话成果复用：
+3. 自主 QQ 结果交付（核心交互机制）：
+   - 当你完成了计算、代码编写、数据分析、或找到了/生成了目标文件（包括乐谱、图片、文档）时：
+     **优先通过 bash 命令调用系统交付工具，直接将最终结果推送到用户的 QQ 中！**
+   - 交付命令标准语法：
+     `python3 /app/dsh_deliver.py --channel "$DSH_DELIVER_CHANNEL" --text "你的总结与回答文本" --file "/文件的绝对路径"`
+     （纯文字只传 --text，纯文件只传 --file，两者都有同时传；亦支持在回答结尾标记输出 `[FILE:文件的绝对路径]` 由系统自动兜底回传）
+   - 如果涉及乐谱或图表，强烈建议渲染输出一份 .png/.jpg 图片作为 --file 传出，用户在 QQ 气泡中直接秒看大图体验最佳。
+4. 会话成果复用：
    - 优先复用本会话之前已经下载的文件、生成的代码模块与上下文结论，不要推倒重来。
-   - 文件回传：如果生成或找到了用户需要的目标文件，必须在回答末尾以单独一行输出 `[FILE:文件的绝对路径]`。
-4. 视觉与乐谱友好产物原则：
-   - 如果任务涉及乐谱（吉他谱/钢琴谱）、图表、卡片等视觉化内容，除了生成标准文件（如 PDF/HTML）外，强烈建议同时通过代码直接渲染输出一份清晰的图片格式（.png/.jpg）并输出 `[FILE:图片绝对路径]`，这样系统能直接以图片气泡发送到 QQ 对话中，用户可直接在手机上全屏看谱、看图，体验最佳。
 """
 
 
@@ -205,6 +209,8 @@ class DshClient:
         env = os.environ.copy()
         env["DEEPSEEK_API_KEY"] = api_key
         env["HOME"] = "/home/appuser"
+        if session_key:
+            env["DSH_DELIVER_CHANNEL"] = session_key
         if patch_path and os.path.exists(patch_path):
             env["DSH_PATCH_PATH"] = patch_path
 
