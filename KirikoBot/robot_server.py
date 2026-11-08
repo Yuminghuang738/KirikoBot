@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import re
+import time
 from typing import Any
 
 from llbot_client import IncomingMessage, LLBotClient, MessageBuilder
@@ -20,6 +22,53 @@ def install_rate_limiter(limiter: Any) -> None:
 
 def get_rate_limiter() -> Any:
     return _rate_limiter
+
+
+def split_into_pacing_chunks(text: str, max_chunks: int = 3) -> list[str]:
+    """把一段回复拆解为多个自然的短句，模仿正常人类连发多条消息的打字节奏。
+
+    保护规则：
+    - Markdown 代码块（```）、列表、表格绝不切分，保持排版与代码完整。
+    - 短文本（<= 35 字符）保持单条发完，不画蛇添足。
+    - 优先按照自然换行切分段落。
+    - 长单句按句末标点（。！？!?~…）切分，合并为最多 max_chunks 段。
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+    # 保护结构化内容
+    if "```" in text or "\n-" in text or "\n1." in text or "|" in text:
+        return [text]
+
+    # 1. 优先按换行符切分（如果是多段/换行回答）
+    lines = [p.strip() for p in text.split("\n") if p.strip()]
+    if 1 < len(lines) <= max_chunks:
+        if all(len(line) >= 3 for line in lines):
+            return lines
+
+    # 短文本单行直接一条发完
+    if len(text) <= 35:
+        return [text]
+
+    # 2. 长单行文本按句子标点拆分
+    sentences = re.split(r"(?<=[。！？!?~…])\s*", text)
+    sentences = [s.strip() for s in sentences if s.strip()]
+    if len(sentences) <= 1:
+        return [text]
+
+    chunks: list[str] = []
+    curr = ""
+    for s in sentences:
+        if not curr:
+            curr = s
+        elif len(curr) + len(s) < 45 and len(chunks) + 1 < max_chunks:
+            curr += " " + s
+        else:
+            chunks.append(curr)
+            curr = s
+    if curr:
+        chunks.append(curr)
+    return chunks[:max_chunks]
 
 
 class RobotServer:
@@ -115,6 +164,33 @@ class RobotServer:
         if not self._allowed_to_send():
             return False
         return self.llbot.reply_to(self.incoming, text)
+
+    def reply_chunked(self, text: str) -> bool:
+        """分段式拟人发送：模仿人类打字习惯，将长回复切成 1~3 个短句按顺序发送。
+
+        - 第一条用 reply（在群里带 @引用 明确指向原问题）。
+        - 后续短句用 send_text（纯文字紧随其后，不重复 @ 和引用，体验自然）。
+        - 单轮判定一次限流额度，避免后续短句被误杀。
+        """
+        if not self._allowed_to_send():
+            return False
+
+        chunks = split_into_pacing_chunks(text)
+        if not chunks:
+            return False
+
+        # 第一句带引用/@回复
+        ok = self.llbot.reply_to(self.incoming, chunks[0])
+        if not ok or len(chunks) == 1:
+            return ok
+
+        # 随后的句子分批发送，带有自然的打字间隔
+        for prev_chunk, next_chunk in zip(chunks[:-1], chunks[1:]):
+            delay = min(1.2, max(0.4, len(prev_chunk) * 0.03))
+            time.sleep(delay)
+            self.llbot.send_text(self.incoming, next_chunk)
+
+        return True
 
     def send_text(self, text: str) -> bool:
         """Send plain text without @ prefix."""
