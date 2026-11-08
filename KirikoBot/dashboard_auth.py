@@ -29,10 +29,11 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 # Endpoint names exempt from dashboard auth:
-#   receive  — the OneBot webhook (carries its own HMAC signature)
-#   static   — Flask's static file endpoint
-#   healthz  — container healthcheck; must stay reachable without credentials
-_WEBHOOK_ENDPOINTS = {"receive", "static", "healthz"}
+#   receive              — the OneBot webhook (carries its own HMAC signature)
+#   static               — Flask's static file endpoint
+#   healthz              — container healthcheck; must stay reachable without credentials
+#   download_shared_file — 公共产物下载直链（供群友直接点击下载生成的乐谱/文件）
+_WEBHOOK_ENDPOINTS = {"receive", "static", "healthz", "download_shared_file"}
 _PASSWORD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".dashboard_password")
 
 
