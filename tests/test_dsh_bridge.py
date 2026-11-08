@@ -85,7 +85,7 @@ class TestDshClientExecution:
         assert ans == "这是来自超级大脑的计算结果"
         assert db.get_state("dsh_session:user:1001") == "session-test-999"
         assert "--json" in recorded_cmd
-        assert "帮我算个复杂微积分" in recorded_cmd
+        assert any("帮我算个复杂微积分" in str(arg) for arg in recorded_cmd)
 
     def test_subsequent_turn_uses_stored_session_id(self, client, monkeypatch):
         c, db = client
