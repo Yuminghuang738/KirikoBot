@@ -1875,7 +1875,7 @@ startLogSSE();
 loadPage('overview');
 setInterval(refreshLLBotPill,30000);
 
-// ── DSH Console View (原生 WebUI 完整内嵌) ──
+// ── DSH Official WebUI (官方原生控制台完整内嵌) ──
 async function dshHTML() {
   let token = '';
   let port = 3085;
@@ -1889,28 +1889,28 @@ async function dshHTML() {
   }
 
   const host = location.hostname || '100.93.52.78';
-  const query = token ? `?token=${encodeURIComponent(token)}` : '';
-  const dshUrl = `http://${host}:${port}/${query}`;
+  const query = token ? ('?token=' + encodeURIComponent(token)) : '';
+  const dshUrl = 'http://' + host + ':' + port + '/' + query;
 
-  return `<div class="page-head">
-    <div>
-      <div class="ph-title">🧠 <span class="em">超级大脑 (DSH)</span></div>
-      <div class="ph-sub">DeepSeek Harness 官方 WebUI 完整内嵌 · 会话树、插件生态、自主智能体全功能</div>
-    </div>
-    <div class="ph-right">
-      <button class="btn" onclick="var f=document.getElementById('dshFrame');if(f)f.src=f.src">🔄 重新加载</button>
-      <a class="btn accent" href="${esc(dshUrl)}" target="_blank" rel="noopener">↗ 新标签打开</a>
-    </div>
-  </div>
-  <div class="embed-shell">
-    <div class="embed-bar">
-      <span>🔗 ${esc(dshUrl)}</span>
-      <span class="eb-right"><span class="pill info">DSH 原生 Web 界面就绪</span></span>
-    </div>
-    <iframe id="dshFrame" src="${esc(dshUrl)}" title="DeepSeek Harness WebUI" referrerpolicy="no-referrer"></iframe>
-  </div>`;
+  return '<div class="page-head">' +
+    '<div>' +
+      '<div class="ph-title">🧠 <span class="em">超级大脑 (DSH)</span></div>' +
+      '<div class="ph-sub">DeepSeek Harness 官方 WebUI 完整内嵌 · 会话树、插件生态、自主智能体全功能</div>' +
+    '</div>' +
+    '<div class="ph-right">' +
+      '<button class="btn" onclick="var f=document.getElementById(\'dshFrame\');if(f)f.src=f.src">🔄 重新加载</button>' +
+      '<a class="btn accent" href="' + esc(dshUrl) + '" target="_blank" rel="noopener">↗ 新标签打开</a>' +
+    '</div>' +
+  '</div>' +
+  '<div class="embed-shell">' +
+    '<div class="embed-bar">' +
+      '<span>🔗 ' + esc(dshUrl) + '</span>' +
+      '<span class="eb-right"><span class="pill info">DSH 原生 Web 界面就绪</span></span>' +
+    '</div>' +
+    '<iframe id="dshFrame" src="' + esc(dshUrl) + '" title="DeepSeek Harness WebUI" referrerpolicy="no-referrer"></iframe>' +
+  '</div>';
 }
 
 function bindDSH() {
-  // 由 iframe 全功能自主接管，无需额外事件绑定
+  // 原生 WebUI 由 iframe 完全自主接管，无需额外事件绑定
 }
