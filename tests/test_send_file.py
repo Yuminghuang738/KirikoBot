@@ -102,6 +102,26 @@ class TestRobotServerSendFile:
         assert uid == "333"
         assert name == "report.pdf"
 
+    def test_send_file_bypasses_ratelimit_when_turn_already_authorized(self, env_setup):
+        group_robot, _, fake_llbot, normal_file, _ = env_setup
+        # 模拟限流器已经用尽配额（下一次 allow 返回 False）
+        class MockFullLimiter:
+            def allow(self, gid, uid): return False
+
+        from robot_server import install_rate_limiter
+        install_rate_limiter(MockFullLimiter())
+
+        # 如果没有回合授权，应被限流拦截
+        assert group_robot.send_file(normal_file) is False
+
+        # 模拟当前回合已经通过了文字回复的入口授权（_turn_authorized = True）
+        group_robot._turn_authorized = True
+        # 伴随的文件/图片产物必须放行送达，绝不能被限流器误杀
+        assert group_robot.send_file(normal_file) is True
+        assert len(fake_llbot.uploaded_group_files) == 1
+
+        install_rate_limiter(None)
+
 
 class TestSendFileToolWorkflow:
     def test_tool_registration(self):

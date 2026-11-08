@@ -136,13 +136,22 @@ class RobotServer:
     # 注意：定时推送（scheduler.py）直接走 llbot，不经过这里 —— 那不是「回复」。
 
     def _allowed_to_send(self) -> bool:
+        # 同一回合只要入口通过了一次放行，后续的分段短句与伴随文件/图片全部放行，
+        # 绝不让同一轮产生的图文被限流器腰斩或吞掉
+        if getattr(self, "_turn_authorized", False):
+            return True
         if _rate_limiter is None:
+            self._turn_authorized = True
             return True
         try:
-            return _rate_limiter.allow(self.group_id or "", self.user_id)
+            ok = _rate_limiter.allow(self.group_id or "", self.user_id)
+            if ok:
+                self._turn_authorized = True
+            return ok
         except Exception:
             # 限流自己出问题不该把聊天堵死
             logger.debug("限流判定异常，放行", exc_info=True)
+            self._turn_authorized = True
             return True
 
     def send(self, message: list[dict[str, Any]]) -> bool:
@@ -253,12 +262,12 @@ class RobotServer:
         img_exts = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp")
         if fname.endswith(img_exts):
             logger.info("send_file 识别为图片类型，走图片气泡消息发送: %s", effective_path)
-            return self.reply_image(effective_path)
+            return self.llbot.reply_image(self.incoming, effective_path)
 
         # 非图片二进制文件（PDF/ZIP等）：由于 NTQQ 的 upload_file 接口偶发富媒体传输风控拦截，
         # 自动生成基于内网/Tailscale 的直接下载链接作为兜底，确保群友 100% 能够下载到产物
         download_url = f"http://100.93.52.78:5000/download/{name}"
-        self.reply(f"📎 产物文件「{name}」已生成！\n若客户端未弹出文件下载，可直接在浏览器打开链接下载：\n{download_url}")
+        self.llbot.reply_to(self.incoming, f"📎 产物文件「{name}」已生成！\n若客户端未弹出文件下载，可直接在浏览器打开链接下载：\n{download_url}")
 
         if self.msg_type == "group":
             return self.llbot.upload_group_file(self.group_id or "", effective_path, name)
