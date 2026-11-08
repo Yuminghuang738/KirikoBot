@@ -15,6 +15,7 @@ QQRobot/
 ├── ai_server.py          # DeepSeek AI 请求封装
 ├── ai_tools.py           # 工具实现类（Tarot, Weather, MusicTool 等）
 ├── ai_tools_list.py      # 工具函数定义（给 AI 的 function calling schema）
+├── dsh_client.py         # DeepSeek Harness (DSH) 智能体桥接客户端
 ├── config.py             # 环境变量配置
 ├── database_manager.py   # SQLite 数据库管理
 ├── feature_gate.py       # 每群/每用户功能开关（FEATURE_DEFS 注册表 + FeatureGate）

@@ -235,6 +235,25 @@ class AiTools:
                 "required": ["text"],
             },
         }
+        function_dsh_agent = {
+            "name": "dsh_agent",
+            "description": (
+                "【超级大脑/深度智能体】当用户提出复杂的重度任务时调用（如：要求编写并实际运行代码、"
+                "做复杂数学推导计算、多步骤长程任务规划、查阅大文件或深度逻辑分析等）。"
+                "此工具会唤起具有全套运行环境的本地自主 Agent 去实际执行并生成报告。"
+                "注意：日常聊天、简单问答、普通接梗绝不调用；只有需要真正跑代码或深度求解时才调用。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "完整的任务描述与执行要求",
+                    }
+                },
+                "required": ["task"],
+            },
+        }
         function_read_context = {            "name": "read_context",
             "description": (
                 "读本群最近的聊天记录。**只有当前这句话单独看读不懂时才用**——"
@@ -272,6 +291,7 @@ class AiTools:
         tool_read_context = {"type": "function", "function": function_read_context}
         tool_explain_self = {"type": "function", "function": function_explain_self}
         tool_send_voice = {"type": "function", "function": function_send_voice}
+        tool_dsh_agent = {"type": "function", "function": function_dsh_agent}
 
         return [
             tool_tarot,
@@ -292,4 +312,5 @@ class AiTools:
             tool_read_context,
             tool_explain_self,
             tool_send_voice,
+            tool_dsh_agent,
         ]

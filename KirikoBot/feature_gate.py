@@ -39,6 +39,7 @@ FEATURE_DEFS: list[dict[str, str]] = [
     {"key": "context_read",    "label": "语境读取",     "category": "群功能",   "desc": "需要时读取群里的近期聊天记录来理解语境"},
     {"key": "explain_self",    "label": "执行回放",     "category": "群功能",   "desc": "调试用：把上一轮的思维链原文/工具调用/回复原文照录发出来，不经 AI 转述"},
     {"key": "voice",           "label": "语音回复",     "category": "群功能",   "desc": "偶尔直接用语音说话，而不是打字（需要 QQ 的 AI 语音功能）"},
+    {"key": "dsh_agent",       "label": "超级大脑",     "category": "重度任务", "desc": "调用本地 DeepSeek Harness 智能体执行复杂编程与深度分析"},
 ]
 
 FEATURE_KEYS: list[str] = [f["key"] for f in FEATURE_DEFS]
@@ -64,6 +65,7 @@ TOOL_FEATURE: dict[str, str] = {
     "read_context": "context_read",
     "explain_self": "explain_self",
     "send_voice": "voice",
+    "dsh_agent": "dsh_agent",
 }
 
 
