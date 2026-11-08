@@ -183,6 +183,47 @@ class TestSendFileToolWorkflow:
         assert sent[0][0] == str(dummy_tab)
         assert "nirvana_tab.pdf" in sent[0][1]
 
+    def test_send_file_falls_back_to_user_level_artifact(self, tmp_path):
+        """测试用户在私聊产生文件，跑到群里喊重发，能够自动通过 user:uid 命中产物。"""
+        dummy_file = tmp_path / "global_shared.pdf"
+        dummy_file.write_text("global content", encoding="utf-8")
+
+        sent = []
+
+        class GroupRobotStub:
+            msg_type = "group"
+            group_id = "g_test_999"
+            user_id = "u123"
+            def reply(self, t): pass
+            def send_file(self, fpath, display_name=""):
+                sent.append((fpath, display_name))
+                return True
+
+        class FakeDB:
+            def get_state(self, key, default=""):
+                # 群里没有该产物记录，但该用户全局记录存在
+                if key == "last_artifact:user:u123":
+                    return str(dummy_file)
+                return default
+
+        class AIStub:
+            ai_message = {
+                "tool_calls": [{
+                    "id": "c3",
+                    "function": {"name": "send_file", "arguments": json.dumps({"file_path": "重发"})},
+                }]
+            }
+            handled_summary = ""
+            user_text = ""
+            airesponse_tool_id = ""
+            airesponse_tool_calls = []
+
+        tool = SendFileTool(FakeDB())
+        tool.send_file_call(GroupRobotStub(), AIStub())
+
+        assert len(sent) == 1
+        assert sent[0][0] == str(dummy_file)
+
 
 class TestDshAgentFileAutoSend:
     """验证当 Harness 找到或生成文件并带有 [FILE:/path] 标记时，自动触发文件上传。"""
