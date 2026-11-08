@@ -249,6 +249,12 @@ class RobotServer:
         container_shared_path = f"/app/shared_files/{name}"
         effective_path = container_shared_path if os.path.exists("/app/shared_files") else target_path
 
+        # 智能区分：图片文件直接发气泡图片，体验远好于冷冰冰的群文件且不被富媒体风控拦截
+        img_exts = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp")
+        if fname.endswith(img_exts):
+            logger.info("send_file 识别为图片类型，走图片气泡消息发送: %s", effective_path)
+            return self.reply_image(effective_path)
+
         if self.msg_type == "group":
             return self.llbot.upload_group_file(self.group_id or "", effective_path, name)
         else:
