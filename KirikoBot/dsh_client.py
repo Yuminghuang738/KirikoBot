@@ -95,6 +95,12 @@ class DshClient:
     """DSH 任务调度与会话管理客户端。"""
 
     def __init__(self, db: Any = None) -> None:
+        if db is None:
+            try:
+                from database_manager import DatabaseManager
+                db = DatabaseManager()
+            except Exception:
+                db = None
         self.db = db
         self._dsh_bin = shutil.which("dsh")
 
