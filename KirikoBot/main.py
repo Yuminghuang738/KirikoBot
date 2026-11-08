@@ -1472,6 +1472,17 @@ def api_rate_limits_reset(group_id: str):
 def serve_sticker(filename: str):
     return send_from_directory(STICKER_DIR, filename)
 
+@app.route("/download/<path:filename>")
+def download_shared_file(filename: str):
+    """供群友或用户直接下载生成的产物（绕过腾讯 NTQQ 文件传输风控拦截）。"""
+    shared_dir = os.path.abspath(
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "shared_files")
+    )
+    fname_lower = os.path.basename(filename).lower()
+    if any(p in fname_lower for p in (".env", ".pem", ".key", "id_rsa", "password", "token")):
+        return jsonify({"ok": False, "error": "禁止访问敏感文件"}), 403
+    return send_from_directory(shared_dir, filename, as_attachment=True)
+
 # ── DSH (DeepSeek Harness) Console APIs ───────────────
 @app.route("/api/dsh/status")
 def api_dsh_status():

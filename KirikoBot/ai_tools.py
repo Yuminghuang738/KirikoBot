@@ -1365,6 +1365,10 @@ class DshAgentTool:
         if last_file and self.db:
             try:
                 self.db.set_state(f"last_artifact:{session_key}", last_file)
+                # 同时记录该用户全局最近产生的产物，解决私聊要产物、群聊要求重发（或跨场景追问）时的断联问题
+                uid = getattr(robot, "user_id", "")
+                if uid:
+                    self.db.set_state(f"last_artifact:user:{uid}", last_file)
             except Exception:
                 pass
 
@@ -1399,10 +1403,16 @@ class SendFileTool:
         target_id = getattr(robot, "group_id", None) or getattr(robot, "user_id", "")
         session_key = f"{msg_type}:{target_id}"
 
-        # 支持重发：如果未指定路径或表示重发，尝试读取本会话最近一次生成的产物
-        if (not file_path or any(k in file_path.lower() for k in ("last", "刚才", "上次", "上一轮", "刚才的文件", "谱子", "pdf", "图片"))) and self.db:
+        # 支持重发：如果未指定路径或表示重发，尝试读取本会话或该用户最近一次生成的产物
+        if (not file_path or any(k in file_path.lower() for k in ("last", "刚才", "上次", "上一轮", "刚才的文件", "谱子", "pdf", "图片", "重发"))) and self.db:
             try:
+                # 1. 优先查本群/本私聊会话
                 cached = self.db.get_state(f"last_artifact:{session_key}", "")
+                # 2. 本会话没有，查该用户全局最近产生的产物（支持私聊产生、群聊重发）
+                uid = getattr(robot, "user_id", "")
+                if (not cached or not os.path.isfile(cached)) and uid:
+                    cached = self.db.get_state(f"last_artifact:user:{uid}", "")
+
                 if cached and os.path.isfile(cached):
                     file_path = cached
                     if not display_name:
