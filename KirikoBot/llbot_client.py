@@ -523,6 +523,32 @@ class LLBotClient:
             logger.exception("get_group_member_info failed")
             return None
 
+    def upload_group_file(self, group_id: str, file_path: str, name: str) -> bool:
+        """上传文件到群：调用 OneBot 11 的 upload_group_file 接口。"""
+        try:
+            r = self._session.post(
+                f"{self.api_url}/upload_group_file",
+                json={"group_id": group_id, "file": file_path, "name": name},
+                timeout=self.timeout,
+            )
+            return r.status_code == 200
+        except Exception:
+            logger.exception("upload_group_file failed")
+            return False
+
+    def upload_private_file(self, user_id: str, file_path: str, name: str) -> bool:
+        """上传文件到私聊：调用 OneBot 11 的 upload_private_file 接口。"""
+        try:
+            r = self._session.post(
+                f"{self.api_url}/upload_private_file",
+                json={"user_id": user_id, "file": file_path, "name": name},
+                timeout=self.timeout,
+            )
+            return r.status_code == 200
+        except Exception:
+            logger.exception("upload_private_file failed")
+            return False
+
     # ── Group member list ───────────────────────────────
 
     def get_group_member_list(self, group_id: str) -> list[dict[str, Any]]:

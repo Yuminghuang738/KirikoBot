@@ -23,7 +23,7 @@ from ai_tools import (
     ListRemindersTool, DeleteReminderTool,
     AffectionTool, AffectionLeaderboardTool,
     RecallMessageTool, GroupStatsTool, ReadContextTool,
-    ExplainSelfTool, VoiceTool, DshAgentTool,
+    ExplainSelfTool, VoiceTool, DshAgentTool, SendFileTool,
 )
 from affection_service import AffectionService
 from balance_service import BalanceService
@@ -132,6 +132,7 @@ read_context_tool = ReadContextTool(db, pkg)
 explain_self_tool = ExplainSelfTool(db, pkg)
 voice_tool = VoiceTool(db, pkg, llbot)
 dsh_agent_tool = DshAgentTool(db)
+send_file_tool = SendFileTool(db)
 
 # Persist the bot's own outgoing messages so transcripts are complete and
 # "recall the last thing I said" works across restarts.
@@ -179,6 +180,7 @@ ROUTES = {
     "explain_self": explain_self_tool.explain_self_call,
     "send_voice": voice_tool.voice_call,
     "dsh_agent": dsh_agent_tool.dsh_agent_call,
+    "send_file": send_file_tool.send_file_call,
 }
 
 # Self-contained tools format and send their own reply — no AI follow-up needed
@@ -194,6 +196,8 @@ SELF_CONTAINED_TOOLS = {
     "send_voice",
     # dsh_agent autonomously executes deep agent tasks and sends its own reply
     "dsh_agent",
+    # send_file uploads the file directly via OneBot API
+    "send_file",
 }
 
 # ── History (only recent context, filtered for clarity) ──

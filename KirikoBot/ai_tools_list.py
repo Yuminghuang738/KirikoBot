@@ -239,8 +239,8 @@ class AiTools:
             "name": "dsh_agent",
             "description": (
                 "【超级大脑/深度智能体】当用户提出复杂的重度任务时调用（如：要求编写并实际运行代码、"
-                "做复杂数学推导计算、多步骤长程任务规划、查阅大文件或深度逻辑分析等）。"
-                "此工具会唤起具有全套运行环境的本地自主 Agent 去实际执行并生成报告。"
+                "做复杂数学推导计算、多步骤长程任务规划、查阅大文件或深度逻辑分析、查找或导出文件等）。"
+                "此工具会唤起具有全套运行环境的本地自主 Agent 去实际执行并生成报告或定位文件。"
                 "注意：日常聊天、简单问答、普通接梗绝不调用；只有需要真正跑代码或深度求解时才调用。"
             ),
             "parameters": {
@@ -248,10 +248,30 @@ class AiTools:
                 "properties": {
                     "task": {
                         "type": "string",
-                        "description": "完整的任务描述与执行要求",
+                        "description": "完整的任务描述与执行要求（如查找文件、运行代码等）",
                     }
                 },
                 "required": ["task"],
+            },
+        }
+        function_send_file = {
+            "name": "send_file",
+            "description": (
+                "发送文件给用户。当找到文件、生成文件或用户明确索要文件时调用此工具。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "本地文件的绝对路径或相对路径",
+                    },
+                    "display_name": {
+                        "type": "string",
+                        "description": "QQ中显示的文件名（可选，默认使用原文件名）",
+                    },
+                },
+                "required": ["file_path"],
             },
         }
         function_read_context = {            "name": "read_context",
@@ -292,6 +312,7 @@ class AiTools:
         tool_explain_self = {"type": "function", "function": function_explain_self}
         tool_send_voice = {"type": "function", "function": function_send_voice}
         tool_dsh_agent = {"type": "function", "function": function_dsh_agent}
+        tool_send_file = {"type": "function", "function": function_send_file}
 
         return [
             tool_tarot,
@@ -313,4 +334,5 @@ class AiTools:
             tool_explain_self,
             tool_send_voice,
             tool_dsh_agent,
+            tool_send_file,
         ]
