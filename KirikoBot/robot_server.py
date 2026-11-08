@@ -204,6 +204,56 @@ class RobotServer:
             return False
         return self.llbot.reply_image(self.incoming, path)
 
+    def send_file(self, file_path: str, display_name: str = "") -> bool:
+        """发送本地文件到群聊或私聊（带安全黑名单与容器共享目录暂存）。"""
+        import os
+        import shutil
+
+        if not self._allowed_to_send():
+            return False
+
+        if not file_path or not os.path.isfile(file_path):
+            logger.warning("send_file 失败：文件不存在 %r", file_path)
+            return False
+
+        # 安全沙盒拦截：严禁泄露密钥、配置、密码与凭据
+        fname = os.path.basename(file_path).lower()
+        full_lower = os.path.abspath(file_path).lower()
+        sensitive_patterns = (
+            ".env", "id_rsa", "id_ed25519", ".pem", ".key",
+            "password", "secret", "token", "credential", ".git",
+        )
+        if any(p in fname or f"/{p}" in full_lower or f"_{p}" in full_lower for p in sensitive_patterns):
+            logger.error("send_file 触发安全拦截：禁止发送敏感文件 %r", file_path)
+            return False
+
+        name = display_name or os.path.basename(file_path)
+
+        # 确保文件位于与 llbot 容器共享的目录下
+        shared_dir = os.path.abspath(
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "shared_files")
+        )
+        os.makedirs(shared_dir, exist_ok=True)
+
+        target_path = file_path
+        # 若当前文件不在 shared_files，拷贝一份过去确保 llbot 容器可见
+        if not os.path.abspath(file_path).startswith(shared_dir):
+            target_path = os.path.join(shared_dir, name)
+            try:
+                shutil.copyfile(file_path, target_path)
+            except Exception:
+                logger.exception("send_file 复制文件到共享目录失败")
+                return False
+
+        # Docker 容器中共享挂载的绝对路径是 /app/shared_files/xxx
+        container_shared_path = f"/app/shared_files/{name}"
+        effective_path = container_shared_path if os.path.exists("/app/shared_files") else target_path
+
+        if self.msg_type == "group":
+            return self.llbot.upload_group_file(self.group_id or "", effective_path, name)
+        else:
+            return self.llbot.upload_private_file(self.user_id, effective_path, name)
+
     def send_group(self) -> bool:
         """Compat: send via msg_list attr (used by old MsgPackage flow)."""
         if not hasattr(self, "msg_list") or not self.msg_list:

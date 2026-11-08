@@ -40,6 +40,7 @@ services:
       - ./llbot_config:/app/llbot/data:rw
       - ./KirikoBot/carside_picture:/app/carside_picture
       - ./KirikoBot/stickers:/app/stickers
+      - ./KirikoBot/shared_files:/app/shared_files:rw
     depends_on:
       - pmhq
     restart: unless-stopped
