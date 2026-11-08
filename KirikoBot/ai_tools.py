@@ -1338,39 +1338,48 @@ class DshAgentTool:
             except (json.JSONDecodeError, TypeError):
                 task = ""
         if not task:
-            task = robot.msg
+            task = getattr(robot, "msg", "")
 
         # 先随口回一句安抚，告知正在调用超级大脑，避免长任务等待产生卡死感
         robot.reply("收到，这个问题需要深度思考和处理，我让超级大脑跑一下，稍等哦～")
 
         session_key = f"{robot.msg_type}:{robot.group_id or robot.user_id}"
+        t_start = time.time()
         result = self.client.run_task(task, session_key=session_key)
 
-        # 检查是否包含文件发送标记 [FILE:/path/to/file]
-        found_files = re.findall(r"\[FILE:\s*([^\]]+)\]", result)
-        clean_result = re.sub(r"\[FILE:\s*[^\]]+\]", "", result).strip()
-
-        # 拟人分段短句发回文本结果
-        robot.reply_chunked(clean_result or "搞定啦，结果如上～")
-
-        # 自动触发文件发送，并记录最新产物到数据库，供下一轮重发或追问调用
-        last_file = None
-        for fpath in found_files:
-            fpath = fpath.strip().strip("\"'")
-            if os.path.isfile(fpath):
-                logger.info("DshAgent 自动发送文件: %s 到 %s", fpath, session_key)
-                robot.send_file(fpath)
-                last_file = fpath
-
-        if last_file and self.db:
+        # 检查 DSH 是否已经在执行过程中通过 /app/dsh_deliver.py 自主完成了交付
+        already_delivered = False
+        if self.db:
             try:
-                self.db.set_state(f"last_artifact:{session_key}", last_file)
-                # 同时记录该用户全局最近产生的产物，解决私聊要产物、群聊要求重发（或跨场景追问）时的断联问题
-                uid = getattr(robot, "user_id", "")
-                if uid:
-                    self.db.set_state(f"last_artifact:user:{uid}", last_file)
+                last_delivered = float(self.db.get_state(f"dsh_delivered:{session_key}", 0) or 0)
+                if last_delivered >= t_start:
+                    already_delivered = True
             except Exception:
                 pass
+
+        if not already_delivered:
+            # 兜底链路：DSH 未调用 deliver 命令时，解析其文本输出与文件标记并自动发出
+            found_files = re.findall(r"\[FILE:\s*([^\]]+)\]", result)
+            clean_result = re.sub(r"\[FILE:\s*[^\]]+\]", "", result).strip()
+
+            robot.reply_chunked(clean_result or "搞定啦，结果如上～")
+
+            last_file = None
+            for fpath in found_files:
+                fpath = fpath.strip().strip("\"'")
+                if os.path.isfile(fpath):
+                    logger.info("DshAgent 兜底发送文件: %s 到 %s", fpath, session_key)
+                    robot.send_file(fpath)
+                    last_file = fpath
+
+            if last_file and self.db:
+                try:
+                    self.db.set_state(f"last_artifact:{session_key}", last_file)
+                    uid = getattr(robot, "user_id", "")
+                    if uid:
+                        self.db.set_state(f"last_artifact:user:{uid}", last_file)
+                except Exception:
+                    pass
 
         ai.handled_summary = f"[超级大脑] 任务完成：{task[:50]}"
         ai.user_text = f"超级大脑执行：{task}\n结果：{result[:300]}"
