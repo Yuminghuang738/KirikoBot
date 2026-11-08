@@ -1320,7 +1320,7 @@ class VoiceTool:
 # ══════════════════════════════════════════════════════════
 
 class DshAgentTool:
-    """SELF_CONTAINED：自主执行重度/复杂任务（跑代码、找文件、深度研报、长文本分析），直接发回结果与文件。"""
+    """SELF_CONTAINED：自主执行重度/复杂任务（跑代码、数据处理、长文本分析），直接发回结果与文件。"""
 
     def __init__(self, db: Any) -> None:
         self.db = db
@@ -1340,20 +1340,11 @@ class DshAgentTool:
         if not task:
             task = robot.msg
 
-        # 如果任务涉及查找文件或生成文件，追加提示让 Harness 输出统一标记
-        is_file_request = any(k in task for k in ("找文件", "搜文件", "发送文件", "发给我", "导出", "生成文件", "下载"))
-        augmented_task = task
-        if is_file_request:
-            augmented_task += (
-                "\n（注意：如果你找到或生成了用户需要的文件，请在回答末尾以单独一行标记输出："
-                "`[FILE:文件的绝对路径]`，系统会自动将该文件上传发送给用户。）"
-            )
-
         # 先随口回一句安抚，告知正在调用超级大脑，避免长任务等待产生卡死感
         robot.reply("收到，这个问题需要深度思考和处理，我让超级大脑跑一下，稍等哦～")
 
         session_key = f"{robot.msg_type}:{robot.group_id or robot.user_id}"
-        result = self.client.run_task(augmented_task, session_key=session_key)
+        result = self.client.run_task(task, session_key=session_key)
 
         # 检查是否包含文件发送标记 [FILE:/path/to/file]
         found_files = re.findall(r"\[FILE:\s*([^\]]+)\]", result)
@@ -1362,23 +1353,31 @@ class DshAgentTool:
         # 拟人分段短句发回文本结果
         robot.reply_chunked(clean_result or "搞定啦，结果如上～")
 
-        # 自动触发文件发送
+        # 自动触发文件发送，并记录最新产物到数据库，供下一轮重发或追问调用
+        last_file = None
         for fpath in found_files:
             fpath = fpath.strip().strip("\"'")
             if os.path.isfile(fpath):
-                logger.info("DshAgent 自动发送文件: %s", fpath)
+                logger.info("DshAgent 自动发送文件: %s 到 %s", fpath, session_key)
                 robot.send_file(fpath)
+                last_file = fpath
+
+        if last_file and self.db:
+            try:
+                self.db.set_state(f"last_artifact:{session_key}", last_file)
+            except Exception:
+                pass
 
         ai.handled_summary = f"[超级大脑] 任务完成：{task[:50]}"
         ai.user_text = f"超级大脑执行：{task}\n结果：{result[:300]}"
 
 
 # ══════════════════════════════════════════════════════════
-#  Send File (独立文件发送工具)
+#  Send File (独立文件发送工具，支持重发上轮产物)
 # ══════════════════════════════════════════════════════════
 
 class SendFileTool:
-    """SELF_CONTAINED：直接调用 OneBot 接口发送本地文件。"""
+    """SELF_CONTAINED：直接调用 OneBot 接口发送本地文件，支持自动定位上轮产物并重发。"""
 
     def __init__(self, db: Any) -> None:
         self.db = db
@@ -1396,16 +1395,30 @@ class SendFileTool:
 
         file_path = str(args.get("file_path") or "").strip()
         display_name = str(args.get("display_name") or "").strip()
+        msg_type = getattr(robot, "msg_type", "group")
+        target_id = getattr(robot, "group_id", None) or getattr(robot, "user_id", "")
+        session_key = f"{msg_type}:{target_id}"
+
+        # 支持重发：如果未指定路径或表示重发，尝试读取本会话最近一次生成的产物
+        if (not file_path or any(k in file_path.lower() for k in ("last", "刚才", "上次", "上一轮", "刚才的文件", "谱子", "pdf", "图片"))) and self.db:
+            try:
+                cached = self.db.get_state(f"last_artifact:{session_key}", "")
+                if cached and os.path.isfile(cached):
+                    file_path = cached
+                    if not display_name:
+                        display_name = os.path.basename(cached)
+            except Exception:
+                pass
 
         if not file_path or not os.path.isfile(file_path):
-            robot.reply(f"没找到这个文件呢：{os.path.basename(file_path) if file_path else '未指定'}")
-            ai.handled_summary = "[发送文件] 文件不存在"
+            robot.reply("没找到刚才生成的文件呢，如果上一轮没跑完，可以重新跟我说一遍要找什么～")
+            ai.handled_summary = "[发送文件] 文件未找到"
             return
 
         ok = robot.send_file(file_path, display_name=display_name)
         if ok:
-            robot.reply(f"文件「{display_name or os.path.basename(file_path)}」已经发出去啦～")
+            robot.reply(f"给你重新发过去啦：{display_name or os.path.basename(file_path)}")
             ai.handled_summary = f"[发送文件] 成功：{display_name or os.path.basename(file_path)}"
         else:
-            robot.reply("文件发送失败了（可能是文件太大或安全拦截）")
+            robot.reply("文件发送失败了（可能是腾讯接口临时拦截），稍后重试试试～")
             ai.handled_summary = "[发送文件] 发送失败"
