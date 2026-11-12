@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import time
 import json
 import logging
 import os
@@ -56,7 +57,7 @@ def ensure_dsh_patch_file(workspace_dir: str) -> str:
     patch_file = os.path.join(workspace_dir, "auto_dsh_patch.yml")
     base_url = _resolve_base_url()
     model_name = Config.DEEPSEEK_MODEL or "deepseek-flash"
-    effort = Config.DSH_REASONING_EFFORT or "low"
+    effort = Config.DSH_REASONING_EFFORT or "off"
 
     # 仅当环境变量显式指定了外部自定义 patch 文件时才使用；否则默认动态生成对齐配置
     explicit_env_patch = os.getenv("DSH_PATCH_PATH")
@@ -66,6 +67,10 @@ def ensure_dsh_patch_file(workspace_dir: str) -> str:
             return custom_patch
 
     patch_content = (
+        f"initialization_commands:\n"
+        f"  - import sys; sys.path.insert(0, '/app/KirikoBot'); import dsh_plugins; globals().update({{k: v for k, v in vars(dsh_plugins).items() if k.startswith('dsh_')}})\n"
+        f"  - pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/\n"
+        f"  - npm config set registry https://registry.npmmirror.com\n"
         f"- id: llm-deepseek\n"
         f"  name: \"@deepseek-ai/dsh-llm-deepseek-api-key\"\n"
         f"  config:\n"
@@ -211,6 +216,14 @@ class DshClient:
         env["HOME"] = "/home/appuser"
         if session_key:
             env["DSH_DELIVER_CHANNEL"] = session_key
+        
+        # 调试钩子：记录 DSH 运行时的环境变量
+        with open("/tmp/dsh_run_debug.log", "a") as f:
+            f.write(f"--- RUNNING TASK {time.time()} ---\n")
+            f.write(f"CHANNEL: {env.get('DSH_DELIVER_CHANNEL')}\n")
+            f.write(f"TASK: {task}\n")
+            f.flush()
+
         if patch_path and os.path.exists(patch_path):
             env["DSH_PATCH_PATH"] = patch_path
 

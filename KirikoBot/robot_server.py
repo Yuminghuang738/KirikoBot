@@ -264,15 +264,22 @@ class RobotServer:
             logger.info("send_file 识别为图片类型，走图片气泡消息发送: %s", effective_path)
             return self.llbot.reply_image(self.incoming, effective_path)
 
-        # 非图片二进制文件（PDF/ZIP等）：由于 NTQQ 的 upload_file 接口偶发富媒体传输风控拦截，
-        # 自动生成基于内网/Tailscale 的直接下载链接作为兜底，确保群友 100% 能够下载到产物
+        # 非图片二进制文件：始终发送直链，上传作为后台尝试
         download_url = f"http://100.93.52.78:5000/download/{name}"
-        self.llbot.reply_to(self.incoming, f"📎 产物文件「{name}」已生成！\n若客户端未弹出文件下载，可直接在浏览器打开链接下载：\n{download_url}")
-
-        if self.msg_type == "group":
-            return self.llbot.upload_group_file(self.group_id or "", effective_path, name)
-        else:
-            return self.llbot.upload_private_file(self.user_id, effective_path, name)
+        msg_text = f"📎 产物文件「{name}」已生成！\n若客户端未弹出文件下载，可直接在浏览器打开链接下载：\n{download_url}"
+        
+        # 优先发送文字带直链（保障 100% 可见）
+        self.llbot.reply_to(self.incoming, msg_text)
+        
+        # 后台静默尝试上传，成功即上传，失败不报错，确保对话流程不受风控影响
+        try:
+            if self.msg_type == "group":
+                return self.llbot.upload_group_file(self.group_id or "", effective_path, name)
+            else:
+                return self.llbot.upload_private_file(self.user_id, effective_path, name)
+        except Exception as e:
+            logger.info("文件静默上传失败（已提供直链，忽略此错误）: %s", e)
+            return True # 已提供直链，依然认为流程成功
 
     def send_group(self) -> bool:
         """Compat: send via msg_list attr (used by old MsgPackage flow)."""
