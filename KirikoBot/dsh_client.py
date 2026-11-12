@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import time
 import json
 import logging
 import os
@@ -215,6 +216,14 @@ class DshClient:
         env["HOME"] = "/home/appuser"
         if session_key:
             env["DSH_DELIVER_CHANNEL"] = session_key
+        
+        # 调试钩子：记录 DSH 运行时的环境变量
+        with open("/tmp/dsh_run_debug.log", "a") as f:
+            f.write(f"--- RUNNING TASK {time.time()} ---\n")
+            f.write(f"CHANNEL: {env.get('DSH_DELIVER_CHANNEL')}\n")
+            f.write(f"TASK: {task}\n")
+            f.flush()
+
         if patch_path and os.path.exists(patch_path):
             env["DSH_PATCH_PATH"] = patch_path
 

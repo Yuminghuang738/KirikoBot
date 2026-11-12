@@ -13,16 +13,12 @@ import argparse
 import logging
 import os
 import sys
+import re
 from typing import Any
-
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-if ROOT_DIR not in sys.path:
-    sys.path.insert(0, ROOT_DIR)
-
-from config import Config
 from database_manager import DatabaseManager
 from llbot_client import IncomingMessage, LLBotClient
 from robot_server import RobotServer, split_into_pacing_chunks
+from config import Config
 
 logger = logging.getLogger("dsh_deliver")
 
@@ -37,6 +33,7 @@ def deliver(
 ) -> bool:
     """由 DSH 智能体主动调用的交付函数。"""
     channel = (channel or "").strip()
+    print(f"[dsh_deliver] DEBUG: 接收到的 Channel 参数为: {channel!r}", file=sys.stderr)
     if not channel or ":" not in channel:
         print("[dsh_deliver] 错误：未指定合法的 --channel (格式如 group:123456 或 private:123456)", file=sys.stderr)
         return False
@@ -61,16 +58,25 @@ def deliver(
 
     success = True
 
+    # 调试：发送一条 DEBUG 消息到该通道（强制发送，不吞异常）
+    llbot.send_group_msg(target_id, [{"type": "text", "data": {"text": f"[DEBUG] 交付目标确认: {msg_type} {target_id}"}}]) if msg_type == "group" else llbot.send_private_msg(target_id, [{"type": "text", "data": {"text": f"[DEBUG] 交付目标确认: {msg_type} {target_id}"}}])
+
     # 1. 发送文字结果（带拟人分段）
     text = (text or "").strip()
     if text:
         chunks = split_into_pacing_chunks(text)
         for chunk in chunks:
+            # 清洗 Markdown 标记
+            clean_chunk = re.sub(r'[\*#_`~>\[\]]', '', chunk)
+            clean_chunk = re.sub(r'!\[.*?\]\(.*?\)', '', clean_chunk)
+            clean_chunk = re.sub(r'\[.*?\]\(.*?\)', '', clean_chunk)
+            clean_chunk = re.sub(r'\n+', ' ', clean_chunk)
+            
             # 群聊使用 send_group_msg，私聊使用 send_private_msg
             if msg_type == "group":
-                llbot.send_group_msg(target_id, [{"type": "text", "data": {"text": chunk}}])
+                llbot.send_group_msg(target_id, [{"type": "text", "data": {"text": clean_chunk}}])
             else:
-                llbot.send_private_msg(target_id, [{"type": "text", "data": {"text": chunk}}])
+                llbot.send_private_msg(target_id, [{"type": "text", "data": {"text": clean_chunk}}])
 
     # 2. 发送产物文件（智能分流：图片走气泡，非图片走直链+文件上传）
     file_path = (file_path or "").strip()
