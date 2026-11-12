@@ -29,11 +29,20 @@ class TestSplitIntoPacingChunks:
         text = "对比：\n| 方案 | 效果 |\n| A | 好 |\n| B | 差 |"
         assert split_into_pacing_chunks(text) == [text]
 
-    def test_natural_newlines_split_into_chunks(self):
+    def test_newlines_without_sentence_endings_are_not_forced_apart(self):
+        """模型可能只为排版换行；没有可靠句末时宁可不拆，避免割断完整语义。"""
         text = (
             "module_param 是把外面的参数引进来，变量还是在模块内部\n"
             "EXPORT_SYMBOL 才是把符号放进内核符号表供别人引用\n"
             "两个方向正好相反，不能混在一块"
+        )
+        assert split_into_pacing_chunks(text) == [text]
+
+    def test_complete_newline_sentences_split_into_chunks(self):
+        text = (
+            "module_param 是把外面的参数引进来，变量还是在模块内部。\n"
+            "EXPORT_SYMBOL 才是把符号放进内核符号表供别人引用。\n"
+            "两个方向正好相反，不能混在一块。"
         )
         chunks = split_into_pacing_chunks(text)
         assert len(chunks) == 3
@@ -51,10 +60,44 @@ class TestSplitIntoPacingChunks:
         assert chunks[0].endswith("！")
         assert "一骑绝尘" in chunks[1]
 
-    def test_max_chunks_capped_at_three(self):
+    def test_max_chunks_capped_at_three_without_losing_tail(self):
         text = "第一句讲原理。\n第二句讲具体用法。\n第三句给出避坑指南。\n第四句吐槽一句。\n第五句结尾。"
         chunks = split_into_pacing_chunks(text, max_chunks=3)
         assert len(chunks) <= 3
+        assert "第五句结尾" in "".join(chunks), "超过三句时必须合并，绝不能截掉尾巴"
+        assert "".join(chunks).replace(" ", "").replace("\n", "") == text.replace("\n", "")
+
+    def test_dependent_sentence_stays_with_previous_meaning(self):
+        text = "这个写法表面上能跑。但是传入空指针时会直接崩掉。所以还是要先判空。"
+        chunks = split_into_pacing_chunks(text, max_chunks=3)
+        assert len(chunks) == 1
+        assert chunks[0] == text
+
+    def test_punctuation_inside_quotes_does_not_split(self):
+        text = "她当时很认真地说“这个真的没问题吗？”然后又把整段代码从头跑了一遍。最后才发现真正的问题是数组越界。"
+        chunks = split_into_pacing_chunks(text)
+        assert len(chunks) == 2
+        assert "没问题吗？”然后又把整段代码从头跑了一遍。" in chunks[0]
+        assert chunks[1] == "最后才发现真正的问题是数组越界。"
+
+    def test_punctuation_inside_parentheses_does_not_split(self):
+        text = "先检查返回值（失败时会返回什么？这里要看文档。）再继续处理。否则错误会被吞掉。"
+        chunks = split_into_pacing_chunks(text)
+        assert len(chunks) == 2
+        assert "再继续处理。" in chunks[0]
+        assert chunks[1] == "否则错误会被吞掉。" or "否则错误会被吞掉。" in chunks[0]
+
+    def test_single_long_sentence_is_never_cut_by_length(self):
+        text = "这是一句非常非常长但中间没有任何可靠句末标点的完整话因为它仍然在继续表达同一个条件关系所以绝对不应该为了字符数看起来太长就被从中间硬生生拆开"
+        assert split_into_pacing_chunks(text) == [text]
+
+    def test_two_urls_keep_the_whole_message_intact(self):
+        text = "文档在 https://example.com/docs ，源码在 https://github.com/example/repo 。两个都要看。"
+        assert split_into_pacing_chunks(text) == [text]
+
+    def test_max_chunks_one_returns_everything(self):
+        text = "第一句。第二句。第三句。"
+        assert split_into_pacing_chunks(text, max_chunks=1) == [text]
 
 
 class FakeLLBot:
@@ -98,14 +141,14 @@ class TestReplyChunkedSending:
 
     def test_multiple_chunks_send_reply_first_then_send_text(self, setup_robot):
         robot, llbot, delays = setup_robot
-        text = "第一条讲原因\n第二条给出具体建议\n第三条补充注意事项"
+        text = "第一条详细说明造成这个问题的原因。\n第二条给出可以直接照着做的具体建议。\n第三条再补充一个容易忽略的注意事项。"
         ok = robot.reply_chunked(text)
         assert ok is True
         assert len(llbot.reply_calls) == 1
-        assert llbot.reply_calls[0] == "第一条讲原因"
+        assert llbot.reply_calls[0] == "第一条详细说明造成这个问题的原因。"
         assert len(llbot.send_text_calls) == 2
-        assert llbot.send_text_calls[0] == "第二条给出具体建议"
-        assert llbot.send_text_calls[1] == "第三条补充注意事项"
+        assert llbot.send_text_calls[0] == "第二条给出可以直接照着做的具体建议。"
+        assert llbot.send_text_calls[1] == "第三条再补充一个容易忽略的注意事项。"
         assert len(delays) == 2
         assert all(d >= 0.4 for d in delays)
 
