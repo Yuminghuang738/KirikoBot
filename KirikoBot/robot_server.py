@@ -24,51 +24,144 @@ def get_rate_limiter() -> Any:
     return _rate_limiter
 
 
-def split_into_pacing_chunks(text: str, max_chunks: int = 3) -> list[str]:
-    """把一段回复拆解为多个自然的短句，模仿正常人类连发多条消息的打字节奏。
+# 这些词开头的句子通常依赖前文，单独发出去会改变语气甚至语义。
+_DEPENDENT_SENTENCE_PREFIXES = (
+    "但是", "不过", "可是", "然而", "而且", "并且", "所以", "因此", "于是",
+    "因为", "如果", "要是", "也就是说", "换句话说", "毕竟", "反而", "其实",
+    "同时", "另外", "然后", "或者", "否则", "尤其", "甚至", "只是", "除非",
+)
 
-    保护规则：
-    - Markdown 代码块（```）、列表、表格绝不切分，保持排版与代码完整。
-    - 短文本（<= 35 字符）保持单条发完，不画蛇添足。
-    - 优先按照自然换行切分段落。
-    - 长单句按句末标点（。！？!?~…）切分，合并为最多 max_chunks 段。
+_OPEN_TO_CLOSE = {"（": "）", "(": ")", "[": "]", "【": "】", "“": "”", "‘": "’", "《": "》"}
+_CLOSERS = set(_OPEN_TO_CLOSE.values())
+_SENTENCE_END = set("。！？!?~…")
+
+
+def _safe_sentence_split(text: str) -> list[str]:
+    """只在确定的句末边界切分，并保护引号、括号、代码和 URL。
+
+    这是刻意保守的扫描器：边界有疑问就不切。语义完整优先于多发几条的拟人效果。
+    """
+    sentences: list[str] = []
+    start = 0
+    stack: list[str] = []
+    in_inline_code = False
+    i = 0
+
+    while i < len(text):
+        ch = text[i]
+        if ch == "`":
+            in_inline_code = not in_inline_code
+            i += 1
+            continue
+        if in_inline_code:
+            i += 1
+            continue
+
+        if ch in _OPEN_TO_CLOSE:
+            stack.append(_OPEN_TO_CLOSE[ch])
+        elif ch in _CLOSERS and stack and ch == stack[-1]:
+            stack.pop()
+
+        if ch in _SENTENCE_END and not stack:
+            # 省略号连续出现时只在最后一个点后切。
+            if ch == "…" and i + 1 < len(text) and text[i + 1] == "…":
+                i += 1
+                continue
+            # URL / 版本号 / 小数里的英文句点不在句末集合中，因此天然不误切。
+            end = i + 1
+            # 把句末后的闭引号一起留在当前句，避免下一条以孤立引号开头。
+            while end < len(text) and text[end] in "”’）》】]）)":
+                end += 1
+            sentence = text[start:end].strip()
+            if sentence:
+                sentences.append(sentence)
+            start = end
+            i = end
+            continue
+        i += 1
+
+    tail = text[start:].strip()
+    if tail:
+        sentences.append(tail)
+    return sentences
+
+
+def _join_sentences(sentences: list[str]) -> str:
+    """合并完整句子；中文句末直接相邻，其他情况用空格保持可读性。"""
+    out = ""
+    for sentence in sentences:
+        if not out:
+            out = sentence
+        elif out[-1] in "。！？!?~…”’）》】]）)" or sentence[0] in "“‘《（(【[":
+            out += sentence
+        else:
+            out += " " + sentence
+    return out
+
+
+def _group_complete_sentences(sentences: list[str], max_chunks: int) -> list[str]:
+    """把完整句子均衡分组到最多 max_chunks 条，任何内容都不会被丢弃。"""
+    if len(sentences) <= max_chunks:
+        return sentences
+
+    groups: list[list[str]] = [[s] for s in sentences]
+
+    # 先把依赖前文的句子粘回上一组。
+    i = 1
+    while i < len(groups):
+        first = groups[i][0].lstrip("“‘（(")
+        if first.startswith(_DEPENDENT_SENTENCE_PREFIXES):
+            groups[i - 1].extend(groups.pop(i))
+        else:
+            i += 1
+
+    # 仍超限时，每次合并相邻总长度最短的一对；只合并完整句子，不在句内动刀。
+    while len(groups) > max_chunks:
+        pair_index = min(
+            range(len(groups) - 1),
+            key=lambda idx: len(_join_sentences(groups[idx])) + len(_join_sentences(groups[idx + 1])),
+        )
+        groups[pair_index].extend(groups.pop(pair_index + 1))
+
+    return [_join_sentences(group) for group in groups]
+
+
+def split_into_pacing_chunks(text: str, max_chunks: int = 3) -> list[str]:
+    """把回复安全地拆成 1~max_chunks 条；语义完整永远优先于拟人分批。
+
+    原则：
+    - 代码、Markdown 结构、表格和 URL 密集文本整段发送；
+    - 换行只有在每行本身是完整句时才视作候选边界；
+    - 只按不在引号/括号内的句末标点切分；
+    - 绝不按字符数切开完整句子，绝不因 max_chunks 丢弃尾部内容；
+    - 「但是/所以/因为……」等依赖前文的句子优先与上一句合并。
     """
     text = (text or "").strip()
     if not text:
         return []
-    # 保护结构化内容
-    if "```" in text or "\n-" in text or "\n1." in text or "|" in text:
+    if max_chunks <= 1:
         return [text]
 
-    # 1. 优先按换行符切分（如果是多段/换行回答）
-    lines = [p.strip() for p in text.split("\n") if p.strip()]
-    if 1 < len(lines) <= max_chunks:
-        if all(len(line) >= 3 for line in lines):
-            return lines
+    # 结构化内容和 URL 密集内容宁可一条发完，避免排版或链接被拆坏。
+    if "```" in text or re.search(r"(?m)^\s*(?:[-+*]|\d+[.)])\s+", text) or "|" in text:
+        return [text]
+    if len(re.findall(r"https?://", text)) >= 2:
+        return [text]
 
-    # 短文本单行直接一条发完
     if len(text) <= 35:
         return [text]
 
-    # 2. 长单行文本按句子标点拆分
-    sentences = re.split(r"(?<=[。！？!?~…])\s*", text)
-    sentences = [s.strip() for s in sentences if s.strip()]
+    # 保留显式换行的意图，但只有每行都有完整句末时才独立发送。
+    lines = [part.strip() for part in text.splitlines() if part.strip()]
+    if 1 < len(lines) <= max_chunks and all(line[-1] in _SENTENCE_END | _CLOSERS for line in lines):
+        return lines
+
+    # 普通换行可能只是排版；归一为空格后再按可靠句末边界扫描。
+    normalized = re.sub(r"\s*\n\s*", " ", text)
+    sentences = _safe_sentence_split(normalized)
     if len(sentences) <= 1:
         return [text]
-
-    chunks: list[str] = []
-    curr = ""
-    for s in sentences:
-        if not curr:
-            curr = s
-        elif len(curr) + len(s) < 45 and len(chunks) + 1 < max_chunks:
-            curr += " " + s
-        else:
-            chunks.append(curr)
-            curr = s
-    if curr:
-        chunks.append(curr)
-    return chunks[:max_chunks]
+    return _group_complete_sentences(sentences, max_chunks)
 
 
 class RobotServer:
