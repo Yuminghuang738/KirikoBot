@@ -6,7 +6,7 @@ import time
 from typing import Any
 import pytest
 
-from dsh_deliver import deliver
+from dsh_deliver import clean_markdown, deliver
 from ai_tools import DshAgentTool
 
 
@@ -125,3 +125,41 @@ class TestDshAgentToolAutonomousDeduplication:
         # 只应该有前置的那句“稍等安抚语”，不应该在外层再次重复调用 reply_chunked
         assert len(replies) == 1
         assert "稍等" in replies[0]
+
+
+class TestCleanMarkdown:
+    """QQ 气泡不渲染 Markdown，交付前必须压成纯文本。"""
+
+    def test_bold_and_list_markers_are_stripped(self):
+        src = "已找到\n\n- **角色**：市谷有咲\n- **尺寸**：1100 × 1400 px"
+        assert clean_markdown(src) == "已找到 角色：市谷有咲 尺寸：1100 × 1400 px"
+
+    def test_link_keeps_its_text(self):
+        src = "来源：[BanG Dream 官方](https://anime.bang-dream.com/x)"
+        assert clean_markdown(src) == "来源：BanG Dream 官方"
+
+    def test_headings_are_stripped(self):
+        assert clean_markdown("## 分析结果\n\n**结论**：不错") == "分析结果 结论：不错"
+
+    def test_image_is_dropped_entirely(self):
+        assert clean_markdown("![图](http://a/b.jpg)完成") == "完成"
+
+    def test_plain_text_is_unchanged(self):
+        assert clean_markdown("普通文字，没有标记") == "普通文字，没有标记"
+
+    def test_deliver_sends_cleaned_text(self):
+        """端到端：交付到群里的文本必须已经被清洗。"""
+        db = FakeDB()
+        llbot = FakeLLBot()
+        ok = deliver(
+            "group:734954188",
+            text="- **角色**：市谷有咲\n- 来源：[官网](https://x.y)",
+            db=db,
+            llbot=llbot,
+        )
+        assert ok is True
+        assert len(llbot.group_msgs) == 1, "一次交付只应产生一条消息，不能有调试尾巴"
+        _, sent = llbot.group_msgs[0]
+        assert "**" not in sent
+        assert "](" not in sent
+        assert "市谷有咲" in sent
