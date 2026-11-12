@@ -22,6 +22,29 @@ from config import Config
 
 logger = logging.getLogger("dsh_deliver")
 
+# Markdown 语法符号：加粗/斜体/代码/标题/引用/链接括号。
+# QQ 气泡不渲染 Markdown，这些字符留着只会让阅读变脏。
+_MD_CHARS = re.compile(r"[*#_`~>\[\]]")
+_MD_IMAGE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+# 行首的列表/标题符号：`- `、`+ `、`* `、`1. `、`1) `。
+_MD_LINE_PREFIX = re.compile(r"^[ \t]*(?:[-+*]|\d+[.)])[ \t]+", re.MULTILINE)
+
+
+def clean_markdown(text: str) -> str:
+    """把 Markdown 片段压成适合 QQ 气泡显示的纯文本。
+
+    顺序有讲究：先去掉图片（连文字一起丢），链接降级成它的文字，
+    再剥行首列表符号和剩下的语法符号，最后把换行与连续空白折成单空格 ——
+    分段发送时换行已经被 split_into_pacing_chunks 消费掉了。
+    """
+    out = _MD_IMAGE.sub("", text or "")
+    out = _MD_LINK.sub(r"\1", out)
+    out = _MD_LINE_PREFIX.sub("", out)
+    out = _MD_CHARS.sub("", out)
+    out = re.sub(r"\s*\n\s*", " ", out)
+    return re.sub(r"[ \t]{2,}", " ", out).strip()
+
 
 def deliver(
     channel: str,
@@ -58,20 +81,14 @@ def deliver(
 
     success = True
 
-    # 调试：发送一条 DEBUG 消息到该通道（强制发送，不吞异常）
-    llbot.send_group_msg(target_id, [{"type": "text", "data": {"text": f"[DEBUG] 交付目标确认: {msg_type} {target_id}"}}]) if msg_type == "group" else llbot.send_private_msg(target_id, [{"type": "text", "data": {"text": f"[DEBUG] 交付目标确认: {msg_type} {target_id}"}}])
-
     # 1. 发送文字结果（带拟人分段）
     text = (text or "").strip()
     if text:
         chunks = split_into_pacing_chunks(text)
         for chunk in chunks:
-            # 清洗 Markdown 标记
-            clean_chunk = re.sub(r'[\*#_`~>\[\]]', '', chunk)
-            clean_chunk = re.sub(r'!\[.*?\]\(.*?\)', '', clean_chunk)
-            clean_chunk = re.sub(r'\[.*?\]\(.*?\)', '', clean_chunk)
-            clean_chunk = re.sub(r'\n+', ' ', clean_chunk)
-            
+            clean_chunk = clean_markdown(chunk)
+            if not clean_chunk:
+                continue
             # 群聊使用 send_group_msg，私聊使用 send_private_msg
             if msg_type == "group":
                 llbot.send_group_msg(target_id, [{"type": "text", "data": {"text": clean_chunk}}])

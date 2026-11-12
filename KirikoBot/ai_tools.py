@@ -1361,6 +1361,10 @@ class DshAgentTool:
             # 兜底链路：DSH 未调用 deliver 命令时，解析其文本输出与文件标记并自动发出
             found_files = re.findall(r"\[FILE:\s*([^\]]+)\]", result)
             clean_result = re.sub(r"\[FILE:\s*[^\]]+\]", "", result).strip()
+            # QQ 气泡不渲染 Markdown，这里必须压成纯文本，否则会露出 ** 和 [] 之类的符号
+            from dsh_deliver import clean_markdown
+
+            clean_result = clean_markdown(clean_result)
 
             robot.reply_chunked(clean_result or "搞定啦，结果如上～")
 
