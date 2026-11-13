@@ -1,0 +1,12 @@
+# CI lint 的规则集刻意收窄：只拦"一定跑不起来"的问题，
+# 不把历史代码的 import 顺序/行宽一次性变成红灯。
+target-version = "py311"
+line-length = 120
+
+[lint]
+select = [
+  "E9",   # 语法错误
+  "F63",  # 无效比较 / 断言
+  "F7",   # 语法结构错误（break/continue/return）
+  "F82",  # 未定义名、重复定义（F821/F822/F823）
+]
