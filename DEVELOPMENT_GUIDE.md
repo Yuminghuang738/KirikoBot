@@ -749,9 +749,11 @@ CI 在 `.github/workflows/ci.yml`：跑 pytest + `compileall`。
 - **失败调用不计入延迟分位数**（否则超时会污染 P95），但计入失败数与错误列表。
 - `ai_calls` 增长很快，已纳入保留策略（`RETENTION_DAYS`）一起清理。
 
-- [ ] 在 GitHub 仓库页面确认提交已到达
-- [ ] 检查 CI/CD（如有）是否通过
-- [ ] 如需在生产服务器部署，执行 `git pull` + 重建容器
+- [ ] 确认改动已通过特性分支 + PR 合入 main（流程见第十一节），CI 绿、独立审查 PASS
+- [ ] 部署只走 `scripts/deploy.sh`（rsync 代码 + `docker compose restart my-robot`，
+      不重建镜像、不 `--delete`）；脚本会先打 tar 快照，部署后自动验证
+      healthz、容器 healthy、日志无 traceback
+- [ ] 部署后保留 30 分钟观察窗，异常用 `scripts/rollback.sh <快照时间戳>` 回滚
 - [ ] **部署并测试完成后，推送新功能速递到所有群聊**：
   ```bash
   curl -X POST http://localhost:5000/api/digest/push
@@ -1520,3 +1522,44 @@ docker compose up -d
 
 当时机器上还有一个 `napcat` 容器。**如果两个客户端登同一个 QQ 号，
 它们会互相踢下线**，表现和"登录被拦"几乎一样。排查前先确认没有第二个客户端在跑同一个号。
+
+
+## 十一、分支与协作流程
+
+仓库只保留 `main` 和**正在进行的特性分支**。合并后分支由 GitHub 自动删除
+（仓库设置 `delete_branch_on_merge=true`）；历史实验分支先打 `archive/<name>`
+tag 留档，再删除分支引用。
+
+### 11.1 标准流程
+
+```bash
+git checkout main && git pull --ff-only
+git checkout -b fix/<主题>                 # 一项改动一个分支
+# …改代码 + 补测试…
+python3 -m pytest tests/ -q -p no:cacheprovider   # 全量必须全绿
+git add <只加本次改动涉及的文件>
+git commit -m "fix(scope): 中文说明"         # 小步、中文、沿用仓库现有风格
+git push -u origin fix/<主题>
+# 开 PR → CI 绿 → 独立审查 PASS → 合并 main（分支自动删除）
+```
+
+硬性规则：
+
+- **不直接 push main**，所有改动走 PR；一个 PR 只做一件事。
+- 合并前必须 CI 全绿 + 独立审查 PASS；合并后按第十节的部署清单上线。
+- 不把未跟踪杂物提交进 commit：`.temp_ip`、`KirikoBot/stickers/*`、
+  `KirikoBot/dsh_plugins.py`、`KirikoBot/tts_*.py`、`temp_dsh_client.py`、
+  `.aya_review/` 等。
+- 测试运行可能生成 `robot.db` / `backups/`，属于运行数据，绝不入库。
+
+### 11.2 清理与归档
+
+- **已合并分支**：确认 PR 状态为 `MERGED` 后直接删除（现在合并时自动删）。
+- **没有 PR 的历史分支**：先看 `git log --oneline main..origin/<branch> -- <路径>`
+  和 `git diff origin/main..origin/<branch>`，有未合并价值的打 `archive/<branch>`
+  tag 再删；即使判断为废弃，也建议先打 tag，成本为零。
+  例：`eval/ab-baseline-and-lock` → `archive/eval-ab-baseline-and-lock`。
+- **不要用祖先关系判断是否已合并**：本仓库历史被重写过，旧 PR 的 `mergeCommit`
+  可能不在当前 `main` 上；以 GitHub PR 的 `state=MERGED` 为准。
+- **删分支 ≠ 仓库瘦身**：`.git` 体积要靠 `git filter-repo` / LFS 单独决策，
+  不在日常清理范围内（会重写历史，风险高）。
