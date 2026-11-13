@@ -805,6 +805,8 @@ class AffectionTool:
         label = global_score["relationship"]
         emoji = global_score["emoji"]
 
+        is_self = (target_uid == robot.user_id) or (not target_name)
+
         # 直接发原文：数字类回答让模型复述反而容易被它加工得不准
         lines = [
             f"💕 {target_display} 的好感度",
