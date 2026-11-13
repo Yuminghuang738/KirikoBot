@@ -161,3 +161,11 @@ class TestScopeMigration:
         assert rows == [(77.0, "group")]
         log_cols = [r[1] for r in db.fetch_data("PRAGMA table_info(user_affection_log)")]
         assert "scope" in log_cols
+
+
+class TestNotesSurviveGlobal:
+    def test_relationship_block_keeps_the_operator_note(self, db):
+        AffectionService.get_or_create(db, "u1", "g1", "小明")
+        AffectionService.manual_adjust(db, "u1", "g1", 40.0, note="别聊他前女友")
+        block = AffectionService.relationship_block(db, "u1", "g1")
+        assert "备注：别聊他前女友" in block

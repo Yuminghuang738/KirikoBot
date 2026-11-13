@@ -812,6 +812,14 @@ class AffectionTool:
             f"互动 {global_score['interaction_count']} 次"
             f"（好评 {global_score['positive_count']} / 差评 {global_score['negative_count']}）",
         ]
+        if is_self:
+            notes = self.db.fetch_data(
+                "SELECT notes FROM user_affection WHERE user_id=? AND notes<>'' "
+                "ORDER BY updated_at DESC LIMIT 1",
+                (target_uid or "",),
+            )
+            if notes and notes[0][0]:
+                lines.append(f"备注：{notes[0][0]}")
         robot.reply("\n".join(lines))
 
 

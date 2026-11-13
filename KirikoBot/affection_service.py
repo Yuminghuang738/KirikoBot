@@ -506,6 +506,18 @@ class AffectionService:
         # 数字会被模型直接拿来说事，去掉后才有可测的正向贡献（见 eval/chat_replay.py）。
         lines = [f"【你和他的关系】{label}"]
         lines.append(AffectionService.behavior_for(score))
+
+        # 备注是操作者手写的补充设定；global 不存汇总备注，取最近一条非空。
+        try:
+            note_rows = db.fetch_data(
+                "SELECT notes FROM user_affection WHERE user_id=? AND notes<>'' "
+                "ORDER BY updated_at DESC LIMIT 1",
+                (user_id,),
+            )
+        except Exception:
+            note_rows = []
+        if note_rows and note_rows[0][0]:
+            lines.append(f"备注：{note_rows[0][0]}")
         return "\n".join(lines)
 
     @staticmethod
