@@ -223,6 +223,61 @@ Aya 在 v2 摘要审计里实测到三个会直接影响线上记忆的问题，
 5. 如果四个变体都不达标 → **不改摘要长度硬开**，回退默认关；下一轮改摘要/facts 设计（专名进 facts、结构化摘要、锚点保留）。
 6. token 以 API `usage` 计；eval 的 system=PERSONA，ratio 只作相对参考，生产验收看 `ai_calls` p50/p90。
 
+### 两次独立重跑：数值不可靠
+
+同一份 v3 40+10、同一 harness，Ren 和 Aya 各自跑出的数差到 0.2，符号都反了：
+
+| 指标 | Ren | Aya（`memory_4v_aya_v5.json`） |
+|---|---|---|
+| 主样本 memory raw24/raw48/layered | -0.03 / +0.02 / **-0.07** | **+0.12 / +0.16 / +0.16** |
+| 主样本 anchor（base/24/48/layered） | 57.5 / 57.5 / 55.0 / 62.5 | **48 / 55 / 55 / 55** |
+| needle anchor（base/24/48/layered） | 30 / 50 / 50 / **20** | **30 / 30 / 30 / 30** |
+| needle memory raw24/raw48/layered | -0.15 / -0.10 / **-0.45** | **0.00 / 0.00 / -0.05** |
+| 回复长度 base/24/48/layered | 121.9 / 105.7 / 97.1 / 98.6 | 96.3 / 105.5 / 97.4 / 90.7 |
+| token raw24 / raw48 / layered | +5.8% / +24.3% / +87.6% | +6.1% / +24.7% / +88.3% |
+
+两次的**方向一致**：layered 不比 raw48 好、四者都没到门槛、raw24 最省。但**数值不可靠**：生成温度 0 仍有采样差异，judge 平局 35–38/40，叠加后噪声大于效应。结论只能用于「决定下一步怎么测」，不能用于对设计判死刑。
+
+## v4 评测口径（探针问答，Hina 定稿）
+
+### 数据（120 主 probe + 20 needle）
+
+- 60 群 + 60 私聊；每条在 v3 字段上增加：
+  - `probe_question`：**Hina 手写**，一句话、答案只能来自锚点；不自动生成最终版（自动候选只做辅助）。
+  - `probe_answer_keywords`：答案别名列表，如 `["PAC612", "pacs12"]`；大小写/空白/标点归一后任一命中即对。
+  - `probe_type`：`fact | preference | commitment | name | unfinished`。
+  - `probe_tier`：`A` 距目标 24–32 条；`B` 33–48 条；`C` 49–80 条。
+  - `probe_scope`：`group | private`。
+- **分层意义**：
+  - Tier A 测 raw24 vs baseline16（窗口从 16 扩到 24 有没有用）。
+  - Tier B 测 raw48 vs raw24（48 条值不值）。
+  - Tier C **必须 >48 条**才测得到摘要：v3 锚点最远 45 条，raw48 全看得见，摘要天然不可能赢——这是 v3 测不出摘要增量的结构性原因。
+- 每条 40 条（120/3），类型尽量均匀；needle 20 条全部 Tier C，专测长尾/专名。
+- 手写规则：答案不能出现在 target user message 或最近 16 条里；锚点必须明确、单一答案；不拿常识可答的问题。
+- Aya 抽 10%（12 条）核题面/关键词是否无歧义。
+
+### Harness
+
+- 每个变体只做一次「上下文 + 问题」调用：`temperature=0`、`max_tokens=80`、要求只答短语/「不知道」。
+- 关键词匹配：答案小写、去空白/标点后，任一 `probe_answer_keywords` 命中即正确；空答/「不知道」= 错。
+- 4 变体 × 140 = 560 次短调用，不经过 judge；主指标是 probe 准确率，噪声只剩生成侧。
+- 回复级 1–5 分和 anchor 语义/字面降为辅助，只抽 20% 子集跑，不再当主门槛。
+- 输出：按 tier/scope/type 分组的准确率、95% CI、配对 McNemar p 值、token。
+
+### 门槛（按 Chief 最终口径）
+
+| 比较 | 门槛 | 不过怎么办 |
+|---|---|---|
+| **窗口扩容：raw48 vs baseline16** | probe 准确率 ≥ **+15pp**，95% CI 下界 >0，McNemar p<0.05 | 窗口扩容不达标，维持 16 |
+| **摘要增量：layered vs raw48** | probe 准确率 ≥ **+10pp**，且 token ≤+30% | 摘要不默认开 |
+| raw24 vs raw48 | raw48 只比 raw24 高 ≤5pp 且 token 明显更贵 → 选 raw24 | 选 raw24 |
+| Tier A/B/C | 只作方向/解释，报告各 tier 准确率与 CI | 不拿单 tier 5pp 差异下结论 |
+| 分群/私聊 | 各自不得比 baseline 倒退 >5pp | 单独调优，不整体开 |
+| 确定性 | 同一输入重跑两次，总体准确率差 ≤2pp；关键词判定无歧义 | 先修 harness，不跑结论 |
+
+- 120 条主 probe（60 群/60 私聊）总体可支撑 15pp 的配对检验；单 tier 40 条只作方向参考。
+- 判定顺序：先看 **raw48 vs baseline16** 是否 ≥+15pp；过了再看 **layered vs raw48** 是否 ≥+10pp；Tier C（>48 条）不过就不为摘要付 token。
+
 ## 评分表（v3 实际结果，Aya `memory_ab_aya_v3.json`）
 
 > `summary.score_means` 因聚合形状 bug 全为 null；下表从逐条 `judge.scores` 重算，和 Aya 汇总一致。
