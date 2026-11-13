@@ -15,7 +15,9 @@
 判据：
     raw48 相对 baseline 准确率 ≥ +15pp          → 窗口扩容达标
     layered 相对 raw48  准确率 ≥ +10pp 且 token ≤ +30% → 摘要带来增量
-    同题重复两次命中一致率 ≥ 95%（--repeat N 抽样）
+        token 门槛用**下发侧** delivery ratio（layered 请求 prompt / baseline）；
+        摘要生成是一次性成本，`with_summary` 只报告、不参与判定（生产摊销另算）。
+    同题抽检一致性 ≥ 95%（--repeat N，按 tier 分层抽样，不是整轮准确率差）
 
 用法：
     python3 eval/memory_probe.py --db <副本> --cases eval/memory_cases.json
@@ -133,6 +135,23 @@ def _build_contexts(rows: list[dict[str, Any]], summary: str) -> dict[str, str]:
             text = render_summary_block(summary) + "\n" + text
         contexts[variant] = text
     return contexts
+
+
+def _pick_repeat_ids(cases: list[dict[str, Any]], n: int) -> set[str]:
+    """确定性分层抽样：按 probe_tier（缺省按 kind）轮转，覆盖 A/B/C。"""
+    if n <= 0:
+        return set()
+    pools: dict[str, list[str]] = {}
+    for case in cases:
+        key = str(case.get("probe_tier") or case.get("kind") or "all")
+        pools.setdefault(key, []).append(str(case["case_id"]))
+    picked: set[str] = set()
+    keys = sorted(pools)
+    while len(picked) < n and any(pools[key] for key in keys):
+        for key in keys:
+            if pools[key] and len(picked) < n:
+                picked.add(pools[key].pop(0))
+    return picked
 
 
 def _load_done_ids(jsonl_path: str) -> set[str]:
@@ -368,13 +387,14 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
         else:
             Path(jsonl_path).write_text("", encoding="utf-8")
 
+    repeat_ids = _pick_repeat_ids(selected, repeat)
     results: list[dict[str, Any]] = []
     skipped = 0
     for index, case in enumerate(selected, 1):
         if case["case_id"] in done:
             continue
         entry = probe_case(
-            case, conn, key, dry_run, repeat=bool(repeat) and len(results) < repeat,
+            case, conn, key, dry_run, repeat=str(case["case_id"]) in repeat_ids,
         )
         if entry is None:
             skipped += 1
@@ -459,7 +479,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--jsonl", default="", help="逐条 checkpoint 路径；默认 <out>.jsonl")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--repeat", type=int, default=0,
-                        help="抽前 N 条把每个变体再问一次，做确定性自检")
+                        help="按 tier 分层抽 N 条，每变体再问一次，做一致性自检")
     args = parser.parse_args(argv)
 
     raw = json.loads(Path(args.cases).read_text(encoding="utf-8"))

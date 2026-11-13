@@ -230,3 +230,17 @@ def test_group_by_tier_and_type():
     assert summary["by_tier"]["A"]["case_count"] == 1
     assert summary["by_tier"]["C"]["accuracy"]["baseline"] == 0.0
     assert summary["by_type"]["事实"]["accuracy"]["layered"] == 1.0
+
+
+def test_pick_repeat_ids_is_stratified_by_tier():
+    cases = (
+        [{"case_id": f"A{i}", "probe_tier": "A"} for i in range(3)]
+        + [{"case_id": f"B{i}", "probe_tier": "B"} for i in range(2)]
+        + [{"case_id": f"C{i}", "probe_tier": "C"} for i in range(2)]
+    )
+
+    picked = memory_probe._pick_repeat_ids(cases, 4)
+
+    assert picked == {"A0", "B0", "C0", "A1"}
+    assert memory_probe._pick_repeat_ids(cases, 0) == set()
+    assert len(memory_probe._pick_repeat_ids(cases, 99)) == 7
