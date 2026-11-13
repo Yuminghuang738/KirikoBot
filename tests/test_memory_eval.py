@@ -247,6 +247,7 @@ def test_run_dry_run_structure(tmp_path):
     assert entry["variants"]["layered"]["context_messages"] == 24
     assert entry["variants"]["layered"]["summary_len"] == 0
     assert entry["baseline_reply"] == "" and entry["layered_reply"] == ""
+    assert entry["summary"] == "" and entry["anchor_in_summary"] is False
     assert "judge" not in entry and "anchor" not in entry
     assert payload["summary"]["case_count"] == 1
     assert payload["notes"].startswith("只测记忆层")
@@ -272,10 +273,16 @@ def test_run_keeps_replies_for_audit(tmp_path, monkeypatch):
         "category": "group", "kind": "case",
     }
     monkeypatch.setattr(memory_replay, "_read_token", lambda: "k")
-    monkeypatch.setattr(memory_replay, "summarize_older", lambda older, key: "摘要")
+    monkeypatch.setattr(memory_replay, "summarize_older", lambda older, key: "用户在练琴")
     replies = iter(["baseline 回复原文", "layered 回复原文"])
     monkeypatch.setattr(memory_replay, "generate_reply", lambda hist, user, key: next(replies))
-    monkeypatch.setattr(memory_replay, "judge_call", lambda *a, **k: {})
+    judge_contexts = []
+
+    def fake_judge(context, last_user, a, b, key):
+        judge_contexts.append(context)
+        return {}
+
+    monkeypatch.setattr(memory_replay, "judge_call", fake_judge)
     monkeypatch.setattr(memory_replay, "anchor_call", lambda *a, **k: None)
 
     payload = memory_replay.run([case], db)
@@ -283,4 +290,27 @@ def test_run_keeps_replies_for_audit(tmp_path, monkeypatch):
     entry = payload["results"][0]
     assert entry["baseline_reply"] == "baseline 回复原文"
     assert entry["layered_reply"] == "layered 回复原文"
-    assert entry["variants"]["layered"]["summary_len"] == len("摘要")
+    assert entry["summary"] == "用户在练琴"
+    assert entry["anchor_in_summary"] is True
+    assert entry["variants"]["layered"]["summary_len"] == len("用户在练琴")
+    # judge 必须看到 layered 的摘要上下文，而不是只有 baseline 的 16 条
+    assert len(judge_contexts) == 2
+    assert all("【更早的摘要】" in ctx and "用户在练琴" in ctx for ctx in judge_contexts)
+
+
+def test_anchor_in_summary_false_when_fact_missing(tmp_path, monkeypatch):
+    db = _make_db(tmp_path)
+    case = {
+        "case_id": "G002", "user_id": "g_user0", "group_id": "700000",
+        "target_history_id": 42, "anchor_history_id": 1, "anchor_fact": "养了一只猫",
+        "category": "group", "kind": "needle",
+    }
+    monkeypatch.setattr(memory_replay, "_read_token", lambda: "k")
+    monkeypatch.setattr(memory_replay, "summarize_older", lambda older, key: "用户在练琴")
+    monkeypatch.setattr(memory_replay, "generate_reply", lambda hist, user, key: "回复")
+    monkeypatch.setattr(memory_replay, "judge_call", lambda *a, **k: {})
+    monkeypatch.setattr(memory_replay, "anchor_call", lambda *a, **k: None)
+
+    payload = memory_replay.run([case], db)
+
+    assert payload["results"][0]["anchor_in_summary"] is False

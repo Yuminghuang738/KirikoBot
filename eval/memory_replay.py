@@ -172,9 +172,10 @@ def generate_reply(history: list[dict[str, Any]], user_text: str, key: str) -> s
 
 
 def _context_text(history: list[dict[str, Any]]) -> str:
+    """judge 看到的上下文：最多最近 24 条（layered 实际窗口）。"""
     return "\n".join(
         f"{'用户' if m['role'] == 'user' else 'Kiriko'}：{m['content']}"
-        for m in history[-8:]
+        for m in history[-LAYERED_RAW:]
     )
 
 
@@ -296,10 +297,13 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
         baseline_reply = "" if dry_run else generate_reply(baseline_hist, last_user, key)
         layered_reply = "" if dry_run else generate_reply(layered_hist, user_layered, key)
 
+        anchor_fact = str(case.get("anchor_fact") or "").strip()
         entry: dict[str, Any] = {
             "case_id": case["case_id"],
             "kind": case.get("kind", "case"),
             "category": case.get("category"),
+            "summary": summary,
+            "anchor_in_summary": bool(anchor_fact and anchor_fact in summary),
             "baseline_reply": baseline_reply,
             "layered_reply": layered_reply,
             "variants": {
@@ -309,14 +313,18 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
             "latency_ms": round((time.perf_counter() - started) * 1000, 1),
         }
         if not dry_run:
-            ctx = _context_text(baseline_hist)
+            # judge 必须看 layered 的实际上下文（24 条 + 摘要），否则 layered 正确
+            # 引用更早的事实在 judge 眼里会像「无中生有」，系统性压低它的分。
+            ctx = _context_text(layered_hist)
+            if summary:
+                ctx = f"【更早的摘要】\n{summary}\n{ctx}"
             entry["judge"] = combine_pair(
                 judge_call(ctx, last_user, baseline_reply, layered_reply, key),
                 judge_call(ctx, last_user, layered_reply, baseline_reply, key),
             )
             entry["anchor"] = {
-                "baseline": anchor_call(ctx, last_user, baseline_reply, case.get("anchor_fact", ""), key),
-                "layered": anchor_call(ctx, last_user, layered_reply, case.get("anchor_fact", ""), key),
+                "baseline": anchor_call(ctx, last_user, baseline_reply, anchor_fact, key),
+                "layered": anchor_call(ctx, last_user, layered_reply, anchor_fact, key),
             }
         results.append(entry)
 
