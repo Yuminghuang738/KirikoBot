@@ -84,9 +84,9 @@ def test_failure_does_not_advance_and_backs_off(db, monkeypatch):
     assert db.get_summary_high_water("u1", "g1") == 0
     assert _count(db) == 0
 
-    # 退避期内不再调用模型
+    # 空响应会再重试一次，所以是 2 次；退避期内不再调用模型
     assert memory_service.maybe_summarize(db, "u1", "g1") is False
-    assert len(calls) == 1
+    assert len(calls) == 2
 
 
 def test_plain_text_summary_fallback(db, monkeypatch):
@@ -374,7 +374,9 @@ def test_generate_summary_accepts_retry_even_if_still_missing(monkeypatch):
     summary, _ = memory_service.generate_summary("用户：明天见面")
 
     assert len(calls) == 2      # 只重试一次，不无限循环
-    assert summary == "聊了谱子的事。"
+    assert summary.startswith("聊了谱子的事。")
+    # 模型仍没写日期时，由程序确定性地补关键信息行
+    assert "【关键信息】" in summary and "明天" in summary
 
 
 def test_generate_summary_keeps_first_when_retry_fails(monkeypatch):
@@ -385,7 +387,8 @@ def test_generate_summary_keeps_first_when_retry_fails(monkeypatch):
     monkeypatch.setattr(memory_service, "quick_chat", lambda *a, **k: next(replies))
 
     summary, _ = memory_service.generate_summary("用户：明天见面")
-    assert summary == "聊了见面的事。"
+    assert "聊了见面的事。" in summary
+    assert "【关键信息】" in summary and "明天" in summary
 
 
 def test_generate_summary_no_retry_when_nothing_missing(monkeypatch):
@@ -422,4 +425,63 @@ def test_maybe_summarize_uses_retry_and_saves_better_summary(db, monkeypatch):
     assert memory_service.maybe_summarize(db, "u1", "g1") is True
     latest = db.get_latest_summary("u1", "g1")
     assert "明天" in latest["summary"]
+    assert len(calls) == 2
+
+
+# ── 关键信息行 / 500 字上限 / 空响应重试 ─────────────────────
+
+def test_summary_limit_default_is_500():
+    assert memory_service.Config.MEMORY_SUMMARY_MAX_CHARS == 500
+
+
+def test_key_info_line_extracts_dates_terms_and_caps_length(monkeypatch):
+    line = memory_service._key_info_line(
+        "明天要交 SlicesIndex 和 pacs12，NULL 判断还没弄完",
+        "聊了代码。",
+    )
+
+    assert "日期：明天" in line
+    assert "SlicesIndex" in line and "pacs12" in line and "NULL" in line
+    assert "未完成" in line
+    assert len(line) <= 80
+    assert line.endswith("。")
+
+
+def test_generate_summary_appends_deterministic_terms(monkeypatch):
+    monkeypatch.setattr(
+        memory_service, "quick_chat",
+        lambda *a, **k: json.dumps({"summary": "用户聊了代码。", "facts": []}),
+    )
+
+    summary, _ = memory_service.generate_summary(
+        "SlicesIndex pacs12 NULL SlicesIndex pacs12 NULL 这几个标识符"
+    )
+
+    assert "SlicesIndex" in summary and "pacs12" in summary and "NULL" in summary
+    assert "【关键信息】" in summary
+    assert len(summary) <= memory_service.Config.MEMORY_SUMMARY_MAX_CHARS
+
+
+def test_empty_first_response_retries_once(monkeypatch):
+    replies = iter(["", json.dumps({"summary": "第二次成功。", "facts": []})])
+    calls = []
+
+    def fake(*a, **k):
+        calls.append(1)
+        return next(replies)
+
+    monkeypatch.setattr(memory_service, "quick_chat", fake)
+
+    summary, _ = memory_service.generate_summary("用户：普通聊天")
+    assert summary == "第二次成功。"
+    assert len(calls) == 2
+
+
+def test_empty_twice_returns_empty(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        memory_service, "quick_chat",
+        lambda *a, **k: calls.append(1) or "",
+    )
+    assert memory_service.generate_summary("用户：普通聊天") == ("", [])
     assert len(calls) == 2

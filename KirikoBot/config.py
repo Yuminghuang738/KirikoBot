@@ -169,7 +169,7 @@ class Config:
     MEMORY_LAYERS_ENABLED: Final[bool] = os.getenv("MEMORY_LAYERS_ENABLED", "1") == "1"
     MEMORY_RAW_MESSAGES: Final[int] = int(os.getenv("MEMORY_RAW_MESSAGES") or 24)
     MEMORY_RAW_MAX_CHARS: Final[int] = int(os.getenv("MEMORY_RAW_MAX_CHARS") or 3000)
-    MEMORY_SUMMARY_MAX_CHARS: Final[int] = int(os.getenv("MEMORY_SUMMARY_MAX_CHARS") or 400)
+    MEMORY_SUMMARY_MAX_CHARS: Final[int] = int(os.getenv("MEMORY_SUMMARY_MAX_CHARS") or 500)
     MEMORY_SUMMARY_FACTS: Final[int] = int(os.getenv("MEMORY_SUMMARY_FACTS") or 2)
     MEMORY_SUMMARY_KEEP: Final[int] = int(os.getenv("MEMORY_SUMMARY_KEEP") or 6)
     MEMORY_SUMMARY_RETRY_TURNS: Final[int] = int(os.getenv("MEMORY_SUMMARY_RETRY_TURNS") or 3)
