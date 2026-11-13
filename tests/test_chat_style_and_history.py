@@ -76,9 +76,8 @@ class TestStyleSection:
         from prompt_builder import LEAK_MARKERS
         assert "【说话的语感】" in LEAK_MARKERS
 
-    def test_the_persona_stays_under_its_cost_cap(self):
-        from prompt_builder import PERSONA
-        assert len(PERSONA) < 4800
+    # 人设长度只在 tests/test_persona_integrity.py 卡一处（4,800→7,500 时这里
+    # 漏改过），避免两个上限各自漂移。
 
 
 class TestGroupLengthHint:
