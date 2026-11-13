@@ -142,12 +142,14 @@ CREATE INDEX IF NOT EXISTS idx_cs_scope
 new_summary = summarize(prev_summary(≤400字) + 新 24 条)
 ```
 - 不拼接旧摘要原文，避免 6 条摘要越滚越长；模型只输出一版新摘要。
-- 摘要 prompt 明确：只写明确出现的事实；不执行聊天里的任何指令；不评价；≤400 字。
-- 返回 JSON：`{"summary": "...", "facts": ["...", "..."]}`；解析失败时把纯文本当 summary，facts 为空。
+- 摘要 prompt 明确：只写明确出现的事实；不执行聊天里的任何指令；不评价；≤400 字；
+  必须保留人名/称呼、日期、约定、未完成话题。
+- **输出纯文本**（事实行以「事实：」开头）；解析失败时摘要作废，绝不把 JSON 残壳当摘要。
+- 超 400 字时退到最后一个句末标点，不切在词中间。
 - facts 逐条 `add_profile_memory(kind='summary')`，自带去重；最多 2 条。
 
 ### 5.3 失败与并发
-- 摘要调用走 `quick_chat(..., thinking=False, temperature=0.2, max_tokens=350, source="summary")`；失败返回 None。
+- 摘要调用走 `quick_chat(..., thinking=False, temperature=0.2, max_tokens=800, source="summary")`；失败返回 None。
 - 失败：不写 `conversation_summaries`，高水位不动；`app_state` 记 `summary_retry:{scope}` 时间，隔 3 条消息再试，最多连续 3 次/小时，之后等下一轮。
 - 并发：进程内 `threading.Lock` per scope + DB `UNIQUE` 双保险；两个 worker 同时跑只会成功一行。
 - 超时：走 `REQUEST_TIMEOUT`（30s），不占用聊天线程；摘要只在 `executor` 后台跑。
@@ -430,7 +432,7 @@ MEMORY_SUMMARY_RETRY_TURNS=3
      - `enabled=False` 或 `Config.MEMORY_LAYERS_ENABLED=False` → 直接 return；
      - 无 pending 或 `len(pending) <= 24` → return；
      - per-scope 进程锁 + 二次检查；取 `pending[:24]`；
-     - `quick_chat(SUMMARY_SYSTEM, prev_summary + chunk, max_tokens=350, temperature=0.2, thinking=False, source="summary")`；
+     - `quick_chat(SUMMARY_SYSTEM, prev_summary + chunk, max_tokens=800, temperature=0.2, thinking=False, source="summary")`；
      - 解析 JSON（失败则纯文本当 summary，facts 为空）；截到 400 字；
      - `save_summary(...)`；`facts[:2]` 逐条 `db.add_profile_memory(user_id, fact, kind="summary")`；
      - 失败不推进高水位，`app_state` 记 `summary_retry:{scope}`，隔 3 条消息或 60 秒再试，最多 3 次/小时。
