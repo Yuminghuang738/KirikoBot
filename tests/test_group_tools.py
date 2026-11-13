@@ -250,8 +250,6 @@ class TestTurnChainRecording:
         assert rec["reasoning"] == "想了想"
 
     def test_reasoning_column_is_migrated_onto_old_dbs(self, tmp_path):
-        import sqlite3
-
         from database_manager import DatabaseManager
 
         path = str(tmp_path / "legacy.db")

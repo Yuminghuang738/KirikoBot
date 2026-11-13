@@ -116,3 +116,7 @@ KirikoBot/docker-compose.yml
 
 # 评测输出含真实群友原话，禁止入库
 eval/out/
+
+# Coverage / test artifacts
+.coverage
+.coverage.*

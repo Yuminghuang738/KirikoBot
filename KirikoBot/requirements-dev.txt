@@ -1,3 +1,5 @@
 # Development-only dependencies (not needed to run the bot).
 -r requirements.txt
 pytest>=8.0,<10.0
+pytest-cov>=5.0,<8.0
+ruff>=0.6,<1.0
