@@ -175,3 +175,104 @@ def test_plan_syncs_only_git_tracked_files() -> None:
     # 未跟踪的 WIP 绝不能被部署。
     assert "dsh_plugins.py" not in proc.stdout
     assert "tts_service.py" not in proc.stdout
+
+
+# ── 验收函数必须 fail-closed：查不到 ≠ 没问题 ──────────────────────
+
+STUB_SSH_DOWN = 'remote() { return 1; }'
+
+STUB_ALL_OK = '''remote() {
+  case "$1" in
+    *curl*) return 0 ;;
+    *"State.Health.Status"*) echo healthy ;;
+    *"State.Running"*) echo true ;;
+    *"docker logs"*) echo 0 ;;
+    *) return 0 ;;
+  esac
+}'''
+
+
+def _run_common(body: str, **env) -> subprocess.CompletedProcess:
+    script = (
+        f'source "{COMMON}"\n'
+        'CONTAINER=kirikobot\n'
+        'HEALTH_URL=http://localhost:5000/healthz\n'
+        f'{body}\n'
+    )
+    run_env = {"PATH": "/usr/bin:/bin", "HOME": "/nonexistent"}
+    run_env.update({key: str(value) for key, value in env.items()})
+    return subprocess.run(
+        [BASH, "-c", script], capture_output=True, text=True, env=run_env, timeout=30,
+    )
+
+
+def test_traceback_check_fails_closed_when_ssh_fails() -> None:
+    proc = _run_common(f'{STUB_SSH_DOWN}\ncheck_no_traceback 2026-01-01T00:00:00Z')
+    assert proc.returncode != 0
+    assert "FAIL" in proc.stderr
+
+
+def test_traceback_check_fails_closed_when_output_is_empty() -> None:
+    stub = '''remote() {
+  case "$1" in
+    *"State.Running"*) echo true ;;
+    *) printf '' ;;
+  esac
+}'''
+    proc = _run_common(f'{stub}\ncheck_no_traceback 2026-01-01T00:00:00Z')
+    assert proc.returncode != 0
+
+
+def test_traceback_check_fails_closed_when_container_not_running() -> None:
+    stub = '''remote() {
+  case "$1" in
+    *"State.Running"*) echo false ;;
+    *) echo 0 ;;
+  esac
+}'''
+    proc = _run_common(f'{stub}\ncheck_no_traceback 2026-01-01T00:00:00Z')
+    assert proc.returncode != 0
+
+
+def test_traceback_check_fails_closed_on_unparsable_output() -> None:
+    stub = '''remote() {
+  case "$1" in
+    *"State.Running"*) echo true ;;
+    *) echo "oops no traceback count" ;;
+  esac
+}'''
+    proc = _run_common(f'{stub}\ncheck_no_traceback 2026-01-01T00:00:00Z')
+    assert proc.returncode != 0
+
+
+def test_traceback_check_fails_on_actual_tracebacks() -> None:
+    stub = '''remote() {
+  case "$1" in
+    *"State.Running"*) echo true ;;
+    *"grep -ci"*) echo 2 ;;
+    *) return 0 ;;
+  esac
+}'''
+    proc = _run_common(f'{stub}\ncheck_no_traceback 2026-01-01T00:00:00Z')
+    assert proc.returncode != 0
+
+
+def test_traceback_check_passes_only_on_clean_zero() -> None:
+    proc = _run_common(f'{STUB_ALL_OK}\ncheck_no_traceback 2026-01-01T00:00:00Z')
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_verify_after_restart_fails_closed_when_ssh_down() -> None:
+    proc = _run_common(
+        f'{STUB_SSH_DOWN}\nverify_after_restart 2026-01-01T00:00:00Z',
+        HEALTHZ_WAIT=0, HEALTHY_WAIT=0,
+    )
+    assert proc.returncode != 0
+
+
+def test_verify_after_restart_passes_when_all_checks_ok() -> None:
+    proc = _run_common(
+        f'{STUB_ALL_OK}\nverify_after_restart 2026-01-01T00:00:00Z',
+        HEALTHZ_WAIT=1, HEALTHY_WAIT=1,
+    )
+    assert proc.returncode == 0, proc.stderr

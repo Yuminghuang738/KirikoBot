@@ -13,6 +13,10 @@ remote() {
 log() { printf '[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
 err() { printf '[%s] ✗ %s\n' "$(date '+%H:%M:%S')" "$*" >&2; }
 
+# 验收等待时长（秒）。测试里压到 0，避免为了等超时把用例拖到几分钟。
+HEALTHZ_WAIT="${HEALTHZ_WAIT:-60}"
+HEALTHY_WAIT="${HEALTHY_WAIT:-120}"
+
 # 轮询 healthz，最多等 $2 秒（默认 60）。
 wait_healthz() {
     local url=$1 deadline=$((SECONDS + ${2:-60}))
@@ -38,11 +42,28 @@ wait_healthy() {
 }
 
 # 重启以来的日志里不允许出现 traceback（大小写不敏感）。
+# fail-closed：ssh 失败、容器不在跑、日志输出为空或不可解析，一律判 FAIL ——
+# 「查不到」绝不能当成「没问题」。
 check_no_traceback() {
-    local since=$1 count
-    count=$(remote "docker logs --since '$since' '$CONTAINER' 2>&1 | grep -ci traceback || true")
-    count=${count:-0}
-    if [[ "$count" != "0" ]]; then
+    local since=$1 running output count
+    if ! running=$(remote "docker inspect --format '{{.State.Running}}' '$CONTAINER'"); then
+        err "无法确认容器状态（ssh/docker 失败），按 FAIL 处理"
+        return 1
+    fi
+    if [[ "$(printf '%s' "$running" | tr -d '[:space:]')" != "true" ]]; then
+        err "容器未在运行（docker inspect Running=${running:-空}），按 FAIL 处理"
+        return 1
+    fi
+    if ! output=$(remote "docker logs --since '$since' '$CONTAINER' 2>&1 | grep -ci traceback || true"); then
+        err "无法读取容器日志（ssh/docker 失败），按 FAIL 处理"
+        return 1
+    fi
+    count=$(printf '%s' "$output" | tr -d '[:space:]')
+    if [[ ! "$count" =~ ^[0-9]+$ ]]; then
+        err "日志检查输出不可解析（${count:-空}），按 FAIL 处理"
+        return 1
+    fi
+    if (( count > 0 )); then
         err "日志出现 $count 处 traceback"
         remote "docker logs --since '$since' '$CONTAINER' 2>&1 | grep -i -m3 -A3 traceback" >&2 || true
         return 1
@@ -54,13 +75,13 @@ check_no_traceback() {
 # 用法：verify_after_restart <since-rfc3339>
 verify_after_restart() {
     local since=$1 failed=0
-    if wait_healthz "$HEALTH_URL" 60; then
+    if wait_healthz "$HEALTH_URL" "$HEALTHZ_WAIT"; then
         log "healthz=ok"
     else
         err "healthz 未通过（$HEALTH_URL）"
         failed=1
     fi
-    if wait_healthy 120; then
+    if wait_healthy "$HEALTHY_WAIT"; then
         log "容器 healthy"
     else
         failed=1
