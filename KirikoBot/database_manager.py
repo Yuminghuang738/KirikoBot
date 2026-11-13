@@ -336,6 +336,13 @@ class DatabaseManager:
                     ("arguments", "TEXT DEFAULT ''"),
                     ("result", "TEXT DEFAULT ''"),
                     ("reasoning", "TEXT DEFAULT ''"),
+                    # 阶段 7：DSH 任务的可观测字段（只加列）
+                    ("duration_ms", "INTEGER DEFAULT 0"),
+                    ("status", "TEXT DEFAULT ''"),
+                    ("session_key", "TEXT DEFAULT ''"),
+                    ("session_recovered", "INTEGER DEFAULT 0"),
+                    ("queue_wait_ms", "INTEGER DEFAULT 0"),
+                    ("error", "TEXT DEFAULT ''"),
                 ]:
                     try:
                         connect.execute(f"ALTER TABLE tool_usage ADD COLUMN {col} {col_type}")
@@ -1939,6 +1946,43 @@ class DatabaseManager:
             (tool_name, user_id, group_id, arguments[:500], result[:500],
              reasoning[:2000]),
         )
+
+    def start_dsh_task(self, user_id: str, group_id: str | None,
+                       session_key: str = "") -> int:
+        """插入一条 running 行，返回 id；结束时用 finish_dsh_task 更新。"""
+        with self.get_connect() as connect:
+            cur = connect.execute(
+                "INSERT INTO tool_usage (tool_name, user_id, group_id, status, "
+                "session_key, timestamp) VALUES ('dsh_agent', ?, ?, 'running', ?, "
+                "datetime('now','localtime'))",
+                (user_id, group_id, session_key or ""),
+            )
+            return int(cur.lastrowid or 0)
+
+    def finish_dsh_task(self, task_id: int, *, status: str, duration_ms: int,
+                        session_recovered: bool = False, queue_wait_ms: int = 0,
+                        error: str = "", arguments: str = "", result: str = "",
+                        reasoning: str = "") -> None:
+        if not task_id:
+            return
+        with self.get_connect() as connect:
+            connect.execute(
+                "UPDATE tool_usage SET status=?, duration_ms=?, session_recovered=?, "
+                "queue_wait_ms=?, error=?, arguments=?, result=?, reasoning=? WHERE id=?",
+                (status, max(0, int(duration_ms)), 1 if session_recovered else 0,
+                 max(0, int(queue_wait_ms)), (error or "")[:300],
+                 (arguments or "")[:500], (result or "")[:500],
+                 (reasoning or "")[:2000], int(task_id)),
+            )
+
+    def mark_stale_dsh_tasks_interrupted(self) -> int:
+        """服务重启后，上一次留下的 running 行改 interrupted（否则永远算运行中）。"""
+        with self.get_connect() as connect:
+            cur = connect.execute(
+                "UPDATE tool_usage SET status='interrupted', error='service restarted' "
+                "WHERE tool_name='dsh_agent' AND status='running'",
+            )
+            return int(cur.rowcount or 0)
 
     def get_recent_tool_chain(self, group_id: str | None, user_id: str,
                               limit: int = 5) -> list[dict[str, Any]]:
