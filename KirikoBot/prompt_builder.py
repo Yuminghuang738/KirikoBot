@@ -19,6 +19,7 @@ from datetime import datetime
 from typing import Any
 
 from config import Config
+from memory_service import render_summary_block
 from feature_gate import disabled_labels
 
 logger = logging.getLogger(__name__)
@@ -397,7 +398,8 @@ def format_group_context(rows: list[dict[str, Any]], minutes: int = 15) -> str:
 def build_user_message(robot: Any, reply_note: str = "",
                        group_context: str = "", now: Any = None,
                        mood: str = "", speaker: str = "",
-                       history: list[Any] | None = None) -> str:
+                       history: list[Any] | None = None,
+                       summary: str = "") -> str:
     """Build the user-role message — the ambient context plus this interaction."""
     msg = robot.msg.strip()
     if not msg:
@@ -410,6 +412,13 @@ def build_user_message(robot: Any, reply_note: str = "",
     # 当前说话人的画像/关系放这里，不放 system prompt —— 它随"谁在说话"变化，
     # 放进缓存前缀等于每换个人就废掉一次缓存（当初把时间戳挪出来就是为了这个）
     who = f"{speaker}\n" if speaker else ""
+    # 较早对话的摘要：放 user message（system 是缓存前缀，按用户变化会击穿缓存）。
+    # 空摘要整块不出现，token 为 0。
+    summary_block = ""
+    if summary:
+        rendered = render_summary_block(summary)
+        if rendered:
+            summary_block = f"{rendered}\n"
     # 动态增强：针对连续对话的短追问，强制锚定上下文，防止模型因单字输入而导致语境漂移
     is_short = len(msg.strip()) <= 10
     is_continuous = len(history or []) > 0
@@ -418,12 +427,12 @@ def build_user_message(robot: Any, reply_note: str = "",
     if robot.msg_type == "group":
         # 长度与风格指引：闲聊短接，正事/追问认真讲清，句末不加句号
         tail = f"\n（就像群里随口接一句：日常闲聊十几个字一两句就停；探讨正事或追问细节就认真讲清，多句话可以分行发，句末不加句号。{context_focus}）"
-        return (f"{stamp}{feeling}{who}{context}{prefix}群「{robot.group_name or ''}」中 "
+        return (f"{stamp}{feeling}{who}{context}{summary_block}{prefix}群「{robot.group_name or ''}」中 "
                 f"用户 {robot.user_name} 说：{msg}{tail}")
     
     # 私聊不加针对群的指引，但如果触发了近因增强，依然保留该上下文锚定提示
     tail = f"\n（{context_focus.strip()}）" if context_focus else ""
-    return f"{stamp}{feeling}{who}{prefix}用户 {robot.user_name} 说：{msg}{tail}"
+    return f"{stamp}{feeling}{who}{summary_block}{prefix}用户 {robot.user_name} 说：{msg}{tail}"
 
 
 def _time_line(now: Any = None) -> str:

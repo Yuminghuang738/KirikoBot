@@ -43,6 +43,14 @@ def prune_old_data(db: Any, days: int | None = None) -> dict[str, int]:
         except sqlite3.Error:
             logger.exception("Retention: failed to prune %s", table)
 
+    # 摘要与原文同寿命；更老的摘要已把 facts 写进长期画像，删掉不影响记忆。
+    try:
+        pruned_summaries = db.prune_conversation_summaries(cutoff=cutoff)
+        if pruned_summaries:
+            deleted["conversation_summaries"] = pruned_summaries
+    except Exception:
+        logger.exception("Retention: failed to prune conversation_summaries")
+
     if deleted:
         logger.info("保留策略：已清理 %d 天前的数据 %s", days, deleted)
     return deleted
