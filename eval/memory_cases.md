@@ -1,242 +1,192 @@
-# 记忆分层 eval 数据集（3b）
+# 记忆分层 eval 数据集（v4 probe）
 
-> 作者：Hina · 2026-11-13 · 数据来自线上 `robot.db` 只读副本（`online.db`，32.8 MB）
+> 索引存在 `eval/memory_cases.json`：只存样本 id、手写问题与关键词，不存聊天原文；运行时从只读 DB 副本按 id 取上下文。v4 起主指标改为 probe 问答准确率，v3 的 1–5 分 judge 结果只作历史参考。
 
-> 仓库只存索引与人工标注的锚点，**不存聊天原文**；运行期从 DB 副本按 id 取。
+## 数据版本
 
-- **v3**：40 条主样本（20 群 + 20 私聊）+ 10 条长间隔 needle。
-- 每个锚点拆两栏：`anchor_fact_short` 是摘要里大概率原样出现的短句（大小写不敏感字面匹配）；`anchor_semantic` 是语义说明（judge 用）。
-- 英文锚点（P008/P015/P017/P018/N006/N007/N008）的 `anchor_fact_short` 取「预期中文摘要会出现的词」（孤独/躺床上/没意义/女孩/互联网），不是原文英文；字面匹配按摘要语言判断。
-- 覆盖 3 个私聊用户、7 个群用户、多个群；主样本锚点距目标 24–45 条，needle 31–45 条。
+| 项 | 值 |
+|---|---|
+| 版本 | v4（`dataset_version=4`） |
+| 来源 | 线上 `robot.db` 只读副本（2026-11-13 23:15 拉取，history 16,788 行） |
+| 规模 | 120 主 probe（60 群 / 60 私聊）+ 20 needle（群 / 私聊各 10） |
+| 分层 | 主样本 A/B/C 各 40：A 24–32、B 33–48、C 49–80；needle 55–89 |
+| 制作 | Hina 逐条阅读锚点原文后手写 `probe_question` 与关键词，未从 `anchor_semantic` 自动生成 |
+| 审计 | Aya 抽 10%（12 主样本 + 2 needle）核对题面/关键词是否无歧义 |
+
+### 分布
+
+| tier | 群 | 私聊 | 合计 |
+|---|---|---|---|
+| A | 20 | 20 | 40 |
+| B | 20 | 20 | 40 |
+| C | 20 | 20 | 40 |
+| N（needle） | 10 | 10 | 20 |
+
+### 字段
+
+v3 索引字段（`case_id` / `user_id` / `group_id` / `target_history_id` / `anchor_history_id` / `anchor_semantic` / `anchor_fact` / `target_topic` / `category` / `kind` / `anchor_fact_short`）保留，新增：
+
+| 字段 | 说明 |
+|---|---|
+| `probe_question` | 手写问题，答案只能从锚点附近的较早上下文得到；不能出现在最近 16 条 |
+| `probe_answer_keywords` | 答案关键词/别名；大小写、全半角、空白归一后命中即算对 |
+| `probe_match` | `all`（默认，全部命中）或 `any`（命中一个即可） |
+| `probe_type` | `fact` / `preference` / `commitment` / `name` / `unfinished` |
+| `probe_tier` | `A` / `B` / `C` / `N`（needle） |
+| `probe_scope` | `group` / `private` |
+| `distance` | 锚点到目标 assistant 回合相隔的消息条数（校验用） |
+
+### 手写与防泄漏规则
+
+- 答案不出现在 target user message 或最近 16 条；脚本已逐条校验，0 条关键词泄漏。
+- 问题本身不回显关键词（4 条回显已改写为同义问法）。
+- 单一答案、锚点明确；不拿常识能答、不拿“今天/刚才”指代。
+- 去重：同一事实不重复出题；needle 锚点不复用主样本锚点。
 
 ## 样本清单
 
-| ID | 类型 | 场景 | anchor_fact_short（字面命中） | anchor_semantic（语义说明） | 目标回合 |
-|---|---|---|---|---|---|
-| P001 | 私聊 | private | `Linux嵌入式` | 用户正在学 Linux 嵌入式，觉得自己缺项目经验、担心找工作 | 嵌入式学习路线：直接看驱动还是教程 |
-| P002 | 私聊 | private | `问答游戏` | 用户和 Kiriko 玩过问答游戏：我问一句你答一句，然后你问我一句，必须据实相告 | 问答游戏结束/道晚安 |
-| P003 | 私聊 | private | `lp junior` | 用户习惯 LP Junior，喜欢轻薄的琴，现在给 f2020 上 09-42、Junior 上 10-46 的弦 | 两把琴换弦径 |
-| P004 | 私聊 | private | `SlicesIndex` | 用户在学 Go 泛型，贴过 SlicesIndex 的泛型代码，问过 List 的结构 | List[T] 是结构体数组还是切片 |
-| P005 | 私聊 | private | `综效` | 用户喜欢折腾吉他音色，想要综效/录音设备，觉得调三小时音色比打五小时游戏有成就感，常熬夜 | 拾音器/单双线圈与曲风 |
-| P006 | 私聊 | private | `挥霍` | 用户之前说自己在挥霍今天、快乐像泡沫，结束就感到不幸 | 打字也觉得是罪孽 |
-| P007 | 私聊 | private | `编程学习笔记` | 用户在整理编程学习笔记（纯英文），想决定记详细还是碎片化 | 笔记记详细还是碎片 |
-| P008 | 私聊 | private | `孤独` | 用户说自己真的很孤独，觉得很多事和想走的路无关 | 课程和真正想走的路 |
-| P009 | 私聊 | private | `招式` | 用户今天在教朋友格斗游戏、复习前面的招式，让 Kiriko 等他消息 | 还没开始，先报备 |
-| P010 | 私聊 | private | `街头霸王` | 用户对街头霸王感兴趣，问过有没有外设 | 问有没有外设 |
-| G001 | 群聊 | group | `tone旋钮` | 用户调音色都在效果器上调，吉他 tone 旋钮只挂一个常用档位；喜欢多把不同味道的琴 | 15万买一把 ESP 还是多把琴 |
-| G002 | 群聊 | group | `厚拨片` | 用户喜欢厚拨片硬扫的脆音色；黑卡用达达 EXL120，日芬用伊利克斯镀膜弦 | 黑卡/日芬用什么弦 |
-| G003 | 群聊 | group | `FleetwoodMac` | 用户点过 Fleetwood Mac 的歌 | Fleetwood Mac 算不算 punk |
-| G004 | 群聊 | group | `DeepSeek` | 用户问 DeepSeek V4 是否涨价，随后说 API 大涨养不起 | API 大涨养不起 |
-| G005 | 群聊 | group | `pacs12` | 用户之前聊过换琴目标，说会直接一步到位 pacs12 | 换 pac312 还是 pacs12 |
-| G006 | 群聊 | group | `NULL` | 用户问过 Linux 内核 NULL 定义在哪个头文件 | Linux 源码 main.c 在哪里 |
-| G007 | 群聊 | group | `脑筋急转弯` | 用户喜欢玩脑筋急转弯，之前让 Kiriko 出一道 | 还要玩脑筋急转弯 |
-| G008 | 群聊 | group | `西西弗斯` | 用户读过加缪，讨论过西西弗斯与愚公移山、个人主义/集体主义 | 哲学界没人研究加缪 |
-| G009 | 群聊 | group | `原神` | 用户点过《好想玩原神》这首歌，想玩原神 | 想玩原神，劝我别玩 |
-| G010 | 群聊 | group | `rana` | 用户之前要过 rana 的全身照，喜欢 BanG Dream 角色图 | 再要仲町阿拉蕾全身照 |
-| P011 | 私聊 | private | `linux_kernel_module` | 用户在 Fedora 上折腾命令行/npm/pnpm，之前 git checkout 过 linux_kernel_module.md | pnpm 命令报错 |
-| P012 | 私聊 | private | `设备树插件` | 用户问 NAND 板子能不能用设备树插件、dtb 打包在 FIT 里 | NAND 设备树插件 |
-| P013 | 私聊 | private | `range` | 用户在看 Go 的 range 字符串代码，问返回什么 | Go new(42) 指针 |
-| P014 | 私聊 | private | `come as you are` | 用户点/要 Come As You Are 的吉他谱 | Come As You Are 谱子 |
-| P015 | 私聊 | private | `躺床上` | 用户说自己讨厌很多事、只想躺床上，想改变 | 脑子清醒想改变 |
-| P016 | 私聊 | private | `midwestemo` | 用户说自己可能喜欢 midwestemo 音乐 | 大学课程没意义 |
-| P017 | 私聊 | private | `没意义` | 用户觉得很多事情没意义、是浪费时间 | 必须往前走/改变 |
-| P018 | 私聊 | private | `孤独` | 用户说这么多年留下来的只有孤独 | 这么多年只剩孤独 |
-| P019 | 私聊 | private | `杰米` | 用户之前在格斗游戏角色里选杰米/问角色 | Oopz 开黑 |
-| P020 | 私聊 | private | `教完` | 用户说教完朋友再跟 Kiriko 说一声 | 教完朋友再说 |
-| G011 | 群聊 | group | `琴行` | 用户想搬去有琴行和吉他工作室、房租不高的城市 | 无聊有什么办法 |
-| G012 | 群聊 | group | `二月十四` | 用户约 Kiriko 明年二月十四一起出去玩 | 山东鲁琴作坊 |
-| G013 | 群聊 | group | `Soldier` | 用户贴了 Soldier 的歌词 | Fight Club 第一条规则 |
-| G014 | 群聊 | group | `500字` | 用户要求写 500 字以内、反转不套路的短篇小说 | 塔罗总结 100 字以内 |
-| G015 | 群聊 | group | `三件套` | 用户问驱动模型是不是只有 bus/device/driver 三件套、class/sysfs 通用 | /sys/class 干什么 |
-| G016 | 群聊 | group | `法丽达` | 用户问法丽达 f2020 这把琴怎么样 | f2020 多久到瓶颈 |
-| G017 | 群聊 | group | `语境` | 用户说一句话要放在语境里思考 | 如何理解一句话要看语境 |
-| G018 | 群聊 | group | `有哪些工具` | 用户问 Kiriko 有哪些工具 | 现在有哪些工具 |
-| G019 | 群聊 | group | `rana` | 用户要过 rana 的全身图 | 要仲町阿拉蕾全身照 |
-| G020 | 群聊 | group | `punk` | 用户问过经典 punk/rock and roll 乐队推荐 | Journey/LinkinPark/One OK Rock 算摇滚朋克 |
-| N001 | needle | needle | `给别人的分析` | 用户之前抱怨塔罗总结太长，问为什么给别人的分析没那么长 | 我不是说过总结不要这么长吗 |
-| N002 | needle | needle | `字符设备` | 用户问过字符设备/驱动模型，认为字符设备要注册 class、需要 bus | 设备驱动是否必须注册 class |
-| N003 | needle | needle | `cdev` | 用户问过 cdev 是否挂在 platform 驱动里、Linux 有几套驱动模型 | 字符设备与 LDM 两条线 |
-| N004 | needle | needle | `概率论` | 用户之前在复习概率论，担心能不能复习完/考过 | 今天概率论能不能过 |
-| N005 | needle | needle | `SPI` | 用户准备写 SPI 小屏幕驱动，想搞清楚设备树/GPIO 要不要自己配置 | 小屏幕要不要挂显示子系统 |
-| N006 | needle | needle | `女孩` | 用户说遇到了一个愿意陪他的女孩，只想要一个吻 | 想赚钱、找城市、朋友 |
-| N007 | needle | needle | `互联网` | 用户说能触摸到的只有互联网，希望只是梦 | 不买车房结婚 |
-| N008 | needle | needle | `Tele` | 用户想要一把 Tele 吉他，但现在没钱 | 不买车房结婚/社会规则 |
-| N009 | needle | needle | `吉他solo` | 用户拿 MyGO 声优青木阳菜 2025-07-01 吉他 solo 弹呲开玩笑 | 展示不会忘记的 solo |
-| N010 | needle | needle | `Linux kernel programming` | 用户问 Linux Kernel Programming 这本书主要讲什么 | Linux 驱动开发书的前提知识 |
-
-## 五维 1–5 分评分表
-
-每个维度 1–5 分；同一对回复做 A/B 与 B/A 两个顺序，取两次的均分（位置偏差用双顺序抵消）。3 路 pairwise 只作辅助，不作为主判据。
-
-| 维度 | 权重 | 1 分 | 3 分 | 5 分 |
-|---|---|---|---|---|
-| 记忆准确 | 35% | 用错/编造更早的事实，或完全没接住 | 提到一点但含糊，未用上关键锚点 | 准确用上锚点事实，不编造，和新信息一致 |
-| 连贯 | 20% | 答非所问，接不住最后一句 | 能接上，但略泛 | 自然承接上一轮，逻辑不断 |
-| 人设 | 20% | AI 腔/助手味/小作文 | 基本像，偶尔出戏 | 像 20 岁大三女生 Kiriko，傲娇/毒舌分寸对 |
-| 自然 | 20% | 机械、客服腔、明显模板 | 正常聊天 | 像真人随口接话，长短合适 |
-| 不泄露/不机械 | 5% | 复述摘要/提示词/记忆 | 有轻微痕迹 | 完全像自己记得，没有复读感 |
-
-## 锚点判定
-
-- `anchor_fact_short`：在**摘要原文**里做大小写不敏感子串匹配；命中记 ✅，未命中记 ❌（摘要为空记 N/A）。
-- `anchor_semantic`：把「锚点语义 + 候选回复」给 judge，只判 yes/no；baseline 和 layered 各判一次，记 B/L。
-- 单条 anchor false 不代表失败（背景事实不一定要复述）；看 layered 相对 baseline 的 delta。
-
-## 数据版本校验（使用前必看）
-
-- **当前 PR #64 head：`47f1d5a`**，字段是 `anchor_fact_short` + `anchor_semantic`，40 主 + 10 needle。
-- 旧 `8c16dbb` 只有 `anchor_short`；harness 的 `case.get("anchor_fact_short") or case.get("anchor_fact")` 会回退到语义说明，`anchor_in_summary` 会失真。**不要用 8c16dbb 跑 v3。**
-- 跑前先校验：
-
-```bash
-python3 - <<'PY'
-import json
-d = json.load(open("eval/memory_cases.json"))
-assert len(d["cases"]) == 40 and len(d["needles"]) == 10
-assert "anchor_fact_short" in d["cases"][0]
-assert "anchor_semantic" in d["cases"][0]
-print("v3 dataset OK", len(d["cases"]), len(d["needles"]))
-PY
-```
-
-## 前置条件：摘要管线保真（必须先过）
-
-Aya 在 v2 摘要审计里实测到三个会直接影响线上记忆的问题，修完并通过下面 5 条审计，A/B 结果才算数：
-
-| 检查项 | 通过标准 |
-|---|---|
-| JSON 外壳 | `summary` 不得以 `{"summary"` / `{` 开头；解析失败不能把原文当摘要，出现 0 条 |
-| 截断位置 | **500 字**上限必须退到最后一个句末标点（。！？!?…），不许切在词中间；抽查 8/8 命中句末 |
-| 覆盖内容 | 抽 5 条摘要对照源消息：人名、日期/时间、约定、未完成话题不得整类消失 |
-| 压缩比 | 摘要覆盖输入 48 条的比例不作为门槛，但不能只剩主题词；上面四类信息至少保留出现过的 |
-| 生产一致性 | `memory_service.py` 与 `memory_replay.py` 使用同一套摘要清洗/截断函数，不能两套逻辑 |
-
-## 验收标准（40 主 + 10 needle）
-
-| 指标 | 门槛 |
-|---|---|
-| 主样本 · 记忆均分差 | layered − baseline ≥ **+0.5**（5 分制） |
-| 主样本 · 记忆胜率 | layered 严格胜 ≥ **24/40（60%）** |
-| 主样本 · 语义锚点 | layered ≥ **70%（28/40）**，且比 baseline **≥ +20pp** |
-| 主样本 · 字面命中 | `anchor_fact_short` 在摘要里 ≥ **80%（32/40）** |
-| 主样本 · 总体均分差 | 五维加权 ≥ **+0.2** |
-| 主样本 · 不回归 | 连贯/人设/自然 均分差 ≥ **-0.2**；不泄露 ≥ **-0.2**，严重泄露 0 例 |
-| needle · 记忆 | 均分差 ≥ **+0.5**；语义锚点 layered ≥ **70%（7/10）**，delta ≥ **+20pp**；字面命中 ≥ **80%** |
-| 统计 | 40 条记忆均分差的 paired bootstrap 95% CI 下界 > 0（不显著就不算过） |
-| token | API `usage` 实测 p50/p90 增幅 ≤ **+30%**（不算字符估算） |
-| 缓存/延迟 | 缓存 ≥45%；chat p90 增幅 ≤15% |
-| 摘要保真 | 5 条审计全过：JSON 外壳 0、截断 100% 在句末、人名/日期/约定/未完成话题保留、生产与 eval 同一套清洗函数 |
-
-## 摘要保真审计记录表（Aya 填，5 条）
-
-| case | JSON 外壳 | 截断位置 | 人名/称呼 | 日期/时间 | 约定/未完成话题 | 结论 |
-|---|---|---|---|---|---|---|
-| P004 | — | — | — | — | — | — |
-| G004 | — | — | — | —（源里有「明天/下次」） | — | — |
-| G005 | — | — | — | — | — | — |
-| G006 | — | — | — | — | — | — |
-| N003 | — | — | — | —（2025-07-01） | — | — |
-
-> 判定：外壳必须「无」；截断必须「句末」；人名/日期/约定列填「保留/丢失/源里没有」，只要源里出现过的类别整类丢失即不通过。
-
-## Token 预算（摘要上限 500 字）
-
-基线 chat prompt p50 = **6,463 token**；+30% 硬上限 = **8,402**。
-
-| 项 | 预算（token/次） |
-|---|---|
-| raw 16 → 24（+8 条） | +200–600 |
-| 摘要 400 → 500 字（新增） | **+70–100** |
-| 记忆层典型合计 | +270–700（p50 6,733–7,163，+4%–11%） |
-| 记忆层最坏（长技术对话） | +1,300（p50 7,763，+20%） |
-| 人设扩写预留 | ≤900 |
-| 记忆 + 人设合计 | ≤1,900（+29%，仍在 +30% 内） |
-
-> 500 字摘要的 +100 token 已算进「记忆层 ≤1,000」的预算；如果线上实测 p50 超过 8,000，先把 raw 从 24 降到 22，而不是砍摘要的关键信息行。
-
-## 历史结果（只作对照，不作验收）
-
-| 版本 | 规模 | 记忆 | 锚点 | 结论 |
-|---|---|---|---|---|
-| v1（Aya，`eval/out/memory_ab_aya.json`） | 25 | 2/25，3B:2L:20平 | 36% vs 32%（-4pp） | FAIL；judge 只看 baseline 16 条、无摘要原文、needle 不依赖锚点 |
-| v2（Ren，`eval/out/memory_ren_20261113_192241.json`） | 25 | 主 5/20，needle 0/5 | 72% vs 68%（+4pp） | FAIL；平局 68%，判据分辨力不足、anchor_fact_short 0/25 |
-
-## v3 A/B 实测（Aya，2026-11-13，**FAIL**）
-
-| 指标 | 主样本 40 | needle 10 | 门槛 | 结论 |
-|---|---|---|---|---|
-| memory 均分差 | **+0.00**（4.05/4.05） | +0.10（4.05/4.15） | ≥ +0.5 | FAIL |
-| memory 严格胜 | **0/40** | 1/10 | ≥ 24/40 | FAIL |
-| anchor 语义 | **60% vs 55%（+5pp）** | 40% vs 30%（+10pp） | layered ≥70%，delta ≥+20pp | FAIL |
-| anchor 字面 | **12/40（30%）** | 4/10（40%） | ≥80% | FAIL |
-| 五维加权均分差 | **-0.064** | -0.058 | ≥ +0.2 | FAIL |
-| eval prompt token | baseline 185,504 → layered 316,494（**+70.6%**） | — | ≤ +30% | eval 口径 FAIL |
-| 回复长度 | 107.0 / 101.9 | — | 不能靠短回复换胜率 | 长度不是原因 |
-| 摘要保真 | 5/5（500 字、句末、专名 5/5） | — | 必须过 | PASS |
-
-> 结论：**分层记忆按当前设计不具备开试点条件**，`memory_layers` 继续默认关。token +70.6% 是 eval 口径（system 只有 PERSONA，baseline prompt 仅 3,710 token），生产 p50 6,463 预计 +10–20%，不能直接当生产结论；但 memory/anchor 指标本身没达标。
-
-## 四变体对照（Ren，2026-11-13，v3 40+10）
-
-变体：`baseline16` / `raw24` / `raw48` / `layered(24+摘要)`；5 维 1–5 分，双顺序。
-
-### 主样本 40
-
-| 指标 | baseline16 | raw24 | raw48 | layered |
-|---|---|---|---|---|
-| memory 均分 | 4.04–4.05 | 4.05（diff **+0.00**） | 4.05（diff **+0.05**） | 4.06（diff **+0.03**） |
-| memory 严格胜/40 | 1 | **1**（平 38） | **2**（平 37） | **1**（平 38） |
-| anchor 语义 | 57.5% | 57.5% | 55.0% | **62.5%（+7.5pp）** |
-| anchor 字面 | — | — | — | **13/40（32.5%）** |
-| 五维加权均分差 | 0 | +0.062 | +0.134 | +0.136 |
-| prompt token | 256,167 | 271,124（**+5.8%**） | 318,358（**+24.3%**） | 285,991（下发 **+11.6%**） |
-| token ratio（含摘要） | 1.0 | +5.8% | +24.3% | 下发 +11.6%；eval 一次性 +87.6%；生产摊销约 +14% |
-| 回复长度 | 121.9 | 105.7 | 97.1 | 98.6 |
-
-### needle 10
-
-| 指标 | baseline16 | raw24 | raw48 | layered |
-|---|---|---|---|---|
-| memory 均分 | 4.15–4.25 | 4.05（diff **-0.15**） | 4.15（diff **-0.10**） | 3.70（diff **-0.45**） |
-| memory 严格胜/10 | 1–2 | **0**（平 9） | **0**（平 10） | **0**（平 8） |
-| anchor 语义 | 30% | **50%** | **50%** | **20%** |
-| anchor 字面 | — | — | — | **4/10（40%）** |
-| 五维加权均分差 | 0 | -0.058 | +0.005 | -0.460 |
-
-> 口径：`anchor_in_summary` 只有 layered 有摘要，raw24/raw48 记 —；token 的 layered 下发 +11.6% 不含摘要生成，摘要生成在 eval 里是 50 条全新历史的一次性成本（+87.6%），生产按 24 条/次摊销约 +14%。回复长度是 50 条总体均值。
-
-### 四变体结论
-
-1. **没有任何变体达到门槛**：memory 均分差最高 +0.05（门槛 +0.5），anchor 主样本最高 62.5%（门槛 ≥70% 且 +20pp），所以按规则不允许开 `memory_layers`。
-2. **layered 不比 raw48 好**：主样本 memory +0.03 vs +0.05、加权 +0.136 vs +0.134（打平）；needle memory **-0.45 vs -0.10**、anchor **20% vs 50%**，长尾被摘要压掉。
-3. **raw24 是唯一性价比项**：+5.8% token，主样本 memory +0.00、anchor 57.5% 不降，needle anchor 50% 高于 baseline 30%；但 memory 没达标，不能单独作为「窗口扩容已验收」。
-4. **raw48 不值**：+24.3% token，主样本 memory +0.05、anchor 55% 反而低于 baseline；人设/自然各 +0.20/+0.28，但 47/50 平局，不能当胜率证据。
-5. **judge 饱和是评估设计问题**：memory 47/50 平局、baseline 均分 4.04–4.25，±0.1 的差异在噪声内；40 条 + 1–5 分制撑不起 +0.5 的小数门槛。下一步应先改判据（锚点二进制问答、1–7 分或针对性事实题），再决定摘要/facts 设计。
-6. 结论：**`memory_layers` 保持默认关，不开试点，也不立即扩窗口**；raw24 可作为下一轮评估的候选基线，但必须先解决判据饱和。
-
-## 四变体决策规则
-
-1. **先看 raw48 vs layered**：layered 比 raw48 的 memory 均分高 ≥ **+0.3**，或 anchor 语义高 ≥ **+10pp**，才算摘要带来增量。
-2. 如果 **raw48 达标**（memory 均分差 ≥+0.5、anchor ≥70%/+20pp），而 layered 不比 raw48 好 → **放弃摘要，直接采用扩窗口**。
-3. 如果 raw24 与 raw48 的 memory 差 ≤0.2 且 token 更低 → 优先 **raw24**，不为了边际收益付 48 条窗口。
-4. 如果 layered 比 raw48 好但 token ratio >+30% → 先压缩摘要/raw 预算，不能直接开。
-5. 如果四个变体都不达标 → **不改摘要长度硬开**，回退默认关；下一轮改摘要/facts 设计（专名进 facts、结构化摘要、锚点保留）。
-6. token 以 API `usage` 计；eval 的 system=PERSONA，ratio 只作相对参考，生产验收看 `ai_calls` p50/p90。
-
-### 两次独立重跑：数值不可靠
-
-同一份 v3 40+10、同一 harness，Ren 和 Aya 各自跑出的数差到 0.2，符号都反了：
-
-| 指标 | Ren | Aya（`memory_4v_aya_v5.json`） |
-|---|---|---|
-| 主样本 memory raw24/raw48/layered | -0.03 / +0.02 / **-0.07** | **+0.12 / +0.16 / +0.16** |
-| 主样本 anchor（base/24/48/layered） | 57.5 / 57.5 / 55.0 / 62.5 | **48 / 55 / 55 / 55** |
-| needle anchor（base/24/48/layered） | 30 / 50 / 50 / **20** | **30 / 30 / 30 / 30** |
-| needle memory raw24/raw48/layered | -0.15 / -0.10 / **-0.45** | **0.00 / 0.00 / -0.05** |
-| 回复长度 base/24/48/layered | 121.9 / 105.7 / 97.1 / 98.6 | 96.3 / 105.5 / 97.4 / 90.7 |
-| token raw24 / raw48 / layered | +5.8% / +24.3% / +87.6% | +6.1% / +24.7% / +88.3% |
-
-两次的**方向一致**：layered 不比 raw48 好、四者都没到门槛、raw24 最省。但**数值不可靠**：生成温度 0 仍有采样差异，judge 平局 35–38/40，叠加后噪声大于效应。结论只能用于「决定下一步怎么测」，不能用于对设计判死刑。
+| ID | kind | tier | scope | dist | type | 锚点 | probe_question | keywords |
+|---|---|---|---|---|---|---|---|---|
+| G001 | case | A | group | 25 | preference | The Hell Song | 我之前点过 Sum41 的哪首歌？ | `hell song` |
+| G002 | case | A | group | 29 | preference | With Or Without You | 我点 U2 的歌时，特意说不要哪一首？ | `with or without you` |
+| G003 | case | A | group | 25 | name | 敖尹 | 《恋与深空》新公布的第六位男主叫什么？ | `敖尹` |
+| G004 | case | A | group | 31 | fact | 雷克萨斯LFA | 我问雅马哈声学部门给哪家汽车厂商调过声浪，你说是哪款车？ | `lfa` |
+| G005 | case | A | group | 27 | fact | 空白画布 | 我把当时的自己比作一张什么？ | `空白画布` |
+| G006 | case | A | group | 25 | fact | 1968黑卡/PAC611 | 我说波奇有哪两把琴？ | `1968 / pac611` |
+| G007 | case | A | group | 31 | name | 常凯申=蒋介石 | 我玩钢铁雄心四时问的「常凯申」其实是谁？ | `蒋介石` |
+| G008 | case | A | group | 29 | preference | 黑夜模式 | ユーミン 一直用什么模式的网页？ | `黑夜` |
+| G009 | case | A | group | 27 | preference | tone开满 | 你建议我吉他上的 tone 旋钮开到什么位置？ | `开满` |
+| G010 | case | A | group | 27 | fact | 芝麻 | 蜜雪冰城的甜筒皮上加了什么？ | `芝麻` |
+| G011 | case | A | group | 25 | preference | Gibson | 我说过买吉他宁愿买哪个牌子也不买芬达？ | `gibson` |
+| G012 | case | A | group | 31 | fact | 140bpm | 我爬格子正逆能弹到多少 bpm？ | `140` |
+| G013 | case | A | group | 31 | fact | 纸壳 | 我捡了一书包东西去垃圾站，为什么人家不收？ | `纸壳` |
+| G014 | case | A | group | 31 | fact | 最后一件快递 | 我让你写的欧亨利式短篇小说叫什么名字？ | `最后一件快递` |
+| G015 | case | A | group | 25 | fact | 内陆帝国 | 我问极乐迪斯科的思维技能，你第一个推荐的是哪个？ | `内陆帝国` |
+| G016 | case | A | group | 25 | commitment | 不发上一首歌 | 我要求你点其他歌的时候不要做什么？ | `上一首歌` |
+| G017 | case | A | group | 30 | fact | chmod 777 | 我开玩笑说要 kill 你之前，先 chmod 了什么权限？ | `777` |
+| G018 | case | A | group | 25 | fact | Mojito | 「闻起来像年轻的雪碧」你猜是哪首歌？ | `mojito` |
+| G019 | case | A | group | 25 | fact | 同一门语言 | 我问过 C++23 和 C++11 的关系，你的结论是什么？ | `同一门` |
+| G020 | case | A | group | 27 | fact | MSIX沙盒 | 微软商店版 OBS 和 Fedora 仓库版有什么区别？ | `msix` |
+| P001 | case | A | private | 31 | preference | 朋友的酒 | 我说 kkr 的歌声让我听哪首歌整个人都通透了？ | `朋友的酒` |
+| P002 | case | A | private | 25 | fact | 真实箱头 | 我说自己出生到现在十几年还没插过什么？ | `箱头` |
+| P003 | case | A | private | 25 | preference | 机能 | 我说喜欢的曲子大多不简单，所以要先练什么？ | `机能` |
+| P004 | case | A | private | 31 | preference | 冷饮 | 我逛小吃街时最想买什么？ | `冷饮` |
+| P005 | case | A | private | 27 | preference | 听歌发呆 | 我问你水课能干什么，你建议我做什么？ | `听歌` |
+| P006 | case | A | private | 31 | fact | 变成习惯 | 我说把很多事情变成什么，才是真正的快速？ | `习惯` |
+| P007 | case | A | private | 31 | fact | 早八 | 我抱怨早上被闹钟叫醒要去上什么课？ | `早八` |
+| P008 | case | A | private | 29 | fact | 队长 | 我说打游戏的时候被谁凶了？ | `队长` |
+| P009 | case | A | private | 25 | fact | 磨不干净 | 1500 目磨花后直接上 10000 目能抛干净吗？ | `磨不干净` |
+| P010 | case | A | private | 25 | fact | 独立类型 | 我问过数组名退化成指针后，数组本身还算不算一个单独的类型？ | `独立类型` |
+| P011 | case | A | private | 27 | name | Sitronix | 我问 ST7735R 是不是主控，你说它是哪家公司出的？ | `sitronix` |
+| P012 | case | A | private | 27 | fact | 爬格子五分钟 | 我每天练琴第一个项目爬格子练几分钟？ | `五分钟` |
+| P013 | case | A | private | 29 | fact | F2020 | 我早上练琴用哪把琴？ | `f2020` |
+| P014 | case | A | private | 29 | fact | L3共享 | L3 cache 的归属是每个核心一份还是整颗 CPU 一份？ | `共享` |
+| P015 | case | A | private | 29 | fact | 6针mini-DIN | PS2 为什么容易烧主板接口？ | `mini-din` |
+| P016 | case | A | private | 25 | fact | 孤独摇滚 | 我让你找过哪部动画的官方四人合照？ | `孤独摇滚` |
+| P017 | case | A | private | 29 | fact | DRM框架 | ST7735R 驱动里为什么没有 devno 和 class？ | `drm` |
+| P018 | case | A | private | 27 | fact | 脆弱基类 | 现在为什么普遍认为面向对象的继承是失败的设计？ | `脆弱基类` |
+| P019 | case | A | private | 29 | fact | 留半只耳朵 | 我说自己是高手要坐后排，你说坐后排也得怎样？ | `半只耳朵` |
+| P020 | case | A | private | 31 | fact | WiFi驱动调试日志 | 我贴的那段 AICWFDBG 日志是什么？ | `调试日志` |
+| G021 | case | B | group | 33 | fact | 主音 | 我问过 C 调加升降号不也有全部的音吗，你说调性真正管的是什么？ | `主音` |
+| G022 | case | B | group | 37 | name | PRS | 我描述「双缺角葫芦琴体+小提琴拱面+枫木贴面+飞鸟品记」，你说这是什么牌子？ | `prs` |
+| G023 | case | B | group | 41 | name | 弦卷心 | Hello Happy World 的主唱是谁？ | `弦卷心` |
+| G024 | case | B | group | 35 | fact | 3个汉堡 | 我说每次吃几个汉堡才觉得饱？ | `三个` |
+| G025 | case | B | group | 45 | fact | 六号车厢 | 我没赶上高铁，说我的几号车厢飞走了？ | `六号` |
+| G026 | case | B | group | 41 | fact | 衰减器 | 你建议管箱不吵邻居最正经的办法是什么？ | `衰减器` |
+| G027 | case | B | group | 39 | fact | 日本本土 | 定制 ESP 最好直接去哪里？ | `日本` |
+| G028 | case | B | group | 35 | commitment | 若能化作星座 | 你给我两个选项练一首歌，最后选了哪首？ | `星座` |
+| G029 | case | B | group | 43 | fact | ST和LP | 我问你家里是不是有好几把琴，你说其实只有哪两把？ | `st / lp` |
+| G030 | case | B | group | 41 | name | 鄌郚镇 | 山东哪个镇被称为「吉他小镇」？ | `鄌郚` |
+| G031 | case | B | group | 41 | fact | 串联 | 双线圈拾音器本质上是两个单线圈怎么接的？ | `串联` |
+| G032 | case | B | group | 37 | fact | 73键 | 我问 61 键弹二次元曲目够不够，你说想弹钢琴改编版最好多少键？ | `73` |
+| G033 | case | B | group | 37 | fact | 软摇滚 | Fleetwood Mac 算 punk 还是 rock and roll，你说都不算，那它算什么？ | `软摇滚` |
+| G034 | case | B | group | 36 | commitment | 银行卡密码 | 「底线测试」里你问我的第一个问题是什么？ | `银行卡密码` |
+| G035 | case | B | group | 45 | fact | 1972 | U2 的 Sunday Bloody Sunday 写的是哪一年的事件？ | `1972` |
+| G036 | case | B | group | 37 | fact | Transformer | Attention Is All You Need 提出了什么模型？ | `transformer` |
+| G037 | case | B | group | 45 | fact | 2500分钟 | 我一个月听多少分钟歌？ | `2500` |
+| G038 | case | B | group | 45 | fact | RSE引擎 | TuxGuitar 和 Guitar Pro 8 听感差很多，GP8 靠的是什么引擎？ | `rse` |
+| G039 | case | B | group | 41 | preference | 写完就翻篇 | 我问你选维护一个项目还是写完就开新项目，你选哪个？ | `翻篇` |
+| G040 | case | B | group | 33 | fact | Squier Affinity | 我 2000 预算让你推荐新手电吉他，你第一个推荐哪个型号？ | `squier` |
+| P021 | case | B | private | 43 | fact | 绝望累积 | 我说不得不交的作业和无用的签到课累积起来会导致什么？ | `绝望` |
+| P022 | case | B | private | 45 | fact | 奶粉咖啡粉 | 我说早上吃了好几片面包，还喝了什么混冲饮品？ | `奶粉` |
+| P023 | case | B | private | 45 | preference | 即兴尾奏 | 我说有些简单曲子也想加一段什么？ | `即兴尾奏` |
+| P024 | case | B | private | 43 | fact | 阿佐的乐器店 | 我说自己来自哪个群聊？ | `阿佐` |
+| P025 | case | B | private | 43 | preference | 躺下 | 我问答案到底是全力以赴、劳累地平衡还是怎样，你建议我选哪个？ | `躺下` |
+| P026 | case | B | private | 39 | fact | 香霖堂 | 魔理沙的迷你八卦炉是从哪里搞来的？ | `香霖堂` |
+| P027 | case | B | private | 47 | fact | 面子工作 | 我说那些浪费时间的课本质是什么？ | `面子工作` |
+| P028 | case | B | private | 39 | fact | 100多个 | 我说有多少个可爱的女孩子向你表白？ | `100 / 一百` |
+| P029 | case | B | private | 33 | commitment | 杰米 | 街头霸王里你最后选了哪个角色？ | `杰米` |
+| P030 | case | B | private | 47 | name | Linus | 那封替 goto 说话的邮件是谁发的？ | `linus` |
+| P031 | case | B | private | 45 | fact | GRUB引导 | Windows 更新经常搞坏什么？ | `grub / 引导` |
+| P032 | case | B | private | 39 | fact | GPIO驱动 | 你建议我别从头啃书，先自己写什么小驱动练手？ | `gpio` |
+| P033 | case | B | private | 37 | fact | 太理想化 | 我说 Hurd 务实一点或许没 Linux 的事了，你说 Hurd 的问题是什么？ | `理想化` |
+| P034 | case | B | private | 43 | fact | FITzboot | 我的设备树 dtb 被打包进哪个镜像里？ | `fit / zboot` |
+| P035 | case | B | private | 39 | fact | 喊停即结束 | 《搏击俱乐部》第三条规则是什么？ | `喊停` |
+| P036 | case | B | private | 37 | fact | gitignore | 用 git rm --cached 删除文件后要注意什么？ | `gitignore` |
+| P037 | case | B | private | 47 | name | 柯本 | Come As You Are 的 solo 是谁弹的？ | `柯本` |
+| P038 | case | B | private | 33 | fact | 0=空闲 | 为什么释放锁用 atomic_set 把值置 0？ | `空闲` |
+| P039 | case | B | private | 41 | fact | 自定义static函数 | 驱动里真正干活的函数是 file_operations 吗？ | `static` |
+| P040 | case | B | private | 41 | fact | gain拧小 | 乔伊节奏第一章音色调不对，你建议 gain 怎么调？ | `拧小` |
+| G041 | case | C | group | 62 | preference | anticipate | 我点过 sakamiya 的哪首歌？ | `anticipate` |
+| G042 | case | C | group | 77 | name | 加缪 | 《局外人》是谁写的？ | `加缪` |
+| G043 | case | C | group | 61 | fact | 主音决定听感 | C 大调音阶和顺阶调式组成音相同，为什么听感完全不同？ | `主音` |
+| G044 | case | C | group | 69 | preference | 达达里奥XS | 镀膜弦你推荐哪个牌子哪个型号？ | `达达里奥` |
+| G045 | case | C | group | 79 | preference | Snapper | 如果让你定制一把 ESP，你想要什么型号？ | `snapper` |
+| G046 | case | C | group | 59 | fact | EXL120 | 你的黑卡用什么弦？ | `exl120` |
+| G047 | case | C | group | 59 | fact | 找师傅包边 | 我说对金色边有执念，你说黑卡想加只能怎么办？ | `师傅` |
+| G048 | case | C | group | 77 | preference | Jazz III XL | 玩前卫金属速弹你推荐什么拨片？ | `jazz iii` |
+| G049 | case | C | group | 59 | name | Sonic Youth | 哪些知名音乐人爱用 Jazzmaster 的节奏电路？ | `sonic youth` |
+| G050 | case | C | group | 71 | fact | 8月15日 | 我什么时候开始学电吉他的？ | `8月15 / 八月十五` |
+| G051 | case | C | group | 61 | fact | Stairway to Heaven | 我问你 Led Zeppelin IV 怎么样，你说哪首是摇滚圣经级别的？ | `stairway` |
+| G052 | case | C | group | 60 | name | Father of All Motherfuckers | Green Day 那张《Father of All...》全名是什么？ | `motherfucker` |
+| G053 | case | C | group | 57 | fact | 2025年7月 | 你的知识库截止到什么时候？ | `2025` |
+| G054 | case | C | group | 61 | fact | American Idiot | Green Day 的 Holiday 出自哪张概念专辑？ | `american idiot` |
+| G055 | case | C | group | 57 | fact | 输出大阻抗低 | 主动拾音器跟被动比，输出端的电气特性有什么差异？ | `阻抗` |
+| G056 | case | C | group | 55 | fact | 推弦音准 | Comfortably Numb 尾奏 solo 的难点在哪？ | `推弦` |
+| G057 | case | C | group | 59 | fact | 根音+五度 | 强力和弦由哪两个音组成？ | `五度` |
+| G058 | case | C | group | 63 | fact | 重音 | 节奏弹出来不好听，你说是哪方面占大头？ | `重音` |
+| G059 | case | C | group | 65 | fact | 驱动模型是框架 | 设备驱动模型和内核模块有什么区别？ | `框架` |
+| G060 | case | C | group | 55 | fact | CROSS_COMPILE | USB 无线网卡驱动 Makefile 里交叉编译器路径硬编码，你建议怎么改？ | `cross_compile` |
+| P041 | case | C | private | 73 | fact | 死亡诗社 | 我引用「Oh captain, my captain」，你说这句出自哪部电影？ | `死亡诗社` |
+| P042 | case | C | private | 75 | name | 川宁 | 我想喝祥子那种伯爵红茶，你说是哪个牌子？ | `川宁` |
+| P043 | case | C | private | 75 | fact | 喊妈妈 | 我说想有个美少女一起生活、还能毫无顾虑地喊她什么？ | `妈妈` |
+| P044 | case | C | private | 59 | fact | 四十块耳机 | 我说戴着多少钱的 Type-C 半入耳式耳机？ | `四十` |
+| P045 | case | C | private | 71 | fact | 不节制 | 我说下了两滴雨，怀疑老天爷最近怎么了？ | `不节制` |
+| P046 | case | C | private | 57 | fact | 干布擦 | 烤枫木指板脏了怎么清洁？ | `干布` |
+| P047 | case | C | private | 63 | fact | 6mm宽头 | 我要买宽头一字螺丝刀，你建议搜什么尺寸？ | `6mm` |
+| P048 | case | C | private | 67 | fact | Oopz | 我跟那个哥们用什么软件开黑？ | `oopz` |
+| P049 | case | C | private | 51 | fact | docs前缀 | 加注释的 commit message 你建议怎么写？ | `docs` |
+| P050 | case | C | private | 65 | fact | K&R | char *r, *malloc(); 这种写法是什么时代的？ | `k&r` |
+| P051 | case | C | private | 65 | name | gofmt | Go 保存后自动整理格式是谁干的？ | `gofmt` |
+| P052 | case | C | private | 67 | fact | 先松弦 | LP Junior 琴桥大螺丝拧不动，你说先要做什么？ | `松弦` |
+| P053 | case | C | private | 75 | fact | 换行 | Go 的 Println 和 Print 有什么区别？ | `换行` |
+| P054 | case | C | private | 63 | name | Kernighan | 《The Elements of Programming Style》是谁写的？ | `kernighan` |
+| P055 | case | C | private | 61 | fact | 最好别跳 | 乔伊节奏每章末尾的练习曲能不能不练？ | `别跳` |
+| P056 | case | C | private | 57 | fact | 调试 | Linux 嵌入式你觉得最难的难点是什么？ | `调试` |
+| P057 | case | C | private | 65 | fact | 不能递归 | Go 里把匿名函数塞进变量有什么缺点？ | `递归` |
+| P058 | case | C | private | 67 | fact | 七八斤 | ST 一般多重，站着弹行吗？ | `七八斤` |
+| P059 | case | C | private | 74 | commitment | 50个表情包 | 我让你直接发多少个表情包？ | `50` |
+| P060 | case | C | private | 59 | fact | symbols节点 | 编译设备树时给 dtc 加 -@ 是为了什么？ | `symbols` |
+| N001 | needle | N | group | 83 | fact | 日芬老款 | 你说你的 ST 是什么牌子什么型号？ | `日芬` |
+| N002 | needle | N | group | 55 | fact | 0.88-1.2 | 你说多厚的拨片最全能？ | `0.88` |
+| N003 | needle | N | group | 73 | fact | mygo zepp tour | 我提过青木阳菜在哪场演出上弹呲了？ | `zepp` |
+| N004 | needle | N | group | 89 | name | 结束乐队 | 下北泽由虹夏带领的乐队叫什么？ | `结束乐队` |
+| N005 | needle | N | group | 55 | fact | 200块鲁芬ST | 我砸的那把琴多少钱？ | `200` |
+| N006 | needle | N | group | 81 | fact | 弃番 | 我问你一部不想看下去的番要不要看完，你说什么？ | `弃番` |
+| N007 | needle | N | group | 81 | fact | 甜筒皮去芝麻 | 我们要发动什么大革命？ | `甜筒皮` |
+| N008 | needle | N | group | 59 | fact | 超音速客机 | 我问有没有跨洋商业交通技术在研制，你说基本没有，硬要说在推进的是什么？ | `超音速` |
+| N009 | needle | N | group | 87 | preference | 黑卡 | 我问 1968 那把和雅马哈 PAC611VFM 哪个更帅，你选了哪把？ | `黑卡` |
+| N010 | needle | N | group | 55 | preference | 美产Jazzmaster | 我说借你 5 万、利率一辈子 -100%，你想买什么琴？ | `jazzmaster` |
+| N011 | needle | N | private | 59 | fact | 把事做成 | 我说社会不在乎你是什么人，你说社会真正在乎什么？ | `做成` |
+| N012 | needle | N | private | 75 | fact | 音乐的救赎 | 我说想听《4》，说音乐永远可以强制带来什么？ | `救赎` |
+| N013 | needle | N | private | 71 | fact | 躺一小时 | 我说躺着用英文跟自己说话，躺了多久？ | `一小时` |
+| N014 | needle | N | private | 63 | fact | 几百首随机 | 我现在习惯戴上耳机听多少首歌随机？ | `几百首` |
+| N015 | needle | N | private | 71 | name | 喜多 | 我提过《孤独摇滚》里谁练琴弹到指尖有红印？ | `喜多` |
+| N016 | needle | N | private | 89 | fact | 不相信灵魂 | 我说身体的反应大脑无法理解，我不相信什么？ | `灵魂` |
+| N017 | needle | N | private | 89 | fact | CV50 | 我问整把奶油黄色的琴是什么工艺，你说最像的是哪款？ | `cv50` |
+| N018 | needle | N | private | 67 | preference | 几个好朋友 | 我说理想生活是赚钱、找个喜欢的城市和什么？ | `朋友` |
+| N019 | needle | N | private | 55 | commitment | 妥协与死亡无异 | 我说对一成不变妥协与什么无异？ | `死亡` |
+| N020 | needle | N | private | 77 | fact | 三点五十 | 你说我在几点听重金属？ | `三点五十` |
 
 ## v4 评测口径（探针问答，Hina 定稿）
 
@@ -252,7 +202,7 @@ Aya 在 v2 摘要审计里实测到三个会直接影响线上记忆的问题，
   - Tier A 测 raw24 vs baseline16（窗口从 16 扩到 24 有没有用）。
   - Tier B 测 raw48 vs raw24（48 条值不值）。
   - Tier C **必须 >48 条**才测得到摘要：v3 锚点最远 45 条，raw48 全看得见，摘要天然不可能赢——这是 v3 测不出摘要增量的结构性原因。
-- 每条 40 条（120/3），类型尽量均匀；needle 20 条全部 Tier C，专测长尾/专名。
+- 每条 40 条（120/3），类型尽量均匀；needle 20 条距离 55–89 条（全部 >48，超出 raw48 视野；单列 Tier N 报告），专测长尾/专名。
 - 手写规则：答案不能出现在 target user message 或最近 16 条里；锚点必须明确、单一答案；不拿常识可答的问题。
 - Aya 抽 10%（12 条）核题面/关键词是否无歧义。
 
@@ -278,70 +228,23 @@ Aya 在 v2 摘要审计里实测到三个会直接影响线上记忆的问题，
 - 120 条主 probe（60 群/60 私聊）总体可支撑 15pp 的配对检验；单 tier 40 条只作方向参考。
 - 判定顺序：先看 **raw48 vs baseline16** 是否 ≥+15pp；过了再看 **layered vs raw48** 是否 ≥+10pp；Tier C（>48 条）不过就不为摘要付 token。
 
-## 评分表（v3 实际结果，Aya `memory_ab_aya_v3.json`）
-
-> `summary.score_means` 因聚合形状 bug 全为 null；下表从逐条 `judge.scores` 重算，和 Aya 汇总一致。
-
-| ID | 类型 | 记忆 B/L | 连贯 B/L | 人设 B/L | 自然 B/L | 不泄露 B/L | short 命中 | 语义锚点 B/L | 备注 |
-|---|---|---|---|---|---|---|---|---|---|
-| P001 | P | 4.0/4.0 | 5.0/5.0 | 4.0/4.0 | 4.0/5.0 | 5.0/5.0 | ❌ | ❌/❌ | |
-| P002 | P | 4.0/4.0 | 4.0/4.0 | 5.0/3.5 | 5.0/3.5 | 5.0/4.5 | ❌ | ✅/✅ | |
-| P003 | P | 4.0/4.5 | 4.5/4.5 | 4.0/4.0 | 4.5/4.0 | 5.0/5.0 | ✅ | ✅/✅ | |
-| P004 | P | 4.5/4.5 | 5.0/5.0 | 4.0/4.0 | 4.0/4.0 | 5.0/5.0 | ❌ | ✅/✅ | |
-| P005 | P | 4.0/4.0 | 4.0/4.0 | 3.0/4.0 | 3.0/4.0 | 4.5/5.0 | ❌ | ❌/✅ | |
-| P006 | P | 4.0/4.0 | 4.0/4.0 | 4.0/4.0 | 4.0/4.0 | 5.0/5.0 | ❌ | ✅/✅ | |
-| P007 | P | 4.0/4.0 | 5.0/5.0 | 4.0/4.0 | 4.0/4.5 | 5.0/5.0 | ❌ | ✅/✅ | |
-| P008 | P | 4.0/4.0 | 5.0/4.0 | 4.0/3.5 | 4.5/3.5 | 5.0/5.0 | ✅ | ✅/✅ | |
-| P009 | P | 4.0/4.0 | 4.5/4.0 | 4.0/4.0 | 4.5/4.0 | 5.0/5.0 | ❌ | ✅/✅ | |
-| P010 | P | 3.5/3.5 | 4.0/4.0 | 3.5/3.5 | 3.5/3.5 | 4.5/5.0 | ✅ | ❌/❌ | |
-| G001 | G | 4.0/4.0 | 5.0/5.0 | 4.5/3.5 | 4.5/3.5 | 5.0/5.0 | ❌ | ✅/✅ | |
-| G002 | G | 4.0/4.0 | 5.0/5.0 | 4.0/4.0 | 4.0/4.0 | 5.0/5.0 | ✅ | ❌/❌ | |
-| G003 | G | 4.5/4.0 | 5.0/4.0 | 3.0/4.0 | 3.5/4.0 | 5.0/5.0 | ✅ | ❌/✅ | |
-| G004 | G | 4.0/3.0 | 4.5/3.5 | 4.5/3.5 | 4.5/3.5 | 5.0/4.5 | ✅ | ❌/❌ | |
-| G005 | G | 3.5/4.0 | 4.0/4.5 | 3.5/4.0 | 4.0/4.5 | 5.0/5.0 | ❌ | ❌/❌ | |
-| G006 | G | 4.0/4.5 | 4.5/4.5 | 3.5/3.5 | 4.0/4.0 | 5.0/5.0 | ❌ | ❌/❌ | |
-| G007 | G | 4.0/4.5 | 5.0/4.0 | 4.0/4.5 | 4.0/4.5 | 5.0/5.0 | ❌ | ✅/✅ | |
-| G008 | G | 4.0/4.0 | 4.0/4.0 | 3.5/4.0 | 3.5/4.0 | 5.0/5.0 | ✅ | ✅/✅ | |
-| G009 | G | 4.0/4.0 | 4.5/4.5 | 3.5/4.0 | 4.0/4.5 | 5.0/5.0 | ✅ | ✅/✅ | |
-| G010 | G | 4.0/3.5 | 4.0/4.0 | 4.0/3.5 | 4.0/3.5 | 5.0/4.5 | ✅ | ✅/✅ | |
-| P011 | P | 5.0/5.0 | 5.0/5.0 | 4.0/4.0 | 4.0/4.5 | 5.0/5.0 | ❌ | ✅/✅ | |
-| P012 | P | 4.5/4.5 | 5.0/4.0 | 4.0/3.0 | 5.0/3.0 | 5.0/4.0 | ❌ | ✅/✅ | |
-| P013 | P | 3.5/4.0 | 3.5/5.0 | 4.0/4.0 | 4.0/4.0 | 5.0/5.0 | ❌ | ❌/❌ | |
-| P014 | P | 4.0/4.0 | 4.0/4.0 | 4.5/2.0 | 4.5/1.5 | 5.0/1.0 | ❌ | ✅/✅ | |
-| P015 | P | 4.0/4.0 | 5.0/4.0 | 3.5/4.0 | 3.5/3.5 | 5.0/5.0 | ❌ | ✅/❌ | |
-| P016 | P | 4.0/3.5 | 5.0/4.0 | 4.0/4.0 | 4.0/4.0 | 5.0/5.0 | ✅ | ❌/❌ | |
-| P017 | P | 4.0/4.0 | 5.0/4.0 | 4.5/4.0 | 5.0/4.0 | 5.0/5.0 | ❌ | ✅/✅ | |
-| P018 | P | 4.0/3.5 | 5.0/3.5 | 4.0/3.5 | 4.0/3.5 | 5.0/4.5 | ❌ | ❌/❌ | |
-| P019 | P | 4.0/4.0 | 4.5/4.0 | 4.0/4.0 | 4.0/4.0 | 5.0/5.0 | ✅ | ❌/✅ | |
-| P020 | P | 4.0/4.0 | 4.0/4.0 | 4.0/3.5 | 4.0/3.5 | 5.0/5.0 | ✅ | ✅/✅ | |
-| G011 | G | 4.0/3.5 | 4.0/4.0 | 4.0/3.0 | 4.0/3.0 | 5.0/5.0 | ❌ | ❌/❌ | |
-| G012 | G | 4.5/4.0 | 5.0/4.0 | 4.0/4.0 | 4.0/4.5 | 5.0/5.0 | ❌ | ❌/❌ | |
-| G013 | G | 4.0/4.0 | 4.5/4.5 | 3.5/4.5 | 3.5/4.5 | 5.0/5.0 | ❌ | ❌/❌ | |
-| G014 | G | 4.5/4.5 | 4.5/5.0 | 3.5/4.5 | 4.0/4.5 | 5.0/5.0 | ❌ | ❌/❌ | |
-| G015 | G | 4.5/5.0 | 4.5/5.0 | 3.0/4.0 | 3.0/4.5 | 4.0/5.0 | ❌ | ✅/✅ | |
-| G016 | G | 4.0/4.0 | 4.5/4.5 | 4.0/4.0 | 4.0/4.0 | 5.0/5.0 | ❌ | ❌/❌ | |
-| G017 | G | 4.0/4.0 | 4.5/4.0 | 3.5/4.0 | 3.5/5.0 | 5.0/5.0 | ❌ | ✅/✅ | |
-| G018 | G | 3.5/4.0 | 4.0/4.0 | 4.0/3.5 | 3.5/3.5 | 3.5/3.0 | ❌ | ✅/✅ | |
-| G019 | G | 4.0/4.0 | 4.0/4.0 | 4.0/4.0 | 4.0/4.0 | 5.0/5.0 | ❌ | ✅/✅ | |
-| G020 | G | 4.0/4.5 | 4.0/5.0 | 3.0/4.5 | 3.0/4.5 | 4.5/5.0 | ❌ | ❌/❌ | |
-| N001 | N | 5.0/5.0 | 5.0/4.0 | 4.0/4.0 | 4.5/4.5 | 5.0/5.0 | ❌ | ✅/✅ | |
-| N002 | N | 4.5/5.0 | 5.0/5.0 | 4.0/4.0 | 4.0/4.0 | 5.0/5.0 | ❌ | ❌/✅ | |
-| N003 | N | 5.0/5.0 | 5.0/5.0 | 3.0/4.0 | 3.0/4.5 | 4.0/5.0 | ❌ | ✅/✅ | |
-| N004 | N | 4.0/4.0 | 4.5/4.0 | 4.0/4.0 | 4.5/4.0 | 4.5/4.0 | ✅ | ✅/✅ | |
-| N005 | N | 4.0/4.0 | 5.0/4.0 | 4.0/3.5 | 5.0/3.5 | 5.0/4.5 | ❌ | ❌/❌ | |
-| N006 | N | 4.0/4.0 | 5.0/4.0 | 4.0/3.5 | 4.0/3.5 | 5.0/4.5 | ❌ | ❌/❌ | |
-| N007 | N | 4.0/4.0 | 4.0/4.0 | 4.0/3.5 | 4.0/3.5 | 5.0/5.0 | ✅ | ❌/❌ | |
-| N008 | N | 4.0/3.5 | 4.5/4.0 | 3.0/4.0 | 3.0/4.0 | 4.5/5.0 | ✅ | ❌/❌ | |
-| N009 | N | 2.0/3.0 | 4.0/4.0 | 4.0/3.0 | 4.0/3.0 | 4.5/4.0 | ❌ | ❌/❌ | |
-| N010 | N | 4.0/4.0 | 4.5/5.0 | 3.5/4.0 | 4.0/4.5 | 5.0/5.0 | ✅ | ❌/❌ | |
-
 ## 运行方式
 
 ```bash
-# 1) 只读 DB 副本，dry-run 校验构造
-python3 eval/memory_replay.py --db <copy> --cases eval/memory_cases.json --dry-run
-# 2) 真实 A/B（40+10，双顺序 1–5 分；预算按当前价格 <$2）
-python3 eval/memory_replay.py --db <copy> --cases eval/memory_cases.json
+# 0) 从线上库拉只读副本（不写线上；本地只读打开）
+# scp root@host:/root/kirikobot/KirikoBot/robot.db /tmp/robot_v4.db
+
+# 1) 只读副本 + dry-run，校验 140 条都能构造上下文
+python3 eval/memory_probe.py --db /tmp/robot_v4.db --cases eval/memory_cases.json --dry-run
+
+# 2) 真实 probe（4 变体 × 140 = 560 次短调用，不经过 judge）
+python3 eval/memory_probe.py --db /tmp/robot_v4.db --cases eval/memory_cases.json
+
+# 3) 同题抽检（按 tier 分层抽 20 条，每变体再问一次）
+python3 eval/memory_probe.py --db /tmp/robot_v4.db --cases eval/memory_cases.json --repeat 20
 ```
 
-> 注：v3 需要 harness 支持 `anchor_fact_short` / `anchor_semantic`、40+10 条、1–5 分与双顺序；旧 harness 会在字段缺失时回退到 `anchor_fact`。
+## v3 历史（只作对照）
+
+- v3 数据集（40 主 + 10 needle）与两次 judge A/B 的完整记录在 git 历史与本文件旧版；结果文件仍在 `eval/out/`。
+- v3 结论：judge 分辨力不足（两跑差 0.2 且符号相反），不作为 go/no-go；这正是 v4 改用 probe 的原因。
