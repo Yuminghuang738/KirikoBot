@@ -342,9 +342,34 @@ def test_measure_summary_cost_reports_tokens_and_lengths(tmp_path, monkeypatch):
 
     assert payload["summary_count"] == 1
     assert payload["end_punct"] == 1
+    assert payload["end_chars"] == {"。": 1}
     assert payload["over_limit"] == 0
     assert payload["usage"]["calls"] == 1
     assert payload["usage"]["prompt_tokens"] == 700
+
+
+def test_run_checkpoints_each_case_and_resumes(tmp_path, monkeypatch):
+    """一次跑 20+ 分钟被杀时，checkpoint 让续跑只补未完成的 case。"""
+    db = _make_db(tmp_path)
+    monkeypatch.setattr(memory_replay, "_read_token", lambda: "k")
+    monkeypatch.setattr(memory_replay, "summarize_older", lambda older, key: "")
+    monkeypatch.setattr(memory_replay, "generate_reply", lambda *a, **k: "回复")
+    monkeypatch.setattr(memory_replay, "judge_call", lambda *a, **k: {})
+    monkeypatch.setattr(memory_replay, "anchor_call", lambda *a, **k: None)
+    jsonl = tmp_path / "run.jsonl"
+    case = _case()
+
+    payload = memory_replay.run([case], db, jsonl_path=str(jsonl))
+
+    assert payload["summary"]["case_count"] == 1
+    assert len(jsonl.read_text(encoding="utf-8").splitlines()) == 1
+    assert memory_replay._load_done_ids(str(jsonl)) == {case["case_id"]}
+
+    again = memory_replay.run([case], db, jsonl_path=str(jsonl), resume=True)
+    assert again["results"] == []
+    # 不带 --resume 重跑会清空旧 checkpoint，不会把上一次的条目算进来
+    fresh = memory_replay.run([case], db, jsonl_path=str(jsonl))
+    assert fresh["summary"]["case_count"] == 1
 
 
 # ── 汇总 ─────────────────────────────────────────────────────────

@@ -322,14 +322,24 @@ def combine_pair(first: dict[str, Any], second: dict[str, Any],
 
 
 def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
-        dry_run: bool = False) -> dict[str, Any]:
+        dry_run: bool = False, jsonl_path: str | None = None,
+        resume: bool = False) -> dict[str, Any]:
     key = "" if dry_run else _read_token()
     _USAGE.clear()
     _wire_summary_metrics()
     conn = connect_ro(db_path)
     results: list[dict[str, Any]] = []
+    selected = cases[: limit or len(cases)]
+    done: set[str] = set()
+    if jsonl_path:
+        if resume and Path(jsonl_path).exists():
+            done = _load_done_ids(jsonl_path)
+        else:
+            Path(jsonl_path).write_text("", encoding="utf-8")
 
-    for case in cases[: limit or len(cases)]:
+    for index, case in enumerate(selected, 1):
+        if case["case_id"] in done:
+            continue
         rows = fetch_context_rows(conn, case)
         if len(rows) < 2 or rows[-1]["role"] != "user":
             continue
@@ -387,6 +397,10 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
                     variant=variant,
                 )
         results.append(entry)
+        if jsonl_path:
+            with open(jsonl_path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        print(f"[{index}/{len(selected)}] {entry['case_id']}", file=sys.stderr, flush=True)
 
     summary_stats = summarize_results(results)
     usage = _usage_summary()
@@ -423,6 +437,20 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
     }
 
 
+def _load_done_ids(jsonl_path: str) -> set[str]:
+    """读 checkpoint：一次运行可能被杀，续跑只跳过已完成的 case。"""
+    done: set[str] = set()
+    for line in Path(jsonl_path).read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            done.add(str(json.loads(line)["case_id"]))
+        except (ValueError, KeyError, TypeError):
+            continue
+    return done
+
+
 def measure_summary_cost(cases: list[dict[str, Any]], db_path: str,
                          dry_run: bool = False) -> dict[str, Any]:
     """只跑摘要生成，量真实 token / 调用次数 / 长度，不跑回复与 judge。
@@ -434,6 +462,7 @@ def measure_summary_cost(cases: list[dict[str, Any]], db_path: str,
     conn = connect_ro(db_path)
     lengths: list[int] = []
     end_punct = 0
+    end_chars: dict[str, int] = {}
     for case in cases:
         rows = fetch_context_rows(conn, case)
         if len(rows) < 2 or rows[-1]["role"] != "user":
@@ -443,7 +472,10 @@ def measure_summary_cost(cases: list[dict[str, Any]], db_path: str,
         if not summary:
             continue
         lengths.append(len(summary))
-        if summary.rstrip().endswith(("。", "！", "？", "…", "」", "】", "!", "?")):
+        tail = summary.rstrip()[-1:]
+        if tail:
+            end_chars[tail] = end_chars.get(tail, 0) + 1
+        if tail in ("。", "！", "？", "…", "」", "】", "!", "?"):
             end_punct += 1
     return {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -454,6 +486,7 @@ def measure_summary_cost(cases: list[dict[str, Any]], db_path: str,
         "summary_len_max": max(lengths) if lengths else None,
         "over_limit": sum(1 for n in lengths if n > SUMMARY_MAX_CHARS),
         "end_punct": end_punct,
+        "end_chars": dict(sorted(end_chars.items(), key=lambda kv: -kv[1])),
         "usage": dict(_SUMMARY_METRICS),
     }
 
@@ -553,6 +586,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--summary-only", action="store_true",
                         help="只跑摘要生成，量 token/长度，不跑回复与 judge")
+    parser.add_argument("--jsonl", default="", help="逐条 checkpoint 路径；默认 <out>.jsonl")
+    parser.add_argument("--resume", action="store_true",
+                        help="跳过 checkpoint 里已完成的 case（上次被杀后续跑）")
     args = parser.parse_args(argv)
 
     raw = json.loads(Path(args.cases).read_text(encoding="utf-8"))
@@ -567,15 +603,21 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(payload, ensure_ascii=False, indent=2))
         print(f"-> {out}")
         return 0
-    payload = run(cases, args.db, limit=args.limit or None, dry_run=args.dry_run)
-
     out = Path(args.out) if args.out else (
         Path("eval/out") / f"memory_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     )
     out.parent.mkdir(parents=True, exist_ok=True)
+    jsonl = args.jsonl or (str(out) + ".jsonl")
+    payload = run(cases, args.db, limit=args.limit or None, dry_run=args.dry_run,
+                  jsonl_path=jsonl, resume=args.resume)
+    if args.resume and not payload["results"]:
+        print("checkpoint 里所有 case 都已完成，本次没有新结果；不覆盖 out 文件")
+        return 0
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     print_summary(payload["summary"])
     print(f"-> {out}")
+    if jsonl:
+        print(f"checkpoint -> {jsonl} (resume with --resume)")
     return 0
 
 
