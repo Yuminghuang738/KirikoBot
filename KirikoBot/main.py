@@ -83,6 +83,10 @@ app = Flask(__name__)
 # caching them for the process lifetime (Flask's production default).
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.jinja_env.auto_reload = True
+# OneBot 事件体实测远小于 1 MB。上限必须在验签之前生效，否则未鉴权的超大
+# 请求会先被整个读进内存（waitress 默认放到 1 GB），在 1.6 G 的机器上直接 OOM。
+MAX_WEBHOOK_BODY = 1 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = MAX_WEBHOOK_BODY
 app.register_blueprint(llbot_bp)
 dashboard_auth.init_app(app)
 
@@ -1596,8 +1600,25 @@ def _webhook_signature_ok(raw_body: bytes) -> bool:
 @app.route("/webhook", methods=["POST"])
 @app.route("/", methods=["POST"])
 def receive():
+    # 验签前先看 Content-Length：未鉴权的超大请求不能先被读进内存。
+    declared = request.content_length
+    if declared is not None and declared > MAX_WEBHOOK_BODY:
+        logger.warning(
+            "Rejected oversized webhook: %s declared bytes from %s (limit %s)",
+            declared, request.remote_addr, MAX_WEBHOOK_BODY,
+        )
+        return jsonify({"status": "too_large"}), 413
+
     # Read the raw body first: the signature is over the exact bytes sent.
-    if not _webhook_signature_ok(request.get_data(cache=True)):
+    raw_body = request.get_data(cache=True)
+    if len(raw_body) > MAX_WEBHOOK_BODY:
+        # 没有 Content-Length（chunked）时靠这里兜底。
+        logger.warning(
+            "Rejected oversized webhook: %s bytes from %s (limit %s)",
+            len(raw_body), request.remote_addr, MAX_WEBHOOK_BODY,
+        )
+        return jsonify({"status": "too_large"}), 413
+    if not _webhook_signature_ok(raw_body):
         logger.warning(
             "Rejected webhook without a valid signature from %s "
             "(check that LLBot's http-post token matches WEBHOOK_TOKEN/ONEBOT_TOKEN)",
