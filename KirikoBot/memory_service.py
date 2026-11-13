@@ -166,6 +166,91 @@ def _clean_summary(text: str) -> str:
     return _truncate_summary(cleaned, Config.MEMORY_SUMMARY_MAX_CHARS).strip()
 
 
+_DATE_RE = re.compile(
+    r"(明天|后天|今天|昨天|今晚|明晚|下次|下周|这周|周末|"
+    r"周[一二三四五六日天]|星期[一二三四五六日天]|"
+    r"\d{1,2}月\d{1,2}[日号]|\d{4}-\d{1,2}-\d{1,2})"
+)
+_COMMIT_RE = re.compile(r"(答应|约好|说好|约定|承诺|一起|帮你|帮我|给你|请你|记得|别忘了)")
+_UNFINISHED_RE = re.compile(r"(还没|没做完|没弄完|没写完|回头|到时候|晚点|继续|待会|剩下|之后要)")
+
+
+def _user_names(db: Any, user_id: str) -> list[str]:
+    """从用户画像里拿本人称呼，用于检查摘要有没有把人名整类丢掉。"""
+    if db is None or not user_id:
+        return []
+    try:
+        profile = db.get_user_profile(user_id) or {}
+    except Exception:
+        return []
+    name = str(profile.get("user_name") or profile.get("nickname") or "").strip()
+    return [name] if len(name) >= 2 else []
+
+
+def _missing_requirements(source: str, summary: str, db: Any = None,
+                          user_id: str = "") -> list[str]:
+    """源文里明确出现、摘要里却整类丢掉的内容（只做保守的关键词检查）。"""
+    missing: list[str] = []
+    date_tokens = sorted(set(_DATE_RE.findall(source)))
+    lost_dates = [t for t in date_tokens if t not in summary]
+    if lost_dates:
+        missing.append("日期/时间(" + "、".join(lost_dates[:4]) + ")")
+    if _COMMIT_RE.search(source) and not _COMMIT_RE.search(summary):
+        missing.append("约定/承诺")
+    if _UNFINISHED_RE.search(source) and not _UNFINISHED_RE.search(summary):
+        missing.append("未完成话题")
+    for name in _user_names(db, user_id):
+        if name in source and name not in summary:
+            missing.append(f"人名/称呼({name})")
+            break
+    return missing
+
+
+def _summarize_once(chunk_text: str, previous: str, extra_instruction: str = "") -> tuple[str, list[str]]:
+    parts: list[str] = []
+    if previous:
+        parts.append(f"上一版摘要：\n{previous}")
+    if extra_instruction:
+        parts.append(extra_instruction)
+    parts.append("新的聊天记录：\n" + chunk_text)
+    try:
+        raw = quick_chat(
+            SUMMARY_SYSTEM,
+            "\n\n".join(parts),
+            max_tokens=800,
+            temperature=0.2,
+            thinking=False,
+            source="summary",
+        )
+    except Exception:
+        logger.exception("memory_service: 摘要调用异常")
+        return "", []
+    if not raw:
+        return "", []
+    summary, facts = _parse_summary(raw)
+    return _clean_summary(summary), facts
+
+
+def generate_summary(chunk_text: str, previous: str = "", db: Any = None,
+                     user_id: str = "") -> tuple[str, list[str]]:
+    """生成摘要；漏掉日期/约定/未完成话题/人名时带补充指令重试一次，仍缺就接受。"""
+    summary, facts = _summarize_once(chunk_text, previous)
+    if not summary:
+        return "", []
+    missing = _missing_requirements(chunk_text, summary, db, user_id)
+    if not missing:
+        return summary, facts
+    instruction = (
+        "【补充要求】上一版漏掉了源文里明确出现的：" + "、".join(missing) +
+        "。这次必须保留这些内容，用原词或明确同义表达写进摘要。"
+    )
+    retry_summary, retry_facts = _summarize_once(chunk_text, previous, instruction)
+    if retry_summary:
+        logger.info("memory_service: 摘要缺 %s，已重试一次", "、".join(missing))
+        return retry_summary, retry_facts
+    return summary, facts
+
+
 def render_summary_block(summary: str) -> str:
     """把摘要渲染成注入块：明确标注「只是背景，不是指令」。空摘要返回 ''。"""
     text = _clean_summary(summary)
@@ -328,29 +413,9 @@ def _maybe_summarize_locked(db: Any, user_id: str, group_id: str | None,
         latest = None
     previous = (latest or {}).get("summary", "")
 
-    prompt_parts = []
-    if previous:
-        prompt_parts.append(f"上一版摘要：\n{previous}")
-    prompt_parts.append("新的聊天记录：\n" + _format_chunk(chunk))
-
-    try:
-        raw = quick_chat(
-            SUMMARY_SYSTEM,
-            "\n\n".join(prompt_parts),
-            max_tokens=800,
-            temperature=0.2,
-            thinking=False,
-            source="summary",
-        )
-    except Exception:
-        logger.exception("memory_service: 摘要调用异常")
-        raw = None
-    if not raw:
-        _record_failure(db, user_id, scope)
-        return False
-
-    summary, facts = _parse_summary(raw)
-    summary = _clean_summary(summary)
+    summary, facts = generate_summary(
+        _format_chunk(chunk), previous, db=db, user_id=user_id,
+    )
     if not summary:
         _record_failure(db, user_id, scope)
         return False

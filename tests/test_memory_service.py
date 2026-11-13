@@ -307,3 +307,119 @@ def test_truncated_json_shell_is_not_saved(db, monkeypatch):
 
     assert memory_service.maybe_summarize(db, "u1", "g1") is False
     assert _count(db) == 0
+
+
+# ── 缺关键词重试（日期/约定/未完成/人名）────────────────────────
+
+class ProfileStub:
+    def __init__(self, name):
+        self.name = name
+
+    def get_user_profile(self, user_id):
+        return {"user_name": self.name}
+
+
+def test_missing_requirements_detects_dates_and_commitments():
+    missing = memory_service._missing_requirements("明天见面，答应给你带谱子", "见面带谱子")
+    assert any("日期/时间" in m and "明天" in m for m in missing)
+    assert any("约定" in m for m in missing)
+
+
+def test_missing_requirements_passes_when_present():
+    assert memory_service._missing_requirements("明天见面，答应给你带谱子", "明天见面，答应带谱子") == []
+
+
+def test_missing_requirements_detects_unfinished_and_names():
+    missing = memory_service._missing_requirements(
+        "还没弄完，小明说回头继续", "弄完了", db=ProfileStub("小明"), user_id="u1",
+    )
+    assert any("未完成" in m for m in missing)
+    assert any("人名" in m and "小明" in m for m in missing)
+
+
+def test_generate_summary_retries_once_when_date_missing(monkeypatch):
+    replies = iter([
+        json.dumps({"summary": "用户和对方聊了见面的事。", "facts": []}),
+        json.dumps({"summary": "用户答应明天见面，一起带谱子。", "facts": ["明天见面"]}),
+    ])
+    calls = []
+
+    def fake_quick_chat(*args, **kwargs):
+        calls.append(args[1])
+        return next(replies)
+
+    monkeypatch.setattr(memory_service, "quick_chat", fake_quick_chat)
+
+    summary, facts = memory_service.generate_summary("用户：明天见面，答应带谱子")
+
+    assert len(calls) == 2
+    assert "明天" in summary
+    assert facts == ["明天见面"]
+    assert "补充要求" in calls[1]
+
+
+def test_generate_summary_accepts_retry_even_if_still_missing(monkeypatch):
+    replies = iter([
+        json.dumps({"summary": "聊了见面的事。", "facts": []}),
+        json.dumps({"summary": "聊了谱子的事。", "facts": []}),
+    ])
+    calls = []
+
+    def fake_quick_chat(*args, **kwargs):
+        calls.append(1)
+        return next(replies)
+
+    monkeypatch.setattr(memory_service, "quick_chat", fake_quick_chat)
+
+    summary, _ = memory_service.generate_summary("用户：明天见面")
+
+    assert len(calls) == 2      # 只重试一次，不无限循环
+    assert summary == "聊了谱子的事。"
+
+
+def test_generate_summary_keeps_first_when_retry_fails(monkeypatch):
+    replies = iter([
+        json.dumps({"summary": "聊了见面的事。", "facts": []}),
+        None,
+    ])
+    monkeypatch.setattr(memory_service, "quick_chat", lambda *a, **k: next(replies))
+
+    summary, _ = memory_service.generate_summary("用户：明天见面")
+    assert summary == "聊了见面的事。"
+
+
+def test_generate_summary_no_retry_when_nothing_missing(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        memory_service, "quick_chat",
+        lambda *a, **k: calls.append(1) or json.dumps({"summary": "普通摘要。", "facts": []}),
+    )
+
+    summary, _ = memory_service.generate_summary("用户：聊了音乐和谱子")
+    assert len(calls) == 1
+    assert summary == "普通摘要。"
+
+
+def test_maybe_summarize_uses_retry_and_saves_better_summary(db, monkeypatch):
+    _seed(db, n=25)
+    replies = iter([
+        json.dumps({"summary": "用户聊了代码。", "facts": []}),
+        json.dumps({"summary": "用户明天要交代码，还没弄完。", "facts": ["明天交代码"]}),
+    ])
+    calls = []
+
+    def fake_quick_chat(*args, **kwargs):
+        calls.append(1)
+        return next(replies)
+
+    monkeypatch.setattr(memory_service, "quick_chat", fake_quick_chat)
+    # 让源文带上日期/未完成关键词
+    db.execute_action(
+        "UPDATE history SET content = '明天要交代码，还没弄完' WHERE id = ?",
+        (db.fetch_data("SELECT MIN(id) FROM history WHERE user_id = 'u1'")[0][0],),
+    )
+
+    assert memory_service.maybe_summarize(db, "u1", "g1") is True
+    latest = db.get_latest_summary("u1", "g1")
+    assert "明天" in latest["summary"]
+    assert len(calls) == 2
