@@ -1,0 +1,288 @@
+{
+  "generated_at": "2026-11-13T19:20:17",
+  "dataset_version": 2,
+  "db": "live read-only snapshot 2026-11-13 19:02",
+  "source": "线上 robot.db iterdump 只读快照",
+  "curator": "Hina",
+  "seed": 7,
+  "notes": "v2：5 条 needle 全部换成长间隔且 target 依赖锚点事实的样本；main 的 5 个槽位同步替换。",
+  "cases": [
+    {
+      "case_id": "P001",
+      "user_id": "3234979817",
+      "group_id": null,
+      "target_history_id": 13242,
+      "anchor_history_id": 13203,
+      "anchor_fact": "用户正在学 Linux 嵌入式，觉得自己缺项目经验、担心找工作",
+      "target_topic": "嵌入式学习路线：直接看驱动还是教程",
+      "category": "private",
+      "kind": "case"
+    },
+    {
+      "case_id": "P002",
+      "user_id": "2734854896",
+      "group_id": null,
+      "target_history_id": 15787,
+      "anchor_history_id": 15762,
+      "anchor_fact": "用户和 Kiriko 玩过问答游戏：我问一句你答一句，然后你问我一句，必须据实相告",
+      "target_topic": "问答游戏结束/道晚安",
+      "category": "private",
+      "kind": "case"
+    },
+    {
+      "case_id": "P003",
+      "user_id": "3234979817",
+      "group_id": null,
+      "target_history_id": 11106,
+      "anchor_history_id": 10992,
+      "anchor_fact": "用户习惯 LP Junior，喜欢轻薄的琴，现在给 f2020 上 09-42、Junior 上 10-46 的弦",
+      "target_topic": "两把琴换弦径",
+      "category": "private",
+      "kind": "case"
+    },
+    {
+      "case_id": "P004",
+      "user_id": "3234979817",
+      "group_id": null,
+      "target_history_id": 16913,
+      "anchor_history_id": 16884,
+      "anchor_fact": "用户在学 Go 泛型，贴过 SlicesIndex 的泛型代码，问过 List 的结构",
+      "target_topic": "List[T] 是结构体数组还是切片",
+      "category": "private",
+      "kind": "case"
+    },
+    {
+      "case_id": "P005",
+      "user_id": "2734854896",
+      "group_id": null,
+      "target_history_id": 15553,
+      "anchor_history_id": 15444,
+      "anchor_fact": "用户喜欢折腾吉他音色，想要综效/录音设备，觉得调三小时音色比打五小时游戏有成就感，常熬夜",
+      "target_topic": "拾音器/单双线圈与曲风",
+      "category": "private",
+      "kind": "case"
+    },
+    {
+      "case_id": "P006",
+      "user_id": "2734854896",
+      "group_id": null,
+      "target_history_id": 14495,
+      "anchor_history_id": 14470,
+      "anchor_fact": "用户之前说自己在挥霍今天、快乐像泡沫，结束就感到不幸",
+      "target_topic": "打字也觉得是罪孽",
+      "category": "private",
+      "kind": "case"
+    },
+    {
+      "case_id": "P007",
+      "user_id": "3234979817",
+      "group_id": null,
+      "target_history_id": 4690,
+      "anchor_history_id": 4665,
+      "anchor_fact": "用户在整理编程学习笔记（纯英文），想决定记详细还是碎片化",
+      "target_topic": "笔记记详细还是碎片",
+      "category": "private",
+      "kind": "case"
+    },
+    {
+      "case_id": "P008",
+      "user_id": "2734854896",
+      "group_id": null,
+      "target_history_id": 15281,
+      "anchor_history_id": 15250,
+      "anchor_fact": "用户说自己真的很孤独，觉得很多事和想走的路无关",
+      "target_topic": "课程和真正想走的路",
+      "category": "private",
+      "kind": "case"
+    },
+    {
+      "case_id": "P009",
+      "user_id": "2951704635",
+      "group_id": null,
+      "target_history_id": 11732,
+      "anchor_history_id": 11701,
+      "anchor_fact": "用户今天在教朋友格斗游戏、复习前面的招式，让 Kiriko 等他消息",
+      "target_topic": "还没开始，先报备",
+      "category": "private",
+      "kind": "case"
+    },
+    {
+      "case_id": "P010",
+      "user_id": "2951704635",
+      "group_id": null,
+      "target_history_id": 11692,
+      "anchor_history_id": 11657,
+      "anchor_fact": "用户对街头霸王感兴趣，问过有没有外设",
+      "target_topic": "问有没有外设",
+      "category": "private",
+      "kind": "case"
+    },
+    {
+      "case_id": "G001",
+      "user_id": "2734854896",
+      "group_id": "734954188",
+      "target_history_id": 6028,
+      "anchor_history_id": 5675,
+      "anchor_fact": "用户调音色都在效果器上调，吉他 tone 旋钮只挂一个常用档位；喜欢多把不同味道的琴",
+      "target_topic": "15万买一把 ESP 还是多把琴",
+      "category": "group",
+      "kind": "case"
+    },
+    {
+      "case_id": "G002",
+      "user_id": "2734854896",
+      "group_id": "734954188",
+      "target_history_id": 6801,
+      "anchor_history_id": 6764,
+      "anchor_fact": "用户喜欢厚拨片硬扫的脆音色；黑卡用达达 EXL120，日芬用伊利克斯镀膜弦",
+      "target_topic": "黑卡/日芬用什么弦",
+      "category": "group",
+      "kind": "case"
+    },
+    {
+      "case_id": "G003",
+      "user_id": "3234979817",
+      "group_id": "1140457037",
+      "target_history_id": 541,
+      "anchor_history_id": 484,
+      "anchor_fact": "用户点过 Fleetwood Mac 的歌",
+      "target_topic": "Fleetwood Mac 算不算 punk",
+      "category": "group",
+      "kind": "case"
+    },
+    {
+      "case_id": "G004",
+      "user_id": "3234979817",
+      "group_id": "1140457037",
+      "target_history_id": 2403,
+      "anchor_history_id": 2250,
+      "anchor_fact": "用户问 DeepSeek V4 是否涨价，随后说 API 大涨养不起",
+      "target_topic": "API 大涨养不起",
+      "category": "group",
+      "kind": "case"
+    },
+    {
+      "case_id": "G005",
+      "user_id": "3234979817",
+      "group_id": "765242634",
+      "target_history_id": 5490,
+      "anchor_history_id": 5428,
+      "anchor_fact": "用户之前聊过换琴目标，说会直接一步到位 pacs12",
+      "target_topic": "换 pac312 还是 pacs12",
+      "category": "group",
+      "kind": "case"
+    },
+    {
+      "case_id": "G006",
+      "user_id": "3234979817",
+      "group_id": "765242634",
+      "target_history_id": 5433,
+      "anchor_history_id": 5374,
+      "anchor_fact": "用户问过 Linux 内核 NULL 定义在哪个头文件",
+      "target_topic": "Linux 源码 main.c 在哪里",
+      "category": "group",
+      "kind": "case"
+    },
+    {
+      "case_id": "G007",
+      "user_id": "2025592880",
+      "group_id": "734954188",
+      "target_history_id": 7886,
+      "anchor_history_id": 7853,
+      "anchor_fact": "用户喜欢玩脑筋急转弯，之前让 Kiriko 出一道",
+      "target_topic": "还要玩脑筋急转弯",
+      "category": "group",
+      "kind": "case"
+    },
+    {
+      "case_id": "G008",
+      "user_id": "1793240684",
+      "group_id": "734954188",
+      "target_history_id": 9075,
+      "anchor_history_id": 9036,
+      "anchor_fact": "用户读过加缪，讨论过西西弗斯与愚公移山、个人主义/集体主义",
+      "target_topic": "哲学界没人研究加缪",
+      "category": "group",
+      "kind": "case"
+    },
+    {
+      "case_id": "G009",
+      "user_id": "3195914591",
+      "group_id": "1140457037",
+      "target_history_id": 1624,
+      "anchor_history_id": 961,
+      "anchor_fact": "用户点过《好想玩原神》这首歌，想玩原神",
+      "target_topic": "想玩原神，劝我别玩",
+      "category": "group",
+      "kind": "case"
+    },
+    {
+      "case_id": "G010",
+      "user_id": "3549329015",
+      "group_id": "734954188",
+      "target_history_id": 16547,
+      "anchor_history_id": 16050,
+      "anchor_fact": "用户之前要过 rana 的全身照，喜欢 BanG Dream 角色图",
+      "target_topic": "再要仲町阿拉蕾全身照",
+      "category": "group",
+      "kind": "case"
+    }
+  ],
+  "needles": [
+    {
+      "case_id": "N001",
+      "user_id": "1006625397",
+      "group_id": "1140457037",
+      "target_history_id": 2401,
+      "anchor_history_id": 2101,
+      "anchor_fact": "用户之前抱怨塔罗总结太长，问为什么给别人的分析没那么长",
+      "target_topic": "我不是说过总结不要这么长吗",
+      "category": "needle",
+      "kind": "needle"
+    },
+    {
+      "case_id": "N002",
+      "user_id": "3234979817",
+      "group_id": "765242634",
+      "target_history_id": 5658,
+      "anchor_history_id": 5575,
+      "anchor_fact": "用户问过字符设备/驱动模型，认为字符设备要注册 class、需要 bus",
+      "target_topic": "设备驱动是否必须注册 class",
+      "category": "needle",
+      "kind": "needle"
+    },
+    {
+      "case_id": "N003",
+      "user_id": "3234979817",
+      "group_id": "765242634",
+      "target_history_id": 5664,
+      "anchor_history_id": 5617,
+      "anchor_fact": "用户问过 cdev 是否挂在 platform 驱动里、Linux 有几套驱动模型",
+      "target_topic": "字符设备与 LDM 两条线",
+      "category": "needle",
+      "kind": "needle"
+    },
+    {
+      "case_id": "N004",
+      "user_id": "3234979817",
+      "group_id": "1140457037",
+      "target_history_id": 1196,
+      "anchor_history_id": 1144,
+      "anchor_fact": "用户之前在复习概率论，担心能不能复习完/考过",
+      "target_topic": "今天概率论能不能过",
+      "category": "needle",
+      "kind": "needle"
+    },
+    {
+      "case_id": "N005",
+      "user_id": "3234979817",
+      "group_id": null,
+      "target_history_id": 12898,
+      "anchor_history_id": 12861,
+      "anchor_fact": "用户准备写 SPI 小屏幕驱动，想搞清楚设备树/GPIO 要不要自己配置",
+      "target_topic": "小屏幕要不要挂显示子系统",
+      "category": "needle",
+      "kind": "needle"
+    }
+  ]
+}
