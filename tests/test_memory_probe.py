@@ -121,11 +121,14 @@ def test_run_resume_skips_done_cases(tmp_path):
 
 # ── 汇总与判据 ───────────────────────────────────────────────────
 
-def _entry(hits: dict[str, bool], kind="case", category="group"):
-    return {
-        "case_id": f"c{len(hits)}", "kind": kind, "category": category,
+def _entry(hits: dict[str, bool], kind="case", category="group", **extra):
+    entry = {
+        "case_id": f"c{len(hits)}-{kind}-{category}", "kind": kind, "category": category,
+        "probe_scope": category, "probe_tier": "A", "probe_type": "事实",
         "variants": {v: {"hit": h} for v, h in hits.items()},
     }
+    entry.update(extra)
+    return entry
 
 
 def test_summarize_probe_thresholds():
@@ -158,7 +161,7 @@ def test_summarize_probe_stratifies_kind_and_category():
 
     assert summary["by_kind"]["case"]["case_count"] == 1
     assert summary["by_kind"]["needle"]["accuracy"]["baseline"] == 0.0
-    assert summary["by_category"]["private"]["accuracy"]["raw24"] == 1.0
+    assert summary["by_scope"]["private"]["accuracy"]["raw24"] == 1.0
 
 
 def test_cli_dry_run_writes_json(tmp_path, capsys):
@@ -175,3 +178,55 @@ def test_cli_dry_run_writes_json(tmp_path, capsys):
     payload = json.loads(out.read_text(encoding="utf-8"))
     assert payload["case_count"] == 1
     assert payload["db"] == "probe.db"
+
+
+# ── 关键词边界与归一 ─────────────────────────────────────────────
+
+def test_code_keyword_requires_token_boundary():
+    assert memory_probe.score_answer("PAC6120 是新款", ["PAC612"]) == (False, [])
+    assert memory_probe.score_answer("推荐 PAC6120", ["PAC612"]) == (False, [])
+    assert memory_probe.score_answer("推荐 pac612。", ["PAC612"]) == (True, ["PAC612"])
+
+
+def test_fullwidth_and_space_normalization():
+    assert memory_probe.score_answer("推荐 ＰＡＣ６１２", ["PAC612"]) == (True, ["PAC612"])
+    assert memory_probe.score_answer("买 了 琴", ["买了琴"]) == (True, ["买了琴"])
+    assert memory_probe.score_answer("买了\u3000琴", ["买了 琴"]) == (True, ["买了 琴"])
+
+
+def test_mcnemar_exact_small_samples():
+    assert memory_probe._mcnemar_exact(0, 0) == 1.0
+    assert memory_probe._mcnemar_exact(10, 0) == 0.001953
+    assert memory_probe._mcnemar_exact(5, 5) == 1.0
+
+
+def test_repeat_check_reports_hit_consistency():
+    def entry(i, repeat_hit):
+        return {
+            "case_id": f"r{i}", "kind": "case", "category": "group",
+            "variants": {
+                v: {"hit": True, "repeat_hit": repeat_hit} for v in memory_probe.VARIANTS
+            },
+        }
+
+    results = [entry(i, True) for i in range(19)] + [entry(19, False)]
+    check = memory_probe._repeat_check(results)
+
+    assert check["case_count"] == 20
+    assert check["pass"] is True
+    assert check["per_variant"]["layered"]["hit_consistency"] == 0.95
+
+
+def test_group_by_tier_and_type():
+    results = [
+        _entry({"baseline": True, "raw24": True, "raw48": True, "layered": True},
+               probe_tier="A", probe_type="事实"),
+        _entry({"baseline": False, "raw24": True, "raw48": True, "layered": True},
+               probe_tier="C", probe_type="约定"),
+    ]
+
+    summary = memory_probe.summarize_probe(results)
+
+    assert summary["by_tier"]["A"]["case_count"] == 1
+    assert summary["by_tier"]["C"]["accuracy"]["baseline"] == 0.0
+    assert summary["by_type"]["事实"]["accuracy"]["layered"] == 1.0
