@@ -392,24 +392,15 @@ def _speaker_context(robot: RobotServer, disabled: set[str]) -> str:
     放进 user message 而不是 system prompt —— 它随「谁在说话」变化，
     放系统提示词里等于每换个人就废掉整段前缀缓存。
     """
-    if robot.msg_type != "group" or not robot.group_id:
-        return ""
-
+    group_id = robot.group_id or ""
     affection = None
+    parts: list[str] = []
     if "affection" not in disabled:
         try:
-            affection = affection_service.get_or_create(
-                db, robot.user_id, robot.group_id, robot.user_name,
-            )
-        except Exception:
-            logger.debug("affection record failed", exc_info=True)
-
-    parts: list[str] = []
-    if affection is not None:
-        try:
-            block = affection_service.relationship_block(
-                db, robot.user_id, robot.group_id,
-            )
+            # 读 global（群/私聊加权），不在读路径创建任何行。
+            global_score = affection_service.get_global(db, robot.user_id)
+            affection = {"affection_score": global_score["score"]}
+            block = affection_service.relationship_block(db, robot.user_id, group_id)
             if block:
                 parts.append(block)
         except Exception:
@@ -418,7 +409,7 @@ def _speaker_context(robot: RobotServer, disabled: set[str]) -> str:
     if "profiles" not in disabled:
         try:
             block = profile_service.build_speaker_context(
-                db, robot.user_id, robot.group_id, robot.user_name,
+                db, robot.user_id, group_id, robot.user_name,
                 affection=affection,
             )
             if block:
@@ -541,12 +532,12 @@ def _trigger_profile_update(robot: RobotServer, disabled: set[str] | None = None
                 profile_service.extract_memories,
                 db, robot.user_id, robot.user_name,
             )
-        if robot.msg_type == "group" and robot.group_id:
-            if profile_service.should_analyze(db, robot.user_id):
-                executor.submit(
-                    profile_service.analyze_user,
-                    db, robot.user_id, robot.user_name, robot.group_id,
-                )
+        # 画像是「这个人」唯一的一份，私聊也要触发（跨群+私聊计数）。
+        if profile_service.should_analyze(db, robot.user_id):
+            executor.submit(
+                profile_service.analyze_user,
+                db, robot.user_id, robot.user_name, robot.group_id or "",
+            )
     except Exception:
         logger.debug("main._trigger_profile_update 忽略了异常", exc_info=True)
 
@@ -633,14 +624,15 @@ def main_logic(robot: RobotServer) -> None:
             return
 
         # ── Affection: record valid interaction (base points only, sync) ──
-        if robot.msg_type == "group" and robot.group_id and "affection" not in disabled:
+        if "affection" not in disabled:
             try:
-                # 先更新连续出现天数，再算事件分 —— streak 本身就是一个事件
+                # 群/私聊用同一套事件分；私聊写 group_id='' 的 private 分量。
+                group_id = robot.group_id or ""
                 affection_service.touch_streak(
-                    db, robot.user_id, robot.group_id, robot.user_name,
+                    db, robot.user_id, group_id, robot.user_name,
                 )
                 affection_service.record_interaction(
-                    db, robot.user_id, robot.group_id, robot.user_name,
+                    db, robot.user_id, group_id, robot.user_name,
                     has_images=bool(getattr(robot.incoming, "has_images", False)),
                 )
             except Exception:
@@ -648,7 +640,7 @@ def main_logic(robot: RobotServer) -> None:
 
         # ── AI judge (async): sentiment of THIS message → affection score ──
         has_text = bool(robot.msg.strip())
-        affection_on = bool(robot.group_id) and "affection" not in disabled and has_text
+        affection_on = "affection" not in disabled and has_text
         if affection_on:
             executor.submit(_run_ai_judge, robot)
 
@@ -864,27 +856,54 @@ def api_profiles():
 
 @app.route("/api/affection")
 def api_affection():
-    """Get all affection records, optionally filtered by group."""
+    """一人一个总分（global）；带 group_id 时返回该群分量并附 global_score。"""
     group_id = request.args.get("group_id", "")
-    rows = db.fetch_data(
-        "SELECT user_id, group_id, user_name, affection_score, interaction_count, "
-        "positive_count, negative_count, last_interaction, relationship, notes "
-        "FROM user_affection ORDER BY affection_score DESC LIMIT 200"
-    )
+    if group_id:
+        rows = db.fetch_data(
+            "SELECT user_id, group_id, user_name, affection_score, interaction_count, "
+            "positive_count, negative_count, last_interaction, relationship, notes "
+            "FROM user_affection WHERE group_id=? ORDER BY affection_score DESC LIMIT 200",
+            (group_id,),
+        )
+        records = []
+        for r in rows:
+            label, emoji = AffectionService.get_relationship(float(r[3]))
+            records.append({
+                "user_id": r[0], "group_id": r[1], "user_name": r[2],
+                "affection_score": round(float(r[3]), 1),
+                "interaction_count": int(r[4]),
+                "positive_count": int(r[5]), "negative_count": int(r[6]),
+                "last_interaction": r[7], "relationship": r[8] or label,
+                "emoji": emoji, "notes": r[9] or "",
+                "global_score": AffectionService.get_global(db, r[0])["score"],
+            })
+        return jsonify({"affection_records": records, "total": len(records),
+                        "group_id": group_id})
+
+    user_ids = [r[0] for r in db.fetch_data(
+        "SELECT DISTINCT user_id FROM user_affection",
+    )]
     records = []
-    for r in rows:
-        if group_id and r[1] != group_id:
-            continue
-        label, emoji = AffectionService.get_relationship(float(r[3]))
+    for user_id in user_ids:
+        global_score = AffectionService.get_global(db, user_id)
+        name_rows = db.fetch_data(
+            "SELECT user_name FROM user_affection WHERE user_id=? "
+            "ORDER BY updated_at DESC LIMIT 1",
+            (user_id,),
+        )
         records.append({
-            "user_id": r[0], "group_id": r[1], "user_name": r[2],
-            "affection_score": round(float(r[3]), 1),
-            "interaction_count": int(r[4]),
-            "positive_count": int(r[5]), "negative_count": int(r[6]),
-            "last_interaction": r[7], "relationship": r[8] or label,
-            "emoji": emoji, "notes": r[9] or "",
+            "user_id": user_id,
+            "user_name": name_rows[0][0] if name_rows else user_id,
+            "affection_score": global_score["score"],
+            "interaction_count": global_score["interaction_count"],
+            "positive_count": global_score["positive_count"],
+            "negative_count": global_score["negative_count"],
+            "relationship": global_score["relationship"],
+            "emoji": global_score["emoji"],
+            "components": global_score["components"],
         })
-    return jsonify({"affection_records": records, "total": len(records)})
+    records.sort(key=lambda row: row["affection_score"], reverse=True)
+    return jsonify({"affection_records": records[:200], "total": len(records)})
 
 
 @app.route("/api/affection/leaderboard")
@@ -898,23 +917,27 @@ def api_affection_leaderboard():
 
 @app.route("/api/affection/<user_id>")
 def api_affection_user(user_id: str):
-    """Get affection details for a specific user."""
+    """用户详情：默认返回 global + 各分量；带 group_id 时返回该分量并附 global_score。"""
     group_id = request.args.get("group_id", "")
-    if not group_id:
-        return jsonify({"ok": False, "error": "group_id query parameter is required"}), 400
-    record = AffectionService.get_or_create(db, user_id, group_id, user_id)
-    label, emoji = AffectionService.get_relationship(record["affection_score"])
+    global_score = AffectionService.get_global(db, user_id)
+    component = None
+    if group_id:
+        component = next(
+            (c for c in global_score["components"] if c["group_id"] == group_id), None,
+        )
+    score = component["affection_score"] if component else global_score["score"]
+    label, emoji = AffectionService.get_relationship(score)
     return jsonify({
         "user_id": user_id,
-        "group_id": group_id,
-        "affection_score": round(record["affection_score"], 1),
-        "interaction_count": record["interaction_count"],
-        "positive_count": record["positive_count"],
-        "negative_count": record["negative_count"],
-        "last_interaction": record["last_interaction"],
+        "group_id": group_id or None,
+        "affection_score": round(score, 1),
+        "interaction_count": component["interaction_count"] if component else global_score["interaction_count"],
+        "positive_count": global_score["positive_count"],
+        "negative_count": global_score["negative_count"],
         "relationship": label,
         "emoji": emoji,
-        "notes": record.get("notes", ""),
+        "global_score": global_score["score"],
+        "components": global_score["components"],
     })
 
 
@@ -924,10 +947,13 @@ def api_affection_adjust():
     data = request.get_json(silent=True) or {}
     user_id = (data.get("user_id") or "").strip()
     group_id = (data.get("group_id") or "").strip()
+    scope = (data.get("scope") or "").strip()
+    if scope not in ("group", "private"):
+        scope = AffectionService.scope_for(group_id)
     delta = float(data.get("delta", 0))
     note = (data.get("note") or "").strip()
-    if not user_id or not group_id:
-        return jsonify({"ok": False, "error": "user_id and group_id are required"}), 400
+    if not user_id:
+        return jsonify({"ok": False, "error": "user_id is required"}), 400
     if delta == 0:
         return jsonify({"ok": False, "error": "delta must be non-zero"}), 400
     try:

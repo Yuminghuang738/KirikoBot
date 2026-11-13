@@ -799,24 +799,19 @@ class AffectionTool:
                 robot.reply(f"找不到群友「{target_name}」哦～可能ta还没说过话？")
                 return
 
-        # Fetch affection data
-        record = AffectionService.get_or_create(
-            self.db, target_uid or "", robot.group_id or "", target_display or target_name,
-        )
-        score = record["affection_score"]
-        label, emoji = AffectionService.get_relationship(score)
-
-        is_self = (target_uid == robot.user_id) or (not target_name)
+        # 读 global（一人一个总分，群/私聊是分量）；不在读路径建行。
+        global_score = AffectionService.get_global(self.db, target_uid or "")
+        score = global_score["score"]
+        label = global_score["relationship"]
+        emoji = global_score["emoji"]
 
         # 直接发原文：数字类回答让模型复述反而容易被它加工得不准
         lines = [
             f"💕 {target_display} 的好感度",
             f"{score:.0f}/100 {emoji}{label}",
-            f"互动 {record['interaction_count']} 次"
-            f"（好评 {record['positive_count']} / 差评 {record['negative_count']}）",
+            f"互动 {global_score['interaction_count']} 次"
+            f"（好评 {global_score['positive_count']} / 差评 {global_score['negative_count']}）",
         ]
-        if is_self and record.get("notes"):
-            lines.append(f"备注：{record['notes']}")
         robot.reply("\n".join(lines))
 
 
