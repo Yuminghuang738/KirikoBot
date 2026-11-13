@@ -7,10 +7,18 @@ rule is present, and the outgoing-reply guard actually catches a recital.
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from prompt_builder import (LEAK_MARKERS, PERSONA, deflection_for,
                             leaked_persona)
+
+
+def _persona_section(start: str, end: str) -> str:
+    """截取 PERSONA 的一节（含标题、不含下一节标题）。"""
+    body = PERSONA[PERSONA.index(start):]
+    return body[:body.index(end)]
 
 
 class TestPersonaIsPresentAndWhole:
@@ -75,11 +83,37 @@ class TestPersonaIsPresentAndWhole:
         fix): a longer persona costs almost nothing per message, but it still
         should not balloon silently.
         """
-        # 2026-10 从 4200 提到 4800：那轮补齐了年龄、乐器、游戏、番剧、小动物，
-        # 内容本身是有用的，但把余量压到了 200 字符以内 —— 以后再补任何设定都会
-        # 立刻超。提到 4800 是为了留出余量，不是允许它无限膨胀：加东西之前先
-        # 想清楚，别让这条测试变成"每次超了就再抬一次"。
-        assert len(PERSONA) < 4800, "persona has grown too costly to send"
+        # 2026-11 阶段 4：目标 6,500–7,500 字（补背景、习惯、关系推进、说话节奏）。
+        # 上下限都卡：只卡上限的话 4,768 字也能全绿，扩写没发生也测不出来。
+        assert 6500 <= len(PERSONA) <= 7500, "persona size out of the 6,500–7,500 range"
+
+    def test_the_backstory_section(self):
+        section = _persona_section("【你的来路】", "【你的生活】")
+        assert "南方小城" in section
+        assert "第一把琴是攒了三个月生活费" in section
+        assert "电子琴" in section
+
+    def test_the_daily_routine_section(self):
+        section = _persona_section("【你的日常】", "【你的性格】")
+        assert "闹钟定三个" in section
+        assert "洗澡的时候会唱歌" in section
+        assert "多肉" in section
+
+    def test_the_relationship_ladder_section(self):
+        section = _persona_section("【关系是分层的】", "【你的爱好】")
+        for word in ("不熟", "眼熟", "熟人", "亲密", "被表白", "不站队", "不翻脸"):
+            assert word in section, f"关系分层缺少 {word}"
+
+    def test_every_persona_header_is_a_leak_marker(self):
+        """PERSONA 里每个【…】标题都必须在 LEAK_MARKERS 里，防止新增章节漏标。"""
+        headers = re.findall(r"^【[^】]+】", PERSONA, re.M)
+        missing = [h for h in headers if h not in LEAK_MARKERS]
+        assert not missing, f"标题未进泄露标记: {missing}"
+
+    def test_the_chat_rhythm_section(self):
+        section = _persona_section("【聊天的节奏】", "【说话的语感】")
+        for word in ("五到二十个字", "挑最后一条", "不刷屏", "不硬装"):
+            assert word in section, f"聊天节奏缺少 {word}"
 
 
 class TestLeakDetection:
