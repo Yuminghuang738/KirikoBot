@@ -193,6 +193,18 @@ def _group_complete_sentences(sentences: list[str], max_chunks: int) -> list[str
     return [_join_sentences(group) for group in groups]
 
 
+def _stick_dependent_lines(lines: list[str]) -> list[str]:
+    """以「但是/所以/因为…」开头的行依赖前文，粘回上一行，避免单独成条。"""
+    chunks: list[str] = []
+    for line in lines:
+        first = line.lstrip("“‘（(【[")
+        if chunks and first.startswith(_DEPENDENT_SENTENCE_PREFIXES):
+            chunks[-1] = chunks[-1] + "\n" + line
+        else:
+            chunks.append(line)
+    return chunks
+
+
 def _merge_shortest_lines(lines: list[str], max_chunks: int) -> list[str]:
     """行数超过 max_chunks 时，反复合并总长度最短的相邻两行；内容零丢弃。"""
     chunks = list(lines)
@@ -223,7 +235,11 @@ def split_into_pacing_chunks(text: str, max_chunks: int = 3) -> list[str]:
         return [text]
 
     # 结构化内容和 URL 密集内容宁可一条发完，避免排版或链接被拆坏。
-    if "```" in text or re.search(r"(?m)^\s*(?:[-+*]|\d+[.)])\s+", text) or "|" in text:
+    if (
+        "```" in text
+        or re.search(r"(?m)^\s*(?:[-+*]|\d+[.)、]|[①-⑳])\s*", text)
+        or "|" in text
+    ):
         return [text]
     if len(re.findall(r"https?://", text)) >= 2:
         return [text]
@@ -235,7 +251,7 @@ def split_into_pacing_chunks(text: str, max_chunks: int = 3) -> list[str]:
     # 的标点，就把换行当成候选边界；超过 max_chunks 时合并最短相邻行，不丢内容。
     lines = [part.strip() for part in text.splitlines() if part.strip()]
     if len(lines) > 1 and all(_line_is_boundary(line) for line in lines):
-        return _merge_shortest_lines(lines, max_chunks)
+        return _merge_shortest_lines(_stick_dependent_lines(lines), max_chunks)
 
     # 兼容旧行为：每行都带句末标点时按行发送（行可以短）。
     if 1 < len(lines) <= max_chunks and all(line[-1] in _SENTENCE_END | _CLOSERS for line in lines):

@@ -59,6 +59,26 @@ class TestSplitIntoPacingChunks:
         text = f"第一行写得足够长但结尾是{ending}\n第二行也够长没有句末标点"
         assert split_into_pacing_chunks(text) == [text]
 
+    def test_dependent_line_sticks_to_previous_chunk(self):
+        """以「所以/但是…」开头的行依赖前文，不能单独成条。"""
+        text = (
+            "这个写法表面上能跑，但有个前提需要确认\n"
+            "所以要先把空指针挡住再谈其他\n"
+            "不然它会直接在回调里崩溃掉"
+        )
+        chunks = split_into_pacing_chunks(text)
+        assert len(chunks) == 2
+        assert chunks[0] == "这个写法表面上能跑，但有个前提需要确认\n所以要先把空指针挡住再谈其他"
+        assert chunks[1] == "不然它会直接在回调里崩溃掉"
+
+    def test_chinese_numbered_list_is_never_split(self):
+        text = "几点：\n1、先看日志\n2、再复现\n3、最后改代码"
+        assert split_into_pacing_chunks(text) == [text]
+
+    def test_circled_number_list_is_never_split(self):
+        text = "步骤：\n①先看日志\n②再复现\n③最后改代码"
+        assert split_into_pacing_chunks(text) == [text]
+
     def test_comma_inside_closing_quote_is_still_not_a_boundary(self):
         """行尾是「，”」时，去掉闭引号后仍是没说完的逗号，不能成段。"""
         text = "他说“你先别急，”\n后面的话还没说完呢真的"
