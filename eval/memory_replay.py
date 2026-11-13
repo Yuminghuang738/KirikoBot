@@ -28,13 +28,12 @@ sys.path.insert(0, str(APP))
 
 from chat_history import to_messages  # noqa: E402
 from memory_service import (  # noqa: E402
-    SUMMARY_SYSTEM,
-    _clean_summary,
-    _parse_summary,
+    generate_summary,
     render_summary_block,
 )
 from prompt_builder import PERSONA  # noqa: E402
 
+import ai_metrics  # noqa: E402
 import requests  # noqa: E402
 
 MODEL = os.getenv("DEEPSEEK_MODEL") or "deepseek-flash"
@@ -44,6 +43,10 @@ BASELINE_RAW = 16
 LAYERED_RAW = 24
 SUMMARY_SOURCE_LIMIT = 48   # 摘要只看 raw 窗口之前最近 48 条，避免超长历史爆上下文
 SUMMARY_MAX_CHARS = 500
+
+# 四变体：只改窗口（raw24/raw48）与叠摘要（layered），用来判断摘要到底有没有增量。
+VARIANTS = ("baseline", "raw24", "raw48", "layered")
+VAR_WINDOWS = {"baseline": 16, "raw24": 24, "raw48": 48, "layered": 24}
 DIMS = ("memory", "coherence", "persona", "natural", "leak")
 DIM_LABELS = {
     "memory": "记忆准确", "coherence": "连贯", "persona": "人设",
@@ -65,6 +68,26 @@ ANCHOR_SYSTEM = """你只回答一个 yes/no 问题：候选回复是否**正确
 
 
 _USAGE: list[dict[str, Any]] = []
+
+# 摘要走生产 `generate_summary` → `quick_chat(..., source="summary")`，不经过本文件的
+# `_post`；这里接住 ai_metrics 的 sink，把摘要生成侧的真实 token 也算进 layered 成本。
+_SUMMARY_METRICS: dict[str, int] = {
+    "calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cache_hit_tokens": 0,
+}
+
+
+def _summary_sink(entry: dict[str, Any]) -> None:
+    if (entry or {}).get("source") != "summary":
+        return
+    _SUMMARY_METRICS["calls"] += 1
+    for field in ("prompt_tokens", "completion_tokens", "cache_hit_tokens"):
+        _SUMMARY_METRICS[field] += int(entry.get(field) or 0)
+
+
+def _wire_summary_metrics() -> None:
+    for field in _SUMMARY_METRICS:
+        _SUMMARY_METRICS[field] = 0
+    ai_metrics.set_sink(_summary_sink)
 
 
 def _record_usage(tag: str, usage: Any) -> None:
@@ -144,9 +167,8 @@ def fetch_context_rows(conn: sqlite3.Connection, case: dict[str, Any]) -> list[d
     ]
 
 
-def split_variants(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
-    """返回 (baseline 16 条, layered 24 条, 只有 layered 才看得到的更早消息)。"""
-    return rows[-BASELINE_RAW:], rows[-LAYERED_RAW:], rows[:-LAYERED_RAW]
+def window_rows(rows: list[dict[str, Any]], size: int) -> list[dict[str, Any]]:
+    return rows[-size:]
 
 
 def _as_messages(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -154,14 +176,8 @@ def _as_messages(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def summarize_older(older: list[dict[str, Any]], key: str) -> str:
-    """把 raw 窗口之外最近的 48 条压成 ≤500 字摘要；空输入返回 ''。
-
-    只取最近 48 条：线上是每 24 条滚动摘要，而 eval 一次性压全部旧消息；
-    不设上限时真实样本会出现 4000+ 条、直接把上下文撑爆。
-    """
+    """把 raw 窗口之外最近的 48 条压成 ≤500 字摘要；与生产走同一个 generate_summary。"""
     older = older[-SUMMARY_SOURCE_LIMIT:]
-    if not older:
-        return ""
     lines = []
     for row in older:
         content = (row.get("content") or "").strip()
@@ -170,21 +186,8 @@ def summarize_older(older: list[dict[str, Any]], key: str) -> str:
         lines.append(f"{'用户' if row['role'] == 'user' else 'Kiriko'}：{content}")
     if not lines:
         return ""
-    payload = {
-        "model": MODEL,
-        "messages": [
-            {"role": "system", "content": SUMMARY_SYSTEM},
-            {"role": "user", "content": "新的聊天记录：\n" + "\n".join(lines)},
-        ],
-        "max_tokens": 800,
-        "temperature": 0.2,
-        "thinking": {"type": "disabled"},
-        "stream": False,
-    }
-    raw = _post(payload, key, tag="summary")
-    summary, _ = _parse_summary(raw)
-    # 与线上一致：截到 500 字（句末），并过滤指令性行。
-    return _clean_summary(summary)
+    summary, _ = generate_summary("\n".join(lines))
+    return summary
 
 
 def generate_reply(history: list[dict[str, Any]], user_text: str, key: str,
@@ -293,18 +296,19 @@ def _normalize(entry: Any) -> tuple[str | None, float | None, float | None]:
     return None, None, None
 
 
-def combine_pair(first: dict[str, Any], second: dict[str, Any]) -> dict[str, Any]:
+def combine_pair(first: dict[str, Any], second: dict[str, Any],
+                 variant: str = "layered") -> dict[str, Any]:
     """first 的 A=baseline/B=layered；second 的 A=layered/B=baseline。
 
     两次结论归一后一致才算赢，否则算平；分数取两次平均。
     """
     winners: dict[str, str] = {}
-    scores: dict[str, dict[str, float]] = {"baseline": {}, "layered": {}}
+    scores: dict[str, dict[str, float]] = {"baseline": {}, variant: {}}
     for dim in DIMS:
         w1, a1, b1 = _normalize(first.get(dim))
         w2, a2, b2 = _normalize(second.get(dim))
-        norm1 = {"A": "baseline", "B": "layered", "平": "平"}.get(w1) if w1 else None
-        norm2 = {"A": "layered", "B": "baseline", "平": "平"}.get(w2) if w2 else None
+        norm1 = {"A": "baseline", "B": variant, "平": "平"}.get(w1) if w1 else None
+        norm2 = {"A": variant, "B": "baseline", "平": "平"}.get(w2) if w2 else None
         if norm1 and norm2 and norm1 == norm2:
             winners[dim] = norm1
         else:
@@ -313,39 +317,43 @@ def combine_pair(first: dict[str, Any], second: dict[str, Any]) -> dict[str, Any
         if a1 is not None and b2 is not None:
             scores["baseline"][dim] = round((a1 + b2) / 2, 2)
         if b1 is not None and a2 is not None:
-            scores["layered"][dim] = round((b1 + a2) / 2, 2)
+            scores[variant][dim] = round((b1 + a2) / 2, 2)
     return {"winner": winners, "scores": scores}
 
 
 def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
-        dry_run: bool = False) -> dict[str, Any]:
+        dry_run: bool = False, jsonl_path: str | None = None,
+        resume: bool = False) -> dict[str, Any]:
     key = "" if dry_run else _read_token()
     _USAGE.clear()
+    _wire_summary_metrics()
     conn = connect_ro(db_path)
     results: list[dict[str, Any]] = []
+    selected = cases[: limit or len(cases)]
+    done: set[str] = set()
+    if jsonl_path:
+        if resume and Path(jsonl_path).exists():
+            done = _load_done_ids(jsonl_path)
+        else:
+            Path(jsonl_path).write_text("", encoding="utf-8")
 
-    for case in cases[: limit or len(cases)]:
+    for index, case in enumerate(selected, 1):
+        if case["case_id"] in done:
+            continue
         rows = fetch_context_rows(conn, case)
         if len(rows) < 2 or rows[-1]["role"] != "user":
             continue
         last_user = rows[-1]["content"]
         context = rows[:-1]
-        baseline_rows, layered_rows, older = split_variants(context)
-        baseline_hist = _as_messages(baseline_rows)
-        layered_hist = _as_messages(layered_rows)
-
-        started = time.perf_counter()
-        summary = "" if dry_run else summarize_older(older, key)
-        user_layered = last_user
+        summary = "" if dry_run else summarize_older(context[:-LAYERED_RAW], key)
+        layered_user = last_user
         if summary:
-            user_layered = render_summary_block(summary) + "\n" + last_user
+            layered_user = render_summary_block(summary) + "\n" + last_user
 
-        baseline_reply = "" if dry_run else generate_reply(baseline_hist, last_user, key, tag="baseline")
-        layered_reply = "" if dry_run else generate_reply(layered_hist, user_layered, key, tag="layered")
-
-        # 数据集 v3 起 anchor 分两栏：短句用于字面命中，语义说明用于 judge 的 yes/no。
         anchor_short = str(case.get("anchor_fact_short") or case.get("anchor_fact") or "").strip()
         anchor_semantic = str(case.get("anchor_semantic") or case.get("anchor_fact") or anchor_short).strip()
+
+        started = time.perf_counter()
         entry: dict[str, Any] = {
             "case_id": case["case_id"],
             "kind": case.get("kind", "case"),
@@ -354,43 +362,65 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
             "anchor_fact_short": anchor_short,
             "anchor_fact_semantic": anchor_semantic,
             "anchor_in_summary": bool(anchor_short and anchor_short.lower() in summary.lower()),
-            "baseline_reply": baseline_reply,
-            "layered_reply": layered_reply,
-            "variants": {
-                "baseline": {"context_messages": len(baseline_hist), "reply_len": len(baseline_reply), "summary_len": 0},
-                "layered": {"context_messages": len(layered_hist), "reply_len": len(layered_reply), "summary_len": len(summary)},
-            },
-            "latency_ms": round((time.perf_counter() - started) * 1000, 1),
+            "variants": {},
+            "replies": {},
+            "anchors": {},
+            "judge_vs_baseline": {},
         }
-        if not dry_run:
-            # judge 必须看 layered 的实际上下文（24 条 + 摘要），否则 layered 正确
-            # 引用更早的事实在 judge 眼里会像「无中生有」，系统性压低它的分。
-            ctx = _context_text(layered_hist)
-            if summary:
-                ctx = f"【更早的摘要】\n{summary}\n{ctx}"
-            entry["judge"] = combine_pair(
-                judge_call(ctx, last_user, baseline_reply, layered_reply, key),
-                judge_call(ctx, last_user, layered_reply, baseline_reply, key),
-            )
-            entry["anchor"] = {
-                "baseline": anchor_call(ctx, last_user, baseline_reply, anchor_semantic, key),
-                "layered": anchor_call(ctx, last_user, layered_reply, anchor_semantic, key),
+        histories: dict[str, list[dict[str, Any]]] = {}
+        for variant in VARIANTS:
+            hist = _as_messages(window_rows(context, VAR_WINDOWS[variant]))
+            histories[variant] = hist
+            user_text = layered_user if variant == "layered" else last_user
+            reply = "" if dry_run else generate_reply(hist, user_text, key, tag=variant)
+            entry["variants"][variant] = {
+                "context_messages": len(hist),
+                "reply_len": len(reply),
+                "summary_len": len(summary) if variant == "layered" else 0,
             }
+            entry["replies"][variant] = reply
+        entry["latency_ms"] = round((time.perf_counter() - started) * 1000, 1)
+
+        if not dry_run:
+            # judge 看最宽的窗口 + 摘要，避免把「更早事实」误判成编造。
+            judge_ctx = _context_text(histories["raw48"])
+            if summary:
+                judge_ctx = f"【更早的摘要】\n{summary}\n{judge_ctx}"
+            for variant in VARIANTS:
+                entry["anchors"][variant] = anchor_call(
+                    judge_ctx, last_user, entry["replies"][variant], anchor_semantic, key, tag=variant,
+                )
+            for variant in VARIANTS[1:]:
+                entry["judge_vs_baseline"][variant] = combine_pair(
+                    judge_call(judge_ctx, last_user, entry["replies"]["baseline"], entry["replies"][variant], key),
+                    judge_call(judge_ctx, last_user, entry["replies"][variant], entry["replies"]["baseline"], key),
+                    variant=variant,
+                )
         results.append(entry)
+        if jsonl_path:
+            with open(jsonl_path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        print(f"[{index}/{len(selected)}] {entry['case_id']}", file=sys.stderr, flush=True)
 
     summary_stats = summarize_results(results)
     usage = _usage_summary()
     baseline_tokens = usage.get("baseline", {}).get("prompt_tokens", 0)
-    layered_tokens = (usage.get("layered", {}).get("prompt_tokens", 0)
-                      + usage.get("summary", {}).get("prompt_tokens", 0))
-    token_cost = {
+    summary_tokens = _SUMMARY_METRICS["prompt_tokens"] or usage.get("summary", {}).get("prompt_tokens", 0)
+    token_cost: dict[str, Any] = {
         "baseline_prompt_tokens": baseline_tokens,
-        "layered_prompt_tokens": layered_tokens,
-        "summary_prompt_tokens": usage.get("summary", {}).get("prompt_tokens", 0),
-        "ratio": round((layered_tokens - baseline_tokens) / baseline_tokens, 3)
-        if baseline_tokens else None,
+        "summary_prompt_tokens": summary_tokens,
+        "summary_calls": _SUMMARY_METRICS["calls"],
+        "summary_completion_tokens": _SUMMARY_METRICS["completion_tokens"],
+        "variants": {},
     }
-    payload = {
+    for variant in VARIANTS[1:]:
+        tokens = usage.get(variant, {}).get("prompt_tokens", 0) + (summary_tokens if variant == "layered" else 0)
+        token_cost["variants"][variant] = {
+            "prompt_tokens": tokens,
+            "ratio": round((tokens - baseline_tokens) / baseline_tokens, 3) if baseline_tokens else None,
+        }
+
+    return {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "model": MODEL,
         "dry_run": dry_run,
@@ -401,10 +431,64 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
         "token_cost": token_cost,
         "notes": (
             "只测记忆层：system=PERSONA，不含工具 schema / 群背景 / 画像；"
-            "结论只用于 baseline vs layered 的相对比较，不代表完整生产链路。"
+            "四变体 baseline16 / raw24 / raw48 / layered(24+摘要)，"
+            "结论只用于相对比较，不代表完整生产链路。"
         ),
     }
-    return payload
+
+
+def _load_done_ids(jsonl_path: str) -> set[str]:
+    """读 checkpoint：一次运行可能被杀，续跑只跳过已完成的 case。"""
+    done: set[str] = set()
+    for line in Path(jsonl_path).read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            done.add(str(json.loads(line)["case_id"]))
+        except (ValueError, KeyError, TypeError):
+            continue
+    return done
+
+
+def measure_summary_cost(cases: list[dict[str, Any]], db_path: str,
+                         dry_run: bool = False) -> dict[str, Any]:
+    """只跑摘要生成，量真实 token / 调用次数 / 长度，不跑回复与 judge。
+
+    用途：四变体 A/B 已跑完但摘要 token 漏记时，补这一趟即可算准 layered 成本。
+    """
+    key = "" if dry_run else _read_token()
+    _wire_summary_metrics()
+    conn = connect_ro(db_path)
+    lengths: list[int] = []
+    end_punct = 0
+    end_chars: dict[str, int] = {}
+    for case in cases:
+        rows = fetch_context_rows(conn, case)
+        if len(rows) < 2 or rows[-1]["role"] != "user":
+            continue
+        older = rows[:-1][:-LAYERED_RAW]
+        summary = "" if dry_run else summarize_older(older, key)
+        if not summary:
+            continue
+        lengths.append(len(summary))
+        tail = summary.rstrip()[-1:]
+        if tail:
+            end_chars[tail] = end_chars.get(tail, 0) + 1
+        if tail in ("。", "！", "？", "…", "」", "】", "!", "?"):
+            end_punct += 1
+    return {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "dry_run": dry_run,
+        "db": Path(db_path).name,
+        "summary_count": len(lengths),
+        "summary_len_mean": _mean([float(n) for n in lengths]),
+        "summary_len_max": max(lengths) if lengths else None,
+        "over_limit": sum(1 for n in lengths if n > SUMMARY_MAX_CHARS),
+        "end_punct": end_punct,
+        "end_chars": dict(sorted(end_chars.items(), key=lambda kv: -kv[1])),
+        "usage": dict(_SUMMARY_METRICS),
+    }
 
 
 def _mean(values: list[float]) -> float | None:
@@ -412,69 +496,85 @@ def _mean(values: list[float]) -> float | None:
 
 
 def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
-    wins = {dim: {"baseline": 0, "layered": 0, "平": 0} for dim in DIMS}
-    anchors = {"baseline": 0, "layered": 0, "total": 0}
-    scores = {dim: {"baseline": [], "layered": []} for dim in DIMS}
-    reply_lens = {"baseline": [], "layered": []}
+    compared = VARIANTS[1:]
+    wins = {v: {dim: {"baseline": 0, v: 0, "平": 0} for dim in DIMS} for v in compared}
+    scores: dict[str, dict[str, list[float]]] = {v: {dim: [] for dim in DIMS} for v in VARIANTS}
+    baseline_scores: dict[str, dict[str, list[float]]] = {v: {dim: [] for dim in DIMS} for v in compared}
+    anchors = {v: 0 for v in VARIANTS}
+    anchor_total = 0
+    reply_lens: dict[str, list[int]] = {v: [] for v in VARIANTS}
 
     for entry in results:
-        judge = entry.get("judge") or {}
-        for dim in DIMS:
-            winner = (judge.get("winner") or {}).get(dim)
-            if winner in wins[dim]:
-                wins[dim][winner] += 1
-            dim_scores = (judge.get("scores") or {}).get(dim) or {}
-            for variant in ("baseline", "layered"):
-                if dim_scores.get(variant) is not None:
-                    scores[dim][variant].append(float(dim_scores[variant]))
-        anchor = entry.get("anchor") or {}
-        if anchor.get("baseline") is not None and anchor.get("layered") is not None:
-            anchors["total"] += 1
-            anchors["baseline"] += 1 if anchor["baseline"] else 0
-            anchors["layered"] += 1 if anchor["layered"] else 0
-        reply_lens["baseline"].append(len(entry.get("baseline_reply") or ""))
-        reply_lens["layered"].append(len(entry.get("layered_reply") or ""))
+        for variant in compared:
+            judge = (entry.get("judge_vs_baseline") or {}).get(variant) or {}
+            for dim in DIMS:
+                winner = (judge.get("winner") or {}).get(dim)
+                if winner in wins[variant][dim]:
+                    wins[variant][dim][winner] += 1
+                dim_scores = judge.get("scores") or {}
+                variant_score = (dim_scores.get(variant) or {}).get(dim)
+                base_score = (dim_scores.get("baseline") or {}).get(dim)
+                if variant_score is not None:
+                    scores[variant][dim].append(float(variant_score))
+                if base_score is not None:
+                    baseline_scores[variant][dim].append(float(base_score))
+        entry_anchors = entry.get("anchors") or {}
+        if entry_anchors:
+            anchor_total += 1
+            for variant in VARIANTS:
+                if entry_anchors.get(variant):
+                    anchors[variant] += 1
+        for variant in VARIANTS:
+            reply_lens[variant].append(len((entry.get("replies") or {}).get(variant) or ""))
 
-    memory_wins = wins["memory"]["layered"]
-    anchor_layered = (anchors["layered"] / anchors["total"]) if anchors["total"] else 0
-    anchor_baseline = (anchors["baseline"] / anchors["total"]) if anchors["total"] else 0
-    score_means = {}
-    for dim in DIMS:
-        base = _mean(scores[dim]["baseline"])
-        layer = _mean(scores[dim]["layered"])
-        score_means[dim] = {
-            "baseline": base, "layered": layer,
-            "diff": round(layer - base, 2) if base is not None and layer is not None else None,
-        }
+    score_means: dict[str, dict[str, Any]] = {}
+    for variant in compared:
+        score_means[variant] = {}
+        for dim in DIMS:
+            v_mean = _mean(scores[variant][dim])
+            b_mean = _mean(baseline_scores[variant][dim])
+            score_means[variant][dim] = {
+                "baseline": b_mean, variant: v_mean,
+                "diff": round(v_mean - b_mean, 2) if v_mean is not None and b_mean is not None else None,
+            }
+
+    base_rate = (anchors["baseline"] / anchor_total) if anchor_total else 0
+    anchor_hit_rate: dict[str, Any] = {
+        variant: round(anchors[variant] / anchor_total, 3) if anchor_total else 0
+        for variant in VARIANTS
+    }
+    anchor_hit_rate["delta_pp"] = {
+        variant: round((anchors[variant] / anchor_total - base_rate) * 100, 1) if anchor_total else 0
+        for variant in compared
+    }
+
+    memory_wins = {variant: wins[variant]["memory"] for variant in compared}
     return {
         "case_count": len(results),
         "wins": wins,
-        "memory_win_rate": round(memory_wins / len(results), 3) if results else 0,
-        "anchor_hit_rate": {
-            "baseline": round(anchor_baseline, 3),
-            "layered": round(anchor_layered, 3),
-            "delta_pp": round((anchor_layered - anchor_baseline) * 100, 1),
+        "memory_wins": memory_wins,
+        "memory_win_rate": {
+            variant: round(wins[variant]["memory"][variant] / len(results), 3) if results else 0
+            for variant in compared
         },
         "score_means": score_means,
-        "reply_len_mean": {
-            "baseline": _mean(reply_lens["baseline"]),
-            "layered": _mean(reply_lens["layered"]),
-        },
+        "anchor_hit_rate": anchor_hit_rate,
+        "reply_len_mean": {variant: _mean(reply_lens[variant]) for variant in VARIANTS},
     }
 
 
 def print_summary(summary: dict[str, Any]) -> None:
-    print(f"cases={summary['case_count']} memory_win_rate={summary['memory_win_rate']}")
-    for dim in DIMS:
-        row = summary["wins"][dim]
-        print(f"  {DIM_LABELS[dim]:<10} layered={row['layered']:<3} baseline={row['baseline']:<3} 平={row['平']}")
-    for dim in DIMS:
-        mean = summary["score_means"][dim]
-        print(f"  {DIM_LABELS[dim]:<10} 均分 baseline={mean['baseline']} layered={mean['layered']} diff={mean['diff']}")
-    anchor = summary["anchor_hit_rate"]
-    print(f"  anchor  layered={anchor['layered']} baseline={anchor['baseline']} delta={anchor['delta_pp']}pp")
-    lens = summary["reply_len_mean"]
-    print(f"  reply_len baseline={lens['baseline']} layered={lens['layered']}")
+    print(f"cases={summary['case_count']}")
+    for variant in VARIANTS[1:]:
+        row = summary["wins"][variant]["memory"]
+        print(f"[{variant}] memory wins: {variant}={row[variant]} baseline={row['baseline']} 平={row['平']}")
+        for dim in DIMS:
+            mean = summary["score_means"][variant][dim]
+            print(f"  {DIM_LABELS[dim]:<10} baseline={mean['baseline']} {variant}={mean[variant]} diff={mean['diff']}")
+        print(f"  anchor {variant}={summary['anchor_hit_rate'][variant]} "
+              f"baseline={summary['anchor_hit_rate']['baseline']} "
+              f"delta={summary['anchor_hit_rate']['delta_pp'][variant]}pp")
+    print("reply_len:", summary["reply_len_mean"])
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -484,19 +584,40 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", default="")
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--summary-only", action="store_true",
+                        help="只跑摘要生成，量 token/长度，不跑回复与 judge")
+    parser.add_argument("--jsonl", default="", help="逐条 checkpoint 路径；默认 <out>.jsonl")
+    parser.add_argument("--resume", action="store_true",
+                        help="跳过 checkpoint 里已完成的 case（上次被杀后续跑）")
     args = parser.parse_args(argv)
 
     raw = json.loads(Path(args.cases).read_text(encoding="utf-8"))
     cases = [*raw.get("cases", []), *raw.get("needles", [])]
-    payload = run(cases, args.db, limit=args.limit or None, dry_run=args.dry_run)
-
+    if args.summary_only:
+        payload = measure_summary_cost(cases, args.db, dry_run=args.dry_run)
+        out = Path(args.out) if args.out else (
+            Path("eval/out") / f"summary_cost_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        )
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        print(f"-> {out}")
+        return 0
     out = Path(args.out) if args.out else (
         Path("eval/out") / f"memory_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     )
     out.parent.mkdir(parents=True, exist_ok=True)
+    jsonl = args.jsonl or (str(out) + ".jsonl")
+    payload = run(cases, args.db, limit=args.limit or None, dry_run=args.dry_run,
+                  jsonl_path=jsonl, resume=args.resume)
+    if args.resume and not payload["results"]:
+        print("checkpoint 里所有 case 都已完成，本次没有新结果；不覆盖 out 文件")
+        return 0
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     print_summary(payload["summary"])
     print(f"-> {out}")
+    if jsonl:
+        print(f"checkpoint -> {jsonl} (resume with --resume)")
     return 0
 
 
