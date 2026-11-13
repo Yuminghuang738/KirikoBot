@@ -441,6 +441,29 @@ class DatabaseManager:
                         PRIMARY KEY (scope_type, scope_id)
                     )"""
                 )
+                # 分层记忆摘要：只加表，不改 history 结构。高水位由
+                # MAX(to_history_id) 推导；UNIQUE 用非空的 scope_id，避免
+                # SQLite「NULL != NULL」让私聊摘要重复。
+                connect.execute(
+                    """CREATE TABLE IF NOT EXISTS conversation_summaries(
+                        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id         TEXT NOT NULL,
+                        scope_id        TEXT NOT NULL,
+                        group_id        TEXT,
+                        from_history_id INTEGER NOT NULL,
+                        to_history_id   INTEGER NOT NULL,
+                        summary         TEXT NOT NULL,
+                        facts_json      TEXT NOT NULL DEFAULT '[]',
+                        msg_count       INTEGER NOT NULL DEFAULT 0,
+                        model           TEXT NOT NULL DEFAULT '',
+                        created_at      DATETIME DEFAULT (datetime('now', 'localtime')),
+                        UNIQUE(user_id, scope_id, to_history_id)
+                    )"""
+                )
+                connect.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_cs_scope "
+                    "ON conversation_summaries(user_id, scope_id, id)"
+                )
                 # Index for fast lookups
                 connect.execute(
                     "CREATE INDEX IF NOT EXISTS idx_gm_user ON group_messages(user_id, group_id)"
@@ -542,17 +565,149 @@ class DatabaseManager:
     # 实际只能拿到 4 轮。这里专用一条 SQL：只取 user/assistant，取 40 行，足够装满 16 条消息。
     CHAT_HISTORY_RAW_LIMIT = 40
 
-    def takeout_chat_history(self, user_id: str, group_id: str | None) -> list[tuple[Any, ...]]:
+    def takeout_chat_history(self, user_id: str, group_id: str | None,
+                             limit: int | None = None) -> list[tuple[Any, ...]]:
         scope = "group_id = ?" if group_id else "group_id IS NULL"
         params: tuple[Any, ...] = (user_id, group_id) if group_id else (user_id,)
         rows = self.fetch_data(
             "SELECT role, content, tool_calls, tool_call_id FROM history "
             f"WHERE user_id = ? AND {scope} AND role IN ('user', 'assistant') "
             "ORDER BY id DESC LIMIT ?",
-            (*params, self.CHAT_HISTORY_RAW_LIMIT),
+            (*params, int(limit or self.CHAT_HISTORY_RAW_LIMIT)),
         )
         rows.reverse()                       # 调用方拿到的是从旧到新
         return rows
+
+    # ── 分层记忆：conversation_summaries ────────────────
+    # 只加表、只读写新表；旧表/旧列一概不动，回滚 = MEMORY_LAYERS_ENABLED=0。
+
+    @staticmethod
+    def memory_scope_clause(scope_id: str) -> tuple[str, tuple[Any, ...]]:
+        """私聊 scope 用 group_id IS NULL，群用 group_id = ?。"""
+        if str(scope_id) == "private":
+            return ("group_id IS NULL", ())
+        return ("group_id = ?", (str(scope_id),))
+
+    def get_summary_high_water(self, user_id: str, scope_id: str) -> int:
+        rows = self.fetch_data(
+            "SELECT COALESCE(MAX(to_history_id), 0) FROM conversation_summaries "
+            "WHERE user_id = ? AND scope_id = ?",
+            (user_id, str(scope_id)),
+        )
+        return int(rows[0][0] or 0) if rows else 0
+
+    def get_latest_summary(self, user_id: str, scope_id: str) -> dict[str, Any] | None:
+        rows = self.fetch_data(
+            "SELECT id, from_history_id, to_history_id, summary, facts_json, msg_count "
+            "FROM conversation_summaries WHERE user_id = ? AND scope_id = ? "
+            "ORDER BY id DESC LIMIT 1",
+            (user_id, str(scope_id)),
+        )
+        if not rows:
+            return None
+        return {
+            "id": rows[0][0],
+            "from_history_id": rows[0][1],
+            "to_history_id": rows[0][2],
+            "summary": rows[0][3] or "",
+            "facts_json": rows[0][4] or "[]",
+            "msg_count": rows[0][5] or 0,
+        }
+
+    def save_summary(self, user_id: str, scope_id: str, group_id: str | None,
+                     from_history_id: int, to_history_id: int, summary: str,
+                     facts_json: str = "[]", msg_count: int = 0,
+                     model: str = "") -> bool:
+        """写入一行摘要；UNIQUE 冲突时返回 False（另一 worker 已写）。"""
+        try:
+            with self.get_connect() as conn:
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO conversation_summaries"
+                    "(user_id, scope_id, group_id, from_history_id, to_history_id, "
+                    " summary, facts_json, msg_count, model) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
+                    (user_id, str(scope_id), group_id, int(from_history_id),
+                     int(to_history_id), summary, facts_json, int(msg_count), model),
+                )
+                return cur.rowcount == 1
+        except sqlite3.Error:
+            logger.exception("save_summary failed for %s/%s", user_id, scope_id)
+            return False
+
+    def list_recent_summaries(self, user_id: str, scope_id: str,
+                              limit: int = 6) -> list[dict[str, Any]]:
+        rows = self.fetch_data(
+            "SELECT id, from_history_id, to_history_id, summary, facts_json, msg_count "
+            "FROM conversation_summaries WHERE user_id = ? AND scope_id = ? "
+            "ORDER BY id DESC LIMIT ?",
+            (user_id, str(scope_id), int(limit)),
+        )
+        return [
+            {"id": r[0], "from_history_id": r[1], "to_history_id": r[2],
+             "summary": r[3] or "", "facts_json": r[4] or "[]", "msg_count": r[5] or 0}
+            for r in rows
+        ]
+
+    def fetch_history_window(self, user_id: str, scope_id: str,
+                             limit: int) -> list[dict[str, Any]]:
+        """按时间正序返回最近 limit 条（含 id），供记忆层判断缺口。"""
+        where, params = self.memory_scope_clause(scope_id)
+        rows = self.fetch_data(
+            "SELECT id, role, content, tool_calls, tool_call_id FROM history "
+            f"WHERE user_id = ? AND {where} AND role IN ('user', 'assistant') "
+            "ORDER BY id DESC LIMIT ?",
+            (user_id, *params, int(limit)),
+        )
+        rows.reverse()
+        return [
+            {"id": r[0], "role": r[1], "content": r[2] or "",
+             "tool_calls": r[3] or "", "tool_call_id": r[4] or ""}
+            for r in rows
+        ]
+
+    def fetch_pending_history(self, user_id: str, scope_id: str,
+                              after_id: int, limit: int = 48) -> list[dict[str, Any]]:
+        """id > after_id 且尚未被摘要的消息，按时间正序。"""
+        where, params = self.memory_scope_clause(scope_id)
+        rows = self.fetch_data(
+            "SELECT id, role, content, tool_calls, tool_call_id FROM history "
+            f"WHERE user_id = ? AND {where} AND id > ? AND role IN ('user', 'assistant') "
+            "ORDER BY id ASC LIMIT ?",
+            (user_id, *params, int(after_id), int(limit)),
+        )
+        return [
+            {"id": r[0], "role": r[1], "content": r[2] or "",
+             "tool_calls": r[3] or "", "tool_call_id": r[4] or ""}
+            for r in rows
+        ]
+
+    def prune_conversation_summaries(self, cutoff: str | None = None,
+                                     keep: int | None = None) -> int:
+        """按时间清理 + 每个 scope 只保留最近 keep 行。返回删除行数。"""
+        removed = 0
+        if cutoff:
+            rows = self.fetch_data(
+                "SELECT COUNT(*) FROM conversation_summaries WHERE created_at < ?",
+                (cutoff,),
+            )
+            removed += int(rows[0][0] or 0) if rows else 0
+            self.execute_action(
+                "DELETE FROM conversation_summaries WHERE created_at < ?", (cutoff,),
+            )
+        if keep:
+            scopes = self.fetch_data(
+                "SELECT DISTINCT user_id, scope_id FROM conversation_summaries"
+            )
+            for uid, sid in scopes:
+                old = self.fetch_data(
+                    "SELECT id FROM conversation_summaries WHERE user_id = ? AND scope_id = ? "
+                    "ORDER BY id DESC LIMIT -1 OFFSET ?",
+                    (uid, sid, int(keep)),
+                )
+                for (rid,) in old:
+                    self.execute_action("DELETE FROM conversation_summaries WHERE id = ?", (rid,))
+                    removed += 1
+        return removed
 
     def takeout_tarot_history(self, user_id: str) -> list[tuple[Any, ...]]:
         return self.takeout("tarot_history", "card_name, timestamp", "user_id = ?", (user_id,))
