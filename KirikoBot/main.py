@@ -57,7 +57,7 @@ from log_stream import sse_handler, setup_sse_logging
 from music_service import MusicService
 from profile_service import ProfileService, normalize_profile
 import robot_server
-from robot_server import RobotServer
+from robot_server import RobotServer, is_sensitive_file
 from rate_limiter import RateLimiter
 from scheduler import BotScheduler
 from sticker_collector import StickerCollector, STICKER_DIR, STICKER_CATEGORIES
@@ -1478,8 +1478,8 @@ def download_shared_file(filename: str):
     shared_dir = os.path.abspath(
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "shared_files")
     )
-    fname_lower = os.path.basename(filename).lower()
-    if any(p in fname_lower for p in (".env", ".pem", ".key", "id_rsa", "password", "token")):
+    # 与 send_file 共用同一份黑名单：数据库/密钥/凭据一律不许经免鉴权直链外泄。
+    if is_sensitive_file(filename):
         return jsonify({"ok": False, "error": "禁止访问敏感文件"}), 403
     return send_from_directory(shared_dir, filename, as_attachment=True)
 

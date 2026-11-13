@@ -4,8 +4,14 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from pathlib import Path
 from typing import Any
+from urllib.parse import quote
+
 import pytest
+
+import robot_server
+from config import Config
 
 from ai_tools import SendFileTool, DshAgentTool
 from ai_tools_list import AiTools
@@ -19,6 +25,7 @@ class FakeLLBot(LLBotClient):
     def __init__(self):
         self.uploaded_group_files: list[tuple[str, str, str]] = []
         self.uploaded_private_files: list[tuple[str, str, str]] = []
+        self.sent_texts: list[str] = []
 
     def upload_group_file(self, group_id: str, file_path: str, name: str) -> bool:
         self.uploaded_group_files.append((str(group_id), file_path, name))
@@ -29,6 +36,7 @@ class FakeLLBot(LLBotClient):
         return True
 
     def reply_to(self, msg: Any, text: str) -> bool:
+        self.sent_texts.append(text)
         return True
 
     def send_text(self, msg: Any, text: str) -> bool:
@@ -37,7 +45,9 @@ class FakeLLBot(LLBotClient):
 
 class TestRobotServerSendFile:
     @pytest.fixture
-    def env_setup(self, tmp_path):
+    def env_setup(self, tmp_path, monkeypatch):
+        # 所有落盘都进临时目录，绝不写仓库里的 shared_files。
+        monkeypatch.setattr(robot_server, "SHARED_FILES_DIR", str(tmp_path / "shared_files"))
         fake_llbot = FakeLLBot()
         raw_group_msg = {
             "message_type": "group",
@@ -290,3 +300,103 @@ class TestDshAgentFileAutoSend:
         # 2. 应该自动调用 send_file 上传该文件
         assert len(sent_files) == 1
         assert sent_files[0] == str(artifact)
+
+
+class TestSendFileSecurity:
+    """R01/R05：display_name 穿越、数据库外泄、直链内网 IP。"""
+
+    @pytest.fixture
+    def setup(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(robot_server, "SHARED_FILES_DIR", str(tmp_path / "shared_files"))
+        fake = FakeLLBot()
+        raw = {
+            "message_type": "group",
+            "user_id": 111,
+            "group_id": 222,
+            "sender": {"nickname": "群友"},
+            "message": [{"type": "text", "data": {"text": "发文件"}}],
+        }
+        robot = RobotServer(raw, fake, "10000")
+        src = tmp_path / "report.pdf"
+        src.write_text("dummy", encoding="utf-8")
+        return robot, fake, src, tmp_path
+
+    def test_traversal_display_name_is_reduced_to_basename(self, setup):
+        robot, fake, src, tmp_path = setup
+        assert robot.send_file(str(src), display_name="../../pwned.html") is True
+        _, path, name = fake.uploaded_group_files[0]
+        assert name == "pwned.html"
+        shared = Path(robot_server.SHARED_FILES_DIR).resolve()
+        assert Path(path).resolve().is_relative_to(shared)
+        assert (shared / "pwned.html").is_file()
+        # 不能写到 shared_files 外面
+        assert not (tmp_path / "pwned.html").exists()
+        assert not (tmp_path.parent / "pwned.html").exists()
+
+    @pytest.mark.parametrize("bad", [
+        "robot.db", "chat.db", "app.sqlite3", "robot.db-wal", "robot.db-shm",
+    ])
+    def test_database_files_are_never_sent(self, setup, bad):
+        robot, fake, _, tmp_path = setup
+        db_file = tmp_path / bad
+        db_file.write_text("sqlite bytes", encoding="utf-8")
+        assert robot.send_file(str(db_file)) is False
+        assert fake.uploaded_group_files == []
+
+    def test_source_outside_allowed_roots_is_rejected(self, setup, monkeypatch):
+        robot, fake, src, _ = setup
+        monkeypatch.setattr(
+            robot_server, "_allowed_source_roots",
+            lambda: [robot_server.SHARED_FILES_DIR],
+        )
+        assert robot.send_file(str(src)) is False
+        assert fake.uploaded_group_files == []
+
+    def test_download_url_uses_public_base_url_and_quotes_name(self, setup, monkeypatch):
+        robot, fake, src, _ = setup
+        monkeypatch.setattr(Config, "PUBLIC_BASE_URL", "https://kb.example.com/")
+        assert robot.send_file(str(src), display_name="中文 报告.pdf") is True
+        text = fake.sent_texts[-1]
+        assert "https://kb.example.com/download/" + quote("中文 报告.pdf") in text
+        assert "100.93" not in text
+
+    def test_download_url_default_has_no_internal_ip(self, setup, monkeypatch):
+        robot, fake, src, _ = setup
+        monkeypatch.setattr(Config, "PUBLIC_BASE_URL", "")
+        robot.public_base_url = ""
+        assert robot.send_file(str(src)) is True
+        text = fake.sent_texts[-1]
+        assert "http://localhost:5000/download/report.pdf" in text
+        assert "100.93.52.78" not in text
+
+
+@pytest.mark.parametrize("path,expected", [
+    ("robot.db", True),
+    ("/app/robot.db-wal", True),
+    ("/app/robot.db-shm", True),
+    ("chat.sqlite3", True),
+    ("/app/.env", True),
+    ("/home/u/.ssh/id_ed25519", True),
+    ("client_secret.key", True),
+    ("api_token.json", True),
+    ("report.pdf", False),
+    ("chart.png", False),
+    ("debug.pdf", False),
+])
+def test_is_sensitive_file(path, expected):
+    assert robot_server.is_sensitive_file(path) is expected
+
+
+class TestDownloadEndpoint:
+    """免鉴权 /download 也不能把数据库/密钥直链拿走。"""
+
+    @pytest.mark.parametrize("name", [
+        "robot.db", "robot.db-wal", "chat.sqlite3", ".env", "id_ed25519", "api_token.json",
+    ])
+    def test_sensitive_downloads_are_403(self, name):
+        client = main.app.test_client()
+        assert client.get(f"/download/{name}").status_code == 403
+
+    def test_normal_missing_file_is_404_not_403(self):
+        client = main.app.test_client()
+        assert client.get("/download/not_there.txt").status_code == 404

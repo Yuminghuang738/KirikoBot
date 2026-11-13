@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
+import tempfile
 import time
 from typing import Any
+from urllib.parse import quote
 
+from config import Config
 from llbot_client import IncomingMessage, LLBotClient, MessageBuilder
 
 logger = logging.getLogger(__name__)
@@ -22,6 +26,56 @@ def install_rate_limiter(limiter: Any) -> None:
 
 def get_rate_limiter() -> Any:
     return _rate_limiter
+
+
+# 产物暂存目录（与 llbot 容器共享）。测试可通过 monkeypatch 替换。
+SHARED_FILES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "shared_files")
+
+# 密钥/凭据/数据库：既不能从群里发出去，也不能经 /download 直链拿走。
+_SENSITIVE_SUBSTRINGS = (
+    ".env", "id_rsa", "id_ed25519", ".pem", ".key",
+    "password", "secret", "token", "credential", ".git", "robot.db",
+)
+_SENSITIVE_SUFFIXES = (".db", ".db-wal", ".db-shm", ".sqlite", ".sqlite3", ".db.bak")
+
+
+def is_sensitive_file(path: str) -> bool:
+    """判断文件是否属于绝不允许外发的敏感数据（密钥/凭据/数据库）。"""
+    name = os.path.basename(str(path or "")).lower()
+    if not name:
+        return False
+    if name.endswith(_SENSITIVE_SUFFIXES) or "robot.db" in name:
+        return True
+    full = os.path.abspath(str(path)).lower()
+    return any(
+        p in name or f"/{p}" in full or f"_{p}" in full
+        for p in _SENSITIVE_SUBSTRINGS
+    )
+
+
+def _allowed_source_roots() -> list[str]:
+    """允许作为 send_file 来源的目录：共享目录、DSH 工作区、系统临时目录。"""
+    roots = [os.path.realpath(SHARED_FILES_DIR)]
+    for extra in (getattr(Config, "DSH_WORKSPACE_DIR", ""), tempfile.gettempdir()):
+        if extra:
+            roots.append(os.path.realpath(str(extra)))
+    return roots
+
+
+def _within(path: str, root: str) -> bool:
+    try:
+        return os.path.commonpath([os.path.realpath(path), os.path.realpath(root)]) == os.path.realpath(root)
+    except ValueError:
+        return False
+
+
+def _safe_display_name(display_name: str, fallback: str) -> str:
+    """只保留文件名本身：模型给的 display_name 可能带 ../ 或绝对路径。"""
+    raw = str(display_name or "").strip().replace("\\", "/")
+    name = os.path.basename(raw) if raw else ""
+    if not name or name in {".", ".."} or "\x00" in name:
+        name = os.path.basename(fallback)
+    return name
 
 
 # 这些词开头的句子通常依赖前文，单独发出去会改变语气甚至语义。
@@ -172,6 +226,15 @@ class RobotServer:
         self.incoming = IncomingMessage.from_onebot(msg_data, bot_qq)
         self.text: str = ""
         self.image_path: str = ""
+        # send_file 的直链基地址：构造函数在 webhook 请求上下文里被调用，
+        # 此时缓存 Host 供后台线程使用（worker 线程里没有 Flask 请求上下文）。
+        self.public_base_url = ""
+        try:
+            from flask import has_request_context, request as flask_request
+            if has_request_context():
+                self.public_base_url = flask_request.host_url.rstrip("/")
+        except Exception:
+            pass
 
         logger.info(
             "Message: type=%s user=%s(%s) group=%s",
@@ -307,8 +370,7 @@ class RobotServer:
         return self.llbot.reply_image(self.incoming, path)
 
     def send_file(self, file_path: str, display_name: str = "") -> bool:
-        """发送本地文件到群聊或私聊（带安全黑名单与容器共享目录暂存）。"""
-        import os
+        """发送本地文件到群聊或私聊（白名单目录 + 敏感文件黑名单 + 共享目录暂存）。"""
         import shutil
 
         if not self._allowed_to_send():
@@ -318,31 +380,34 @@ class RobotServer:
             logger.warning("send_file 失败：文件不存在 %r", file_path)
             return False
 
-        # 安全沙盒拦截：严禁泄露密钥、配置、密码与凭据
-        fname = os.path.basename(file_path).lower()
-        full_lower = os.path.abspath(file_path).lower()
-        sensitive_patterns = (
-            ".env", "id_rsa", "id_ed25519", ".pem", ".key",
-            "password", "secret", "token", "credential", ".git",
-        )
-        if any(p in fname or f"/{p}" in full_lower or f"_{p}" in full_lower for p in sensitive_patterns):
+        # 1) 敏感文件（密钥/凭据/数据库）一律拒绝，源路径和显示名都查。
+        if is_sensitive_file(file_path):
             logger.error("send_file 触发安全拦截：禁止发送敏感文件 %r", file_path)
             return False
 
-        name = display_name or os.path.basename(file_path)
+        # 2) 来源必须在白名单目录里：模型可以编造任意 file_path，
+        #    不能让它把 /app 下的文件复制进共享目录再发直链。
+        src = os.path.realpath(file_path)
+        if not any(_within(src, root) for root in _allowed_source_roots()):
+            logger.error("send_file 拒绝白名单目录外的文件：%r", file_path)
+            return False
 
-        # 确保文件位于与 llbot 容器共享的目录下
-        shared_dir = os.path.abspath(
-            os.path.join(os.path.dirname(os.path.abspath(__file__)), "shared_files")
-        )
+        # 3) display_name 只取 basename，落点必须仍在 shared_files 内。
+        name = _safe_display_name(display_name, file_path)
+        if is_sensitive_file(name):
+            logger.error("send_file 触发安全拦截：禁止使用敏感文件名 %r", name)
+            return False
+
+        shared_dir = os.path.realpath(SHARED_FILES_DIR)
         os.makedirs(shared_dir, exist_ok=True)
+        target_path = os.path.realpath(os.path.join(shared_dir, name))
+        if os.path.dirname(target_path) != shared_dir:
+            logger.error("send_file 拒绝越界的落点：%r", target_path)
+            return False
 
-        target_path = file_path
-        # 若当前文件不在 shared_files，拷贝一份过去确保 llbot 容器可见
-        if not os.path.abspath(file_path).startswith(shared_dir):
-            target_path = os.path.join(shared_dir, name)
+        if src != target_path:
             try:
-                shutil.copyfile(file_path, target_path)
+                shutil.copyfile(src, target_path)
             except Exception:
                 logger.exception("send_file 复制文件到共享目录失败")
                 return False
@@ -351,19 +416,27 @@ class RobotServer:
         container_shared_path = f"/app/shared_files/{name}"
         effective_path = container_shared_path if os.path.exists("/app/shared_files") else target_path
 
-        # 智能区分：图片文件直接发气泡图片，体验远好于冷冰冰的群文件且不被富媒体风控拦截
+        # 4) 图片文件直接发气泡图片，体验远好于冷冰冰的群文件且不被富媒体风控拦截
         img_exts = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp")
-        if fname.endswith(img_exts):
+        if name.lower().endswith(img_exts):
             logger.info("send_file 识别为图片类型，走图片气泡消息发送: %s", effective_path)
             return self.llbot.reply_image(self.incoming, effective_path)
 
-        # 非图片二进制文件：始终发送直链，上传作为后台尝试
-        download_url = f"http://100.93.52.78:5000/download/{name}"
-        msg_text = f"📎 产物文件「{name}」已生成！\n若客户端未弹出文件下载，可直接在浏览器打开链接下载：\n{download_url}"
-        
+        # 5) 非图片：直链 host 来自配置/请求，文件名必须 URL 编码。
+        base_url = (
+            Config.PUBLIC_BASE_URL
+            or getattr(self, "public_base_url", "")
+            or "http://localhost:5000"
+        ).rstrip("/")
+        download_url = f"{base_url}/download/{quote(name)}"
+        msg_text = (
+            f"📎 产物文件「{name}」已生成！\n"
+            f"若客户端未弹出文件下载，可直接在浏览器打开链接下载：\n{download_url}"
+        )
+
         # 优先发送文字带直链（保障 100% 可见）
         self.llbot.reply_to(self.incoming, msg_text)
-        
+
         # 后台静默尝试上传，成功即上传，失败不报错，确保对话流程不受风控影响
         try:
             if self.msg_type == "group":
@@ -372,7 +445,7 @@ class RobotServer:
                 return self.llbot.upload_private_file(self.user_id, effective_path, name)
         except Exception as e:
             logger.info("文件静默上传失败（已提供直链，忽略此错误）: %s", e)
-            return True # 已提供直链，依然认为流程成功
+            return True  # 已提供直链，依然认为流程成功
 
     def send_group(self) -> bool:
         """Compat: send via msg_list attr (used by old MsgPackage flow)."""
