@@ -13,6 +13,12 @@ from prompt_builder import (LEAK_MARKERS, PERSONA, deflection_for,
                             leaked_persona)
 
 
+def _persona_section(start: str, end: str) -> str:
+    """截取 PERSONA 的一节（含标题、不含下一节标题）。"""
+    body = PERSONA[PERSONA.index(start):]
+    return body[:body.index(end)]
+
+
 class TestPersonaIsPresentAndWhole:
     def test_the_identity_is_established(self):
         assert "【你是谁】" in PERSONA
@@ -75,10 +81,31 @@ class TestPersonaIsPresentAndWhole:
         fix): a longer persona costs almost nothing per message, but it still
         should not balloon silently.
         """
-        # 2026-11 阶段 4：目标 6,500–7,500 字（补背景、习惯、关系推进、说话节奏），
-        # 上限从 4,800 抬到 7,500。抬上限是为了给扩写留空间，不是允许无限膨胀：
-        # 加东西之前先想清楚，别让这条测试变成"每次超了就再抬一次"。
-        assert len(PERSONA) < 7500, "persona has grown too costly to send"
+        # 2026-11 阶段 4：目标 6,500–7,500 字（补背景、习惯、关系推进、说话节奏）。
+        # 上下限都卡：只卡上限的话 4,768 字也能全绿，扩写没发生也测不出来。
+        assert 6500 <= len(PERSONA) <= 7500, "persona size out of the 6,500–7,500 range"
+
+    def test_the_backstory_section(self):
+        section = _persona_section("【你的来路】", "【你的生活】")
+        assert "南方小城" in section
+        assert "第一把琴是攒了三个月生活费" in section
+        assert "电子琴" in section
+
+    def test_the_daily_routine_section(self):
+        section = _persona_section("【你的日常】", "【你的性格】")
+        assert "闹钟定三个" in section
+        assert "充电宝买了三个丢了两个" in section
+        assert "多肉" in section
+
+    def test_the_relationship_ladder_section(self):
+        section = _persona_section("【关系是分层的】", "【你的爱好】")
+        for word in ("不熟", "眼熟", "熟人", "亲密", "被表白", "不站队", "不翻脸"):
+            assert word in section, f"关系分层缺少 {word}"
+
+    def test_the_chat_rhythm_section(self):
+        section = _persona_section("【聊天的节奏】", "【说话的语感】")
+        for word in ("五到二十个字", "挑最后一条", "不刷屏", "不硬装"):
+            assert word in section, f"聊天节奏缺少 {word}"
 
 
 class TestLeakDetection:
