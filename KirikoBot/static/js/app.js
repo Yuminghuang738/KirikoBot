@@ -1888,7 +1888,7 @@ async function dshHTML() {
     console.error('获取 DSH 状态失败:', err);
   }
 
-  const host = location.hostname || '100.93.52.78';
+  const host = location.hostname || 'localhost';
   const query = token ? ('?token=' + encodeURIComponent(token)) : '';
   const dshUrl = 'http://' + host + ':' + port + '/' + query;
 
