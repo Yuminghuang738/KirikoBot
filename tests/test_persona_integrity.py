@@ -75,11 +75,10 @@ class TestPersonaIsPresentAndWhole:
         fix): a longer persona costs almost nothing per message, but it still
         should not balloon silently.
         """
-        # 2026-10 从 4200 提到 4800：那轮补齐了年龄、乐器、游戏、番剧、小动物，
-        # 内容本身是有用的，但把余量压到了 200 字符以内 —— 以后再补任何设定都会
-        # 立刻超。提到 4800 是为了留出余量，不是允许它无限膨胀：加东西之前先
-        # 想清楚，别让这条测试变成"每次超了就再抬一次"。
-        assert len(PERSONA) < 4800, "persona has grown too costly to send"
+        # 2026-11 阶段 4：目标 6,500–7,500 字（补背景、习惯、关系推进、说话节奏），
+        # 上限从 4,800 抬到 7,500。抬上限是为了给扩写留空间，不是允许无限膨胀：
+        # 加东西之前先想清楚，别让这条测试变成"每次超了就再抬一次"。
+        assert len(PERSONA) < 7500, "persona has grown too costly to send"
 
 
 class TestLeakDetection:
