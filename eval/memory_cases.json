@@ -13,12 +13,12 @@
       "group_id": null,
       "target_history_id": 13242,
       "anchor_history_id": 13203,
-      "anchor_short": "Linux嵌入式",
       "anchor_semantic": "用户正在学 Linux 嵌入式，觉得自己缺项目经验、担心找工作",
       "anchor_fact": "用户正在学 Linux 嵌入式，觉得自己缺项目经验、担心找工作",
       "target_topic": "嵌入式学习路线：直接看驱动还是教程",
       "category": "private",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "Linux嵌入式"
     },
     {
       "case_id": "P002",
@@ -26,12 +26,12 @@
       "group_id": null,
       "target_history_id": 15787,
       "anchor_history_id": 15762,
-      "anchor_short": "问答游戏",
       "anchor_semantic": "用户和 Kiriko 玩过问答游戏：我问一句你答一句，然后你问我一句，必须据实相告",
       "anchor_fact": "用户和 Kiriko 玩过问答游戏：我问一句你答一句，然后你问我一句，必须据实相告",
       "target_topic": "问答游戏结束/道晚安",
       "category": "private",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "问答游戏"
     },
     {
       "case_id": "P003",
@@ -39,12 +39,12 @@
       "group_id": null,
       "target_history_id": 11106,
       "anchor_history_id": 10992,
-      "anchor_short": "lp junior",
       "anchor_semantic": "用户习惯 LP Junior，喜欢轻薄的琴，现在给 f2020 上 09-42、Junior 上 10-46 的弦",
       "anchor_fact": "用户习惯 LP Junior，喜欢轻薄的琴，现在给 f2020 上 09-42、Junior 上 10-46 的弦",
       "target_topic": "两把琴换弦径",
       "category": "private",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "lp junior"
     },
     {
       "case_id": "P004",
@@ -52,12 +52,12 @@
       "group_id": null,
       "target_history_id": 16913,
       "anchor_history_id": 16884,
-      "anchor_short": "SlicesIndex",
       "anchor_semantic": "用户在学 Go 泛型，贴过 SlicesIndex 的泛型代码，问过 List 的结构",
       "anchor_fact": "用户在学 Go 泛型，贴过 SlicesIndex 的泛型代码，问过 List 的结构",
       "target_topic": "List[T] 是结构体数组还是切片",
       "category": "private",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "SlicesIndex"
     },
     {
       "case_id": "P005",
@@ -65,12 +65,12 @@
       "group_id": null,
       "target_history_id": 15553,
       "anchor_history_id": 15444,
-      "anchor_short": "综效",
       "anchor_semantic": "用户喜欢折腾吉他音色，想要综效/录音设备，觉得调三小时音色比打五小时游戏有成就感，常熬夜",
       "anchor_fact": "用户喜欢折腾吉他音色，想要综效/录音设备，觉得调三小时音色比打五小时游戏有成就感，常熬夜",
       "target_topic": "拾音器/单双线圈与曲风",
       "category": "private",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "综效"
     },
     {
       "case_id": "P006",
@@ -78,12 +78,12 @@
       "group_id": null,
       "target_history_id": 14495,
       "anchor_history_id": 14470,
-      "anchor_short": "挥霍",
       "anchor_semantic": "用户之前说自己在挥霍今天、快乐像泡沫，结束就感到不幸",
       "anchor_fact": "用户之前说自己在挥霍今天、快乐像泡沫，结束就感到不幸",
       "target_topic": "打字也觉得是罪孽",
       "category": "private",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "挥霍"
     },
     {
       "case_id": "P007",
@@ -91,12 +91,12 @@
       "group_id": null,
       "target_history_id": 4690,
       "anchor_history_id": 4665,
-      "anchor_short": "编程学习笔记",
       "anchor_semantic": "用户在整理编程学习笔记（纯英文），想决定记详细还是碎片化",
       "anchor_fact": "用户在整理编程学习笔记（纯英文），想决定记详细还是碎片化",
       "target_topic": "笔记记详细还是碎片",
       "category": "private",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "编程学习笔记"
     },
     {
       "case_id": "P008",
@@ -104,12 +104,12 @@
       "group_id": null,
       "target_history_id": 15281,
       "anchor_history_id": 15250,
-      "anchor_short": "孤独",
       "anchor_semantic": "用户说自己真的很孤独，觉得很多事和想走的路无关",
       "anchor_fact": "用户说自己真的很孤独，觉得很多事和想走的路无关",
       "target_topic": "课程和真正想走的路",
       "category": "private",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "孤独"
     },
     {
       "case_id": "P009",
@@ -117,12 +117,12 @@
       "group_id": null,
       "target_history_id": 11732,
       "anchor_history_id": 11701,
-      "anchor_short": "招式",
       "anchor_semantic": "用户今天在教朋友格斗游戏、复习前面的招式，让 Kiriko 等他消息",
       "anchor_fact": "用户今天在教朋友格斗游戏、复习前面的招式，让 Kiriko 等他消息",
       "target_topic": "还没开始，先报备",
       "category": "private",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "招式"
     },
     {
       "case_id": "P010",
@@ -130,12 +130,12 @@
       "group_id": null,
       "target_history_id": 11692,
       "anchor_history_id": 11657,
-      "anchor_short": "街头霸王",
       "anchor_semantic": "用户对街头霸王感兴趣，问过有没有外设",
       "anchor_fact": "用户对街头霸王感兴趣，问过有没有外设",
       "target_topic": "问有没有外设",
       "category": "private",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "街头霸王"
     },
     {
       "case_id": "G001",
@@ -143,12 +143,12 @@
       "group_id": "734954188",
       "target_history_id": 6028,
       "anchor_history_id": 5675,
-      "anchor_short": "tone旋钮",
       "anchor_semantic": "用户调音色都在效果器上调，吉他 tone 旋钮只挂一个常用档位；喜欢多把不同味道的琴",
       "anchor_fact": "用户调音色都在效果器上调，吉他 tone 旋钮只挂一个常用档位；喜欢多把不同味道的琴",
       "target_topic": "15万买一把 ESP 还是多把琴",
       "category": "group",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "tone旋钮"
     },
     {
       "case_id": "G002",
@@ -156,12 +156,12 @@
       "group_id": "734954188",
       "target_history_id": 6801,
       "anchor_history_id": 6764,
-      "anchor_short": "厚拨片",
       "anchor_semantic": "用户喜欢厚拨片硬扫的脆音色；黑卡用达达 EXL120，日芬用伊利克斯镀膜弦",
       "anchor_fact": "用户喜欢厚拨片硬扫的脆音色；黑卡用达达 EXL120，日芬用伊利克斯镀膜弦",
       "target_topic": "黑卡/日芬用什么弦",
       "category": "group",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "厚拨片"
     },
     {
       "case_id": "G003",
@@ -169,12 +169,12 @@
       "group_id": "1140457037",
       "target_history_id": 541,
       "anchor_history_id": 484,
-      "anchor_short": "FleetwoodMac",
       "anchor_semantic": "用户点过 Fleetwood Mac 的歌",
       "anchor_fact": "用户点过 Fleetwood Mac 的歌",
       "target_topic": "Fleetwood Mac 算不算 punk",
       "category": "group",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "FleetwoodMac"
     },
     {
       "case_id": "G004",
@@ -182,12 +182,12 @@
       "group_id": "1140457037",
       "target_history_id": 2403,
       "anchor_history_id": 2250,
-      "anchor_short": "DeepSeek",
       "anchor_semantic": "用户问 DeepSeek V4 是否涨价，随后说 API 大涨养不起",
       "anchor_fact": "用户问 DeepSeek V4 是否涨价，随后说 API 大涨养不起",
       "target_topic": "API 大涨养不起",
       "category": "group",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "DeepSeek"
     },
     {
       "case_id": "G005",
@@ -195,12 +195,12 @@
       "group_id": "765242634",
       "target_history_id": 5490,
       "anchor_history_id": 5428,
-      "anchor_short": "pacs12",
       "anchor_semantic": "用户之前聊过换琴目标，说会直接一步到位 pacs12",
       "anchor_fact": "用户之前聊过换琴目标，说会直接一步到位 pacs12",
       "target_topic": "换 pac312 还是 pacs12",
       "category": "group",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "pacs12"
     },
     {
       "case_id": "G006",
@@ -208,12 +208,12 @@
       "group_id": "765242634",
       "target_history_id": 5433,
       "anchor_history_id": 5374,
-      "anchor_short": "NULL",
       "anchor_semantic": "用户问过 Linux 内核 NULL 定义在哪个头文件",
       "anchor_fact": "用户问过 Linux 内核 NULL 定义在哪个头文件",
       "target_topic": "Linux 源码 main.c 在哪里",
       "category": "group",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "NULL"
     },
     {
       "case_id": "G007",
@@ -221,12 +221,12 @@
       "group_id": "734954188",
       "target_history_id": 7886,
       "anchor_history_id": 7853,
-      "anchor_short": "脑筋急转弯",
       "anchor_semantic": "用户喜欢玩脑筋急转弯，之前让 Kiriko 出一道",
       "anchor_fact": "用户喜欢玩脑筋急转弯，之前让 Kiriko 出一道",
       "target_topic": "还要玩脑筋急转弯",
       "category": "group",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "脑筋急转弯"
     },
     {
       "case_id": "G008",
@@ -234,12 +234,12 @@
       "group_id": "734954188",
       "target_history_id": 9075,
       "anchor_history_id": 9036,
-      "anchor_short": "西西弗斯",
       "anchor_semantic": "用户读过加缪，讨论过西西弗斯与愚公移山、个人主义/集体主义",
       "anchor_fact": "用户读过加缪，讨论过西西弗斯与愚公移山、个人主义/集体主义",
       "target_topic": "哲学界没人研究加缪",
       "category": "group",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "西西弗斯"
     },
     {
       "case_id": "G009",
@@ -247,12 +247,12 @@
       "group_id": "1140457037",
       "target_history_id": 1624,
       "anchor_history_id": 961,
-      "anchor_short": "原神",
       "anchor_semantic": "用户点过《好想玩原神》这首歌，想玩原神",
       "anchor_fact": "用户点过《好想玩原神》这首歌，想玩原神",
       "target_topic": "想玩原神，劝我别玩",
       "category": "group",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "原神"
     },
     {
       "case_id": "G010",
@@ -260,12 +260,12 @@
       "group_id": "734954188",
       "target_history_id": 16547,
       "anchor_history_id": 16050,
-      "anchor_short": "rana",
       "anchor_semantic": "用户之前要过 rana 的全身照，喜欢 BanG Dream 角色图",
       "anchor_fact": "用户之前要过 rana 的全身照，喜欢 BanG Dream 角色图",
       "target_topic": "再要仲町阿拉蕾全身照",
       "category": "group",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "rana"
     },
     {
       "case_id": "P011",
@@ -273,12 +273,12 @@
       "group_id": null,
       "target_history_id": 10694,
       "anchor_history_id": 10479,
-      "anchor_short": "linux_kernel_module",
       "anchor_semantic": "用户在 Fedora 上折腾命令行/npm/pnpm，之前 git checkout 过 linux_kernel_module.md",
       "anchor_fact": "用户在 Fedora 上折腾命令行/npm/pnpm，之前 git checkout 过 linux_kernel_module.md",
       "target_topic": "pnpm 命令报错",
       "category": "private",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "linux_kernel_module"
     },
     {
       "case_id": "P012",
@@ -286,12 +286,12 @@
       "group_id": null,
       "target_history_id": 10778,
       "anchor_history_id": 10735,
-      "anchor_short": "设备树插件",
       "anchor_semantic": "用户问 NAND 板子能不能用设备树插件、dtb 打包在 FIT 里",
       "anchor_fact": "用户问 NAND 板子能不能用设备树插件、dtb 打包在 FIT 里",
       "target_topic": "NAND 设备树插件",
       "category": "private",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "设备树插件"
     },
     {
       "case_id": "P013",
@@ -299,12 +299,12 @@
       "group_id": null,
       "target_history_id": 15887,
       "anchor_history_id": 15862,
-      "anchor_short": "range",
       "anchor_semantic": "用户在看 Go 的 range 字符串代码，问返回什么",
       "anchor_fact": "用户在看 Go 的 range 字符串代码，问返回什么",
       "target_topic": "Go new(42) 指针",
       "category": "private",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "range"
     },
     {
       "case_id": "P014",
@@ -312,12 +312,12 @@
       "group_id": null,
       "target_history_id": 15893,
       "anchor_history_id": 15866,
-      "anchor_short": "come as you are",
       "anchor_semantic": "用户点/要 Come As You Are 的吉他谱",
       "anchor_fact": "用户点/要 Come As You Are 的吉他谱",
       "target_topic": "Come As You Are 谱子",
       "category": "private",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "come as you are"
     },
     {
       "case_id": "P015",
@@ -325,12 +325,12 @@
       "group_id": null,
       "target_history_id": 15269,
       "anchor_history_id": 15244,
-      "anchor_short": "躺床上",
       "anchor_semantic": "用户说自己讨厌很多事、只想躺床上，想改变",
       "anchor_fact": "用户说自己讨厌很多事、只想躺床上，想改变",
       "target_topic": "脑子清醒想改变",
       "category": "private",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "躺床上"
     },
     {
       "case_id": "P016",
@@ -338,12 +338,12 @@
       "group_id": null,
       "target_history_id": 15275,
       "anchor_history_id": 15236,
-      "anchor_short": "midwestemo",
       "anchor_semantic": "用户说自己可能喜欢 midwestemo 音乐",
       "anchor_fact": "用户说自己可能喜欢 midwestemo 音乐",
       "target_topic": "大学课程没意义",
       "category": "private",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "midwestemo"
     },
     {
       "case_id": "P017",
@@ -351,12 +351,12 @@
       "group_id": null,
       "target_history_id": 15299,
       "anchor_history_id": 15272,
-      "anchor_short": "没意义",
       "anchor_semantic": "用户觉得很多事情没意义、是浪费时间",
       "anchor_fact": "用户觉得很多事情没意义、是浪费时间",
       "target_topic": "必须往前走/改变",
       "category": "private",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "没意义"
     },
     {
       "case_id": "P018",
@@ -364,12 +364,12 @@
       "group_id": null,
       "target_history_id": 15273,
       "anchor_history_id": 15246,
-      "anchor_short": "孤独",
       "anchor_semantic": "用户说这么多年留下来的只有孤独",
       "anchor_fact": "用户说这么多年留下来的只有孤独",
       "target_topic": "这么多年只剩孤独",
       "category": "private",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "孤独"
     },
     {
       "case_id": "P019",
@@ -377,12 +377,12 @@
       "group_id": null,
       "target_history_id": 11730,
       "anchor_history_id": 11687,
-      "anchor_short": "杰米",
       "anchor_semantic": "用户之前在格斗游戏角色里选杰米/问角色",
       "anchor_fact": "用户之前在格斗游戏角色里选杰米/问角色",
       "target_topic": "Oopz 开黑",
       "category": "private",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "杰米"
     },
     {
       "case_id": "P020",
@@ -390,12 +390,12 @@
       "group_id": null,
       "target_history_id": 11744,
       "anchor_history_id": 11717,
-      "anchor_short": "教完",
       "anchor_semantic": "用户说教完朋友再跟 Kiriko 说一声",
       "anchor_fact": "用户说教完朋友再跟 Kiriko 说一声",
       "target_topic": "教完朋友再说",
       "category": "private",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "教完"
     },
     {
       "case_id": "G011",
@@ -403,12 +403,12 @@
       "group_id": "734954188",
       "target_history_id": 5530,
       "anchor_history_id": 5400,
-      "anchor_short": "琴行",
       "anchor_semantic": "用户想搬去有琴行和吉他工作室、房租不高的城市",
       "anchor_fact": "用户想搬去有琴行和吉他工作室、房租不高的城市",
       "target_topic": "无聊有什么办法",
       "category": "group",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "琴行"
     },
     {
       "case_id": "G012",
@@ -416,12 +416,12 @@
       "group_id": "734954188",
       "target_history_id": 6042,
       "anchor_history_id": 5981,
-      "anchor_short": "二月十四",
       "anchor_semantic": "用户约 Kiriko 明年二月十四一起出去玩",
       "anchor_fact": "用户约 Kiriko 明年二月十四一起出去玩",
       "target_topic": "山东鲁琴作坊",
       "category": "group",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "二月十四"
     },
     {
       "case_id": "G013",
@@ -429,12 +429,12 @@
       "group_id": "1140457037",
       "target_history_id": 1755,
       "anchor_history_id": 1706,
-      "anchor_short": "Soldier",
       "anchor_semantic": "用户贴了 Soldier 的歌词",
       "anchor_fact": "用户贴了 Soldier 的歌词",
       "target_topic": "Fight Club 第一条规则",
       "category": "group",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "Soldier"
     },
     {
       "case_id": "G014",
@@ -442,12 +442,12 @@
       "group_id": "1140457037",
       "target_history_id": 2315,
       "anchor_history_id": 2103,
-      "anchor_short": "500字",
       "anchor_semantic": "用户要求写 500 字以内、反转不套路的短篇小说",
       "anchor_fact": "用户要求写 500 字以内、反转不套路的短篇小说",
       "target_topic": "塔罗总结 100 字以内",
       "category": "group",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "500字"
     },
     {
       "case_id": "G015",
@@ -455,12 +455,12 @@
       "group_id": "765242634",
       "target_history_id": 5656,
       "anchor_history_id": 5629,
-      "anchor_short": "三件套",
       "anchor_semantic": "用户问驱动模型是不是只有 bus/device/driver 三件套、class/sysfs 通用",
       "anchor_fact": "用户问驱动模型是不是只有 bus/device/driver 三件套、class/sysfs 通用",
       "target_topic": "/sys/class 干什么",
       "category": "group",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "三件套"
     },
     {
       "case_id": "G016",
@@ -468,12 +468,12 @@
       "group_id": "765242634",
       "target_history_id": 5484,
       "anchor_history_id": 5404,
-      "anchor_short": "法丽达",
       "anchor_semantic": "用户问法丽达 f2020 这把琴怎么样",
       "anchor_fact": "用户问法丽达 f2020 这把琴怎么样",
       "target_topic": "f2020 多久到瓶颈",
       "category": "group",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "法丽达"
     },
     {
       "case_id": "G017",
@@ -481,12 +481,12 @@
       "group_id": "734954188",
       "target_history_id": 9079,
       "anchor_history_id": 9042,
-      "anchor_short": "语境",
       "anchor_semantic": "用户说一句话要放在语境里思考",
       "anchor_fact": "用户说一句话要放在语境里思考",
       "target_topic": "如何理解一句话要看语境",
       "category": "group",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "语境"
     },
     {
       "case_id": "G018",
@@ -494,12 +494,12 @@
       "group_id": "734954188",
       "target_history_id": 2955,
       "anchor_history_id": 2862,
-      "anchor_short": "有哪些工具",
       "anchor_semantic": "用户问 Kiriko 有哪些工具",
       "anchor_fact": "用户问 Kiriko 有哪些工具",
       "target_topic": "现在有哪些工具",
       "category": "group",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "有哪些工具"
     },
     {
       "case_id": "G019",
@@ -507,12 +507,12 @@
       "group_id": "734954188",
       "target_history_id": 16545,
       "anchor_history_id": 16036,
-      "anchor_short": "rana",
       "anchor_semantic": "用户要过 rana 的全身图",
       "anchor_fact": "用户要过 rana 的全身图",
       "target_topic": "要仲町阿拉蕾全身照",
       "category": "group",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "rana"
     },
     {
       "case_id": "G020",
@@ -520,12 +520,12 @@
       "group_id": "1140457037",
       "target_history_id": 561,
       "anchor_history_id": 520,
-      "anchor_short": "punk",
       "anchor_semantic": "用户问过经典 punk/rock and roll 乐队推荐",
       "anchor_fact": "用户问过经典 punk/rock and roll 乐队推荐",
       "target_topic": "Journey/LinkinPark/One OK Rock 算摇滚朋克",
       "category": "group",
-      "kind": "case"
+      "kind": "case",
+      "anchor_fact_short": "punk"
     }
   ],
   "needles": [
@@ -535,12 +535,12 @@
       "group_id": "1140457037",
       "target_history_id": 2401,
       "anchor_history_id": 2101,
-      "anchor_short": "给别人的分析",
       "anchor_semantic": "用户之前抱怨塔罗总结太长，问为什么给别人的分析没那么长",
       "anchor_fact": "用户之前抱怨塔罗总结太长，问为什么给别人的分析没那么长",
       "target_topic": "我不是说过总结不要这么长吗",
       "category": "needle",
-      "kind": "needle"
+      "kind": "needle",
+      "anchor_fact_short": "给别人的分析"
     },
     {
       "case_id": "N002",
@@ -548,12 +548,12 @@
       "group_id": "765242634",
       "target_history_id": 5658,
       "anchor_history_id": 5575,
-      "anchor_short": "字符设备",
       "anchor_semantic": "用户问过字符设备/驱动模型，认为字符设备要注册 class、需要 bus",
       "anchor_fact": "用户问过字符设备/驱动模型，认为字符设备要注册 class、需要 bus",
       "target_topic": "设备驱动是否必须注册 class",
       "category": "needle",
-      "kind": "needle"
+      "kind": "needle",
+      "anchor_fact_short": "字符设备"
     },
     {
       "case_id": "N003",
@@ -561,12 +561,12 @@
       "group_id": "765242634",
       "target_history_id": 5664,
       "anchor_history_id": 5617,
-      "anchor_short": "cdev",
       "anchor_semantic": "用户问过 cdev 是否挂在 platform 驱动里、Linux 有几套驱动模型",
       "anchor_fact": "用户问过 cdev 是否挂在 platform 驱动里、Linux 有几套驱动模型",
       "target_topic": "字符设备与 LDM 两条线",
       "category": "needle",
-      "kind": "needle"
+      "kind": "needle",
+      "anchor_fact_short": "cdev"
     },
     {
       "case_id": "N004",
@@ -574,12 +574,12 @@
       "group_id": "1140457037",
       "target_history_id": 1196,
       "anchor_history_id": 1144,
-      "anchor_short": "概率论",
       "anchor_semantic": "用户之前在复习概率论，担心能不能复习完/考过",
       "anchor_fact": "用户之前在复习概率论，担心能不能复习完/考过",
       "target_topic": "今天概率论能不能过",
       "category": "needle",
-      "kind": "needle"
+      "kind": "needle",
+      "anchor_fact_short": "概率论"
     },
     {
       "case_id": "N005",
@@ -587,12 +587,12 @@
       "group_id": null,
       "target_history_id": 12898,
       "anchor_history_id": 12861,
-      "anchor_short": "SPI",
       "anchor_semantic": "用户准备写 SPI 小屏幕驱动，想搞清楚设备树/GPIO 要不要自己配置",
       "anchor_fact": "用户准备写 SPI 小屏幕驱动，想搞清楚设备树/GPIO 要不要自己配置",
       "target_topic": "小屏幕要不要挂显示子系统",
       "category": "needle",
-      "kind": "needle"
+      "kind": "needle",
+      "anchor_fact_short": "SPI"
     },
     {
       "case_id": "N006",
@@ -600,12 +600,12 @@
       "group_id": null,
       "target_history_id": 15283,
       "anchor_history_id": 15242,
-      "anchor_short": "女孩",
       "anchor_semantic": "用户说遇到了一个愿意陪他的女孩，只想要一个吻",
       "anchor_fact": "用户说遇到了一个愿意陪他的女孩，只想要一个吻",
       "target_topic": "想赚钱、找城市、朋友",
       "category": "needle",
-      "kind": "needle"
+      "kind": "needle",
+      "anchor_fact_short": "女孩"
     },
     {
       "case_id": "N007",
@@ -613,12 +613,12 @@
       "group_id": null,
       "target_history_id": 15287,
       "anchor_history_id": 15248,
-      "anchor_short": "互联网",
       "anchor_semantic": "用户说能触摸到的只有互联网，希望只是梦",
       "anchor_fact": "用户说能触摸到的只有互联网，希望只是梦",
       "target_topic": "不买车房结婚",
       "category": "needle",
-      "kind": "needle"
+      "kind": "needle",
+      "anchor_fact_short": "互联网"
     },
     {
       "case_id": "N008",
@@ -626,12 +626,12 @@
       "group_id": null,
       "target_history_id": 15289,
       "anchor_history_id": 15254,
-      "anchor_short": "Tele",
       "anchor_semantic": "用户想要一把 Tele 吉他，但现在没钱",
       "anchor_fact": "用户想要一把 Tele 吉他，但现在没钱",
       "target_topic": "不买车房结婚/社会规则",
       "category": "needle",
-      "kind": "needle"
+      "kind": "needle",
+      "anchor_fact_short": "Tele"
     },
     {
       "case_id": "N009",
@@ -639,12 +639,12 @@
       "group_id": "734954188",
       "target_history_id": 9219,
       "anchor_history_id": 8954,
-      "anchor_short": "吉他solo",
       "anchor_semantic": "用户拿 MyGO 声优青木阳菜 2025-07-01 吉他 solo 弹呲开玩笑",
       "anchor_fact": "用户拿 MyGO 声优青木阳菜 2025-07-01 吉他 solo 弹呲开玩笑",
       "target_topic": "展示不会忘记的 solo",
       "category": "needle",
-      "kind": "needle"
+      "kind": "needle",
+      "anchor_fact_short": "吉他solo"
     },
     {
       "case_id": "N010",
@@ -652,12 +652,12 @@
       "group_id": null,
       "target_history_id": 13970,
       "anchor_history_id": 13921,
-      "anchor_short": "Linux kernel programming",
       "anchor_semantic": "用户问 Linux Kernel Programming 这本书主要讲什么",
       "anchor_fact": "用户问 Linux Kernel Programming 这本书主要讲什么",
       "target_topic": "Linux 驱动开发书的前提知识",
       "category": "needle",
-      "kind": "needle"
+      "kind": "needle",
+      "anchor_fact_short": "Linux kernel programming"
     }
   ]
 }

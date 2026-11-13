@@ -5,13 +5,13 @@
 > 仓库只存索引与人工标注的锚点，**不存聊天原文**；运行期从 DB 副本按 id 取。
 
 - **v3**：40 条主样本（20 群 + 20 私聊）+ 10 条长间隔 needle。
-- 每个锚点拆两栏：`anchor_short` 是摘要里大概率原样出现的短句（大小写不敏感字面匹配）；`anchor_semantic` 是语义说明（judge 用）。
-- 英文锚点（P008/P015/P017/P018/N006/N007/N008）的 `anchor_short` 取「预期中文摘要会出现的词」（孤独/躺床上/没意义/女孩/互联网），不是原文英文；字面匹配按摘要语言判断。
+- 每个锚点拆两栏：`anchor_fact_short` 是摘要里大概率原样出现的短句（大小写不敏感字面匹配）；`anchor_semantic` 是语义说明（judge 用）。
+- 英文锚点（P008/P015/P017/P018/N006/N007/N008）的 `anchor_fact_short` 取「预期中文摘要会出现的词」（孤独/躺床上/没意义/女孩/互联网），不是原文英文；字面匹配按摘要语言判断。
 - 覆盖 3 个私聊用户、7 个群用户、多个群；主样本锚点距目标 24–45 条，needle 31–45 条。
 
 ## 样本清单
 
-| ID | 类型 | 场景 | anchor_short（字面命中） | anchor_semantic（语义说明） | 目标回合 |
+| ID | 类型 | 场景 | anchor_fact_short（字面命中） | anchor_semantic（语义说明） | 目标回合 |
 |---|---|---|---|---|---|
 | P001 | 私聊 | private | `Linux嵌入式` | 用户正在学 Linux 嵌入式，觉得自己缺项目经验、担心找工作 | 嵌入式学习路线：直接看驱动还是教程 |
 | P002 | 私聊 | private | `问答游戏` | 用户和 Kiriko 玩过问答游戏：我问一句你答一句，然后你问我一句，必须据实相告 | 问答游戏结束/道晚安 |
@@ -78,9 +78,21 @@
 
 ## 锚点判定
 
-- `anchor_short`：在**摘要原文**里做大小写不敏感子串匹配；命中记 ✅，未命中记 ❌（摘要为空记 N/A）。
+- `anchor_fact_short`：在**摘要原文**里做大小写不敏感子串匹配；命中记 ✅，未命中记 ❌（摘要为空记 N/A）。
 - `anchor_semantic`：把「锚点语义 + 候选回复」给 judge，只判 yes/no；baseline 和 layered 各判一次，记 B/L。
 - 单条 anchor false 不代表失败（背景事实不一定要复述）；看 layered 相对 baseline 的 delta。
+
+## 前置条件：摘要管线保真（必须先过）
+
+Aya 在 v2 摘要审计里实测到三个会直接影响线上记忆的问题，修完并通过下面 5 条审计，A/B 结果才算数：
+
+| 检查项 | 通过标准 |
+|---|---|
+| JSON 外壳 | `summary` 不得以 `{"summary"` / `{` 开头；解析失败不能把原文当摘要，出现 0 条 |
+| 截断位置 | 400 字上限必须退到最后一个句末标点（。！？!?…），不许切在词中间；抽查 8/8 命中句末 |
+| 覆盖内容 | 抽 5 条摘要对照源消息：人名、日期/时间、约定、未完成话题不得整类消失 |
+| 压缩比 | 摘要覆盖输入 48 条的比例不作为门槛，但不能只剩主题词；上面四类信息至少保留出现过的 |
+| 生产一致性 | `memory_service.py` 与 `memory_replay.py` 使用同一套摘要清洗/截断函数，不能两套逻辑 |
 
 ## 验收标准（40 主 + 10 needle）
 
@@ -89,21 +101,21 @@
 | 主样本 · 记忆均分差 | layered − baseline ≥ **+0.5**（5 分制） |
 | 主样本 · 记忆胜率 | layered 严格胜 ≥ **24/40（60%）** |
 | 主样本 · 语义锚点 | layered ≥ **70%（28/40）**，且比 baseline **≥ +20pp** |
-| 主样本 · 字面命中 | `anchor_short` 在摘要里 ≥ **80%（32/40）** |
+| 主样本 · 字面命中 | `anchor_fact_short` 在摘要里 ≥ **80%（32/40）** |
 | 主样本 · 总体均分差 | 五维加权 ≥ **+0.2** |
 | 主样本 · 不回归 | 连贯/人设/自然 均分差 ≥ **-0.2**；不泄露 ≥ **-0.2**，严重泄露 0 例 |
 | needle · 记忆 | 均分差 ≥ **+0.5**；语义锚点 layered ≥ **70%（7/10）**，delta ≥ **+20pp**；字面命中 ≥ **80%** |
 | 统计 | 40 条记忆均分差的 paired bootstrap 95% CI 下界 > 0（不显著就不算过） |
 | token | API `usage` 实测 p50/p90 增幅 ≤ **+30%**（不算字符估算） |
 | 缓存/延迟 | 缓存 ≥45%；chat p90 增幅 ≤15% |
-| 摘要保真 | 5 条人工抽查：400 字截断没切掉锚点事实、没漏人名/约定/否定 |
+| 摘要保真 | 5 条审计全过：JSON 外壳 0、截断 100% 在句末、人名/日期/约定/未完成话题保留、生产与 eval 同一套清洗函数 |
 
 ## 历史结果（只作对照，不作验收）
 
 | 版本 | 规模 | 记忆 | 锚点 | 结论 |
 |---|---|---|---|---|
 | v1（Aya，`eval/out/memory_ab_aya.json`） | 25 | 2/25，3B:2L:20平 | 36% vs 32%（-4pp） | FAIL；judge 只看 baseline 16 条、无摘要原文、needle 不依赖锚点 |
-| v2（Ren，`eval/out/memory_ren_20261113_192241.json`） | 25 | 主 5/20，needle 0/5 | 72% vs 68%（+4pp） | FAIL；平局 68%，判据分辨力不足、anchor_short 0/25 |
+| v2（Ren，`eval/out/memory_ren_20261113_192241.json`） | 25 | 主 5/20，needle 0/5 | 72% vs 68%（+4pp） | FAIL；平局 68%，判据分辨力不足、anchor_fact_short 0/25 |
 
 ## 评分表（v3 跑完填）
 
@@ -169,4 +181,4 @@ python3 eval/memory_replay.py --db <copy> --cases eval/memory_cases.json --dry-r
 python3 eval/memory_replay.py --db <copy> --cases eval/memory_cases.json
 ```
 
-> 注：v3 需要 harness 支持 `anchor_short` / `anchor_semantic`、40+10 条、1–5 分与双顺序；旧 harness 会在字段缺失时回退到 `anchor_fact`。
+> 注：v3 需要 harness 支持 `anchor_fact_short` / `anchor_semantic`、40+10 条、1–5 分与双顺序；旧 harness 会在字段缺失时回退到 `anchor_fact`。
