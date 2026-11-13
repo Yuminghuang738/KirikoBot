@@ -328,14 +328,15 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
     _USAGE.clear()
     _wire_summary_metrics()
     conn = connect_ro(db_path)
-    results: list[dict[str, Any]] = []
     selected = cases[: limit or len(cases)]
-    done: set[str] = set()
+    done_entries: list[dict[str, Any]] = []
     if jsonl_path:
         if resume and Path(jsonl_path).exists():
-            done = _load_done_ids(jsonl_path)
+            done_entries = _load_done_entries(jsonl_path)
         else:
             Path(jsonl_path).write_text("", encoding="utf-8")
+    done = {str(entry.get("case_id")) for entry in done_entries}
+    results: list[dict[str, Any]] = list(done_entries)
 
     for index, case in enumerate(selected, 1):
         if case["case_id"] in done:
@@ -437,18 +438,24 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
     }
 
 
-def _load_done_ids(jsonl_path: str) -> set[str]:
-    """读 checkpoint：一次运行可能被杀，续跑只跳过已完成的 case。"""
-    done: set[str] = set()
+def _load_done_entries(jsonl_path: str) -> list[dict[str, Any]]:
+    """读 checkpoint：一次运行可能被杀，续跑把已完成条目并回结果。"""
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
     for line in Path(jsonl_path).read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
         try:
-            done.add(str(json.loads(line)["case_id"]))
-        except (ValueError, KeyError, TypeError):
+            entry = json.loads(line)
+        except ValueError:
             continue
-    return done
+        case_id = str(entry.get("case_id") or "")
+        if not case_id or case_id in seen:
+            continue
+        seen.add(case_id)
+        entries.append(entry)
+    return entries
 
 
 def measure_summary_cost(cases: list[dict[str, Any]], db_path: str,

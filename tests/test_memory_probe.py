@@ -115,8 +115,22 @@ def test_run_resume_skips_done_cases(tmp_path):
     memory_probe.run([case], db, dry_run=True, jsonl_path=str(jsonl))
     again = memory_probe.run([case], db, dry_run=True, jsonl_path=str(jsonl), resume=True)
 
-    assert again["results"] == []
-    assert again["case_count"] == 0
+    assert again["case_count"] == 1
+    assert again["results"][0]["case_id"] == case["case_id"]
+
+
+def test_resume_merges_checkpoint_with_new_cases(tmp_path):
+    db = _make_db(tmp_path)
+    jsonl = tmp_path / "probe.jsonl"
+    first = _case(case_id="P001")
+    second = _case(case_id="P002", target_history_id=60)
+
+    memory_probe.run([first], db, dry_run=True, jsonl_path=str(jsonl))
+    payload = memory_probe.run([first, second], db, dry_run=True,
+                              jsonl_path=str(jsonl), resume=True)
+
+    assert payload["case_count"] == 2
+    assert [r["case_id"] for r in payload["results"]] == ["P001", "P002"]
 
 
 # ── 汇总与判据 ───────────────────────────────────────────────────

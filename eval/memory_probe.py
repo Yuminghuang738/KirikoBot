@@ -154,17 +154,24 @@ def _pick_repeat_ids(cases: list[dict[str, Any]], n: int) -> set[str]:
     return picked
 
 
-def _load_done_ids(jsonl_path: str) -> set[str]:
-    done: set[str] = set()
+def _load_done_entries(jsonl_path: str) -> list[dict[str, Any]]:
+    """读 checkpoint 里已完成的条目；resume 时并入结果，避免只剩后半段。"""
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
     for line in Path(jsonl_path).read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
         try:
-            done.add(str(json.loads(line)["case_id"]))
-        except (ValueError, KeyError, TypeError):
+            entry = json.loads(line)
+        except ValueError:
             continue
-    return done
+        case_id = str(entry.get("case_id") or "")
+        if not case_id or case_id in seen:
+            continue
+        seen.add(case_id)
+        entries.append(entry)
+    return entries
 
 
 def probe_case(case: dict[str, Any], conn: Any, key: str, dry_run: bool,
@@ -380,15 +387,17 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
     _wire_summary_metrics()
     conn = connect_ro(db_path)
     selected = cases[: limit or len(cases)]
-    done: set[str] = set()
+    done_entries: list[dict[str, Any]] = []
     if jsonl_path:
         if resume and Path(jsonl_path).exists():
-            done = _load_done_ids(jsonl_path)
+            done_entries = _load_done_entries(jsonl_path)
         else:
             Path(jsonl_path).write_text("", encoding="utf-8")
+    done = {str(entry.get("case_id")) for entry in done_entries}
 
-    repeat_ids = _pick_repeat_ids(selected, repeat)
-    results: list[dict[str, Any]] = []
+    pending = [case for case in selected if str(case["case_id"]) not in done]
+    repeat_ids = _pick_repeat_ids(pending, repeat)
+    results: list[dict[str, Any]] = list(done_entries)
     skipped = 0
     for index, case in enumerate(selected, 1):
         if case["case_id"] in done:
@@ -435,6 +444,7 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
         "notes": (
             "只测上下文里的事实可用性：每变体一问一答、temperature=0、不生成回复、不调 judge；"
             "system 不含 PERSONA；答案是生成侧结果，判据用关键词命中而不是主观分。"
+            + ("resume 时结果含 checkpoint 里的条目，token 只统计本次新跑的 case。" if resume else "")
         ),
     }
 
@@ -492,7 +502,10 @@ def main(argv: list[str] | None = None) -> int:
     payload = run(cases, args.db, limit=args.limit or None, dry_run=args.dry_run,
                   jsonl_path=jsonl, resume=args.resume, repeat=args.repeat)
     if args.resume and not payload["results"]:
-        print("checkpoint 里所有 case 都已完成，本次没有新结果；不覆盖 out 文件")
+        if payload["skipped_missing_probe"]:
+            print(f"没有可跑的 case：{payload['skipped_missing_probe']} 条缺 probe 字段；不覆盖 out 文件")
+        else:
+            print("checkpoint 里所有 case 都已完成，本次没有新结果；不覆盖 out 文件")
         return 0
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     print_summary(payload["summary"])
