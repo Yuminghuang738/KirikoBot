@@ -89,6 +89,19 @@ _OPEN_TO_CLOSE = {"（": "）", "(": ")", "[": "]", "【": "】", "“": "”", 
 _CLOSERS = set(_OPEN_TO_CLOSE.values())
 _SENTENCE_END = set("。！？!?~…")
 
+# 换行当候选边界时，行尾出现这些标点说明这一行没说完，不能单独成段。
+_LINE_SOFT_END = set("，,；;：:、") | set(_OPEN_TO_CLOSE.keys())
+_LINE_MIN_LEN = 8
+_CLOSER_CHARS = "".join(sorted(_CLOSERS))
+
+
+def _line_is_boundary(line: str) -> bool:
+    """行长够、且（去掉尾部闭引号/括号后）不是以「没说完」的标点收尾。"""
+    if len(line) < _LINE_MIN_LEN:
+        return False
+    tail = line.rstrip(_CLOSER_CHARS)
+    return bool(tail) and tail[-1] not in _LINE_SOFT_END
+
 
 def _safe_sentence_split(text: str) -> list[str]:
     """只在确定的句末边界切分，并保护引号、括号、代码和 URL。
@@ -180,12 +193,37 @@ def _group_complete_sentences(sentences: list[str], max_chunks: int) -> list[str
     return [_join_sentences(group) for group in groups]
 
 
+def _stick_dependent_lines(lines: list[str]) -> list[str]:
+    """以「但是/所以/因为…」开头的行依赖前文，粘回上一行，避免单独成条。"""
+    chunks: list[str] = []
+    for line in lines:
+        first = line.lstrip("“‘（(【[")
+        if chunks and first.startswith(_DEPENDENT_SENTENCE_PREFIXES):
+            chunks[-1] = chunks[-1] + "\n" + line
+        else:
+            chunks.append(line)
+    return chunks
+
+
+def _merge_shortest_lines(lines: list[str], max_chunks: int) -> list[str]:
+    """行数超过 max_chunks 时，反复合并总长度最短的相邻两行；内容零丢弃。"""
+    chunks = list(lines)
+    while len(chunks) > max_chunks:
+        index = min(
+            range(len(chunks) - 1),
+            key=lambda i: len(chunks[i]) + len(chunks[i + 1]),
+        )
+        chunks[index:index + 2] = [chunks[index] + "\n" + chunks[index + 1]]
+    return chunks
+
+
 def split_into_pacing_chunks(text: str, max_chunks: int = 3) -> list[str]:
     """把回复安全地拆成 1~max_chunks 条；语义完整永远优先于拟人分批。
 
     原则：
     - 代码、Markdown 结构、表格和 URL 密集文本整段发送；
-    - 换行只有在每行本身是完整句时才视作候选边界；
+    - 换行在「行长 ≥8 且行尾不是逗号/分号/冒号/顿号/开括号」时视作候选边界；
+      超过 max_chunks 就把最短的相邻行合并，不丢内容；
     - 只按不在引号/括号内的句末标点切分；
     - 绝不按字符数切开完整句子，绝不因 max_chunks 丢弃尾部内容；
     - 「但是/所以/因为……」等依赖前文的句子优先与上一句合并。
@@ -197,7 +235,14 @@ def split_into_pacing_chunks(text: str, max_chunks: int = 3) -> list[str]:
         return [text]
 
     # 结构化内容和 URL 密集内容宁可一条发完，避免排版或链接被拆坏。
-    if "```" in text or re.search(r"(?m)^\s*(?:[-+*]|\d+[.)])\s+", text) or "|" in text:
+    if (
+        "```" in text
+        or re.search(
+            r"(?m)^\s*(?:[-+*]\s+|\d+[.)](?!\d)\s*|\d+、\s*|[①-⑳])\s*",
+            text,
+        )
+        or "|" in text
+    ):
         return [text]
     if len(re.findall(r"https?://", text)) >= 2:
         return [text]
@@ -205,8 +250,13 @@ def split_into_pacing_chunks(text: str, max_chunks: int = 3) -> list[str]:
     if len(text) <= 35:
         return [text]
 
-    # 保留显式换行的意图，但只有每行都有完整句末时才独立发送。
+    # 模型现在常用换行断句（不一定写句末标点）。行长够、行尾不是「没说完」
+    # 的标点，就把换行当成候选边界；超过 max_chunks 时合并最短相邻行，不丢内容。
     lines = [part.strip() for part in text.splitlines() if part.strip()]
+    if len(lines) > 1 and all(_line_is_boundary(line) for line in lines):
+        return _merge_shortest_lines(_stick_dependent_lines(lines), max_chunks)
+
+    # 兼容旧行为：每行都带句末标点时按行发送（行可以短）。
     if 1 < len(lines) <= max_chunks and all(line[-1] in _SENTENCE_END | _CLOSERS for line in lines):
         return lines
 
