@@ -10,11 +10,15 @@ import logging
 import os
 import shutil
 import subprocess
+import threading
 from typing import Any
 
 from config import Config
 
 logger = logging.getLogger(__name__)
+
+# 同时在跑的 DSH 任务上限（同步 subprocess，600 秒会占住一个聊天线程）。
+_RUN_SLOTS = threading.BoundedSemaphore(max(1, int(getattr(Config, "DSH_MAX_CONCURRENCY", 2) or 2)))
 
 
 def _resolve_dsh_api_key() -> str:
@@ -136,18 +140,27 @@ def _guard_task_prompt(task: str, has_session: bool) -> str:
 
 
 def _clean_stale_session_lock(session_id: str) -> None:
-    """如果某个 session 的 session.lock 残留在磁盘上，清理以防死锁卡死。"""
+    """resume 失败后清理孤儿会话锁。
+
+    只在「续写失败、准备降级新会话」时调用；锁比 DSH 超时还新就不删，
+    避免把另一个仍在跑的任务锁误删（原实现是无条件 os.remove）。
+    """
     if not session_id:
         return
     home = os.getenv("HOME") or "/home/appuser"
     base = os.path.join(home, ".dsh", "sessions")
     if not os.path.isdir(base):
         return
+    max_age = int(Config.DSH_TIMEOUT or 600) + 60
+    now = time.time()
     for root, dirs, files in os.walk(base):
         if session_id in root and "session.lock" in files:
             lock_path = os.path.join(root, "session.lock")
             try:
-                # 检查锁文件的年龄，若存在且超过 10 秒无活动，清理掉
+                age = now - os.path.getmtime(lock_path)
+                if age < max_age:
+                    logger.info("会话锁仍新鲜（%.0fs），保留不删: %s", age, lock_path)
+                    continue
                 os.remove(lock_path)
                 logger.info("已自动清理孤儿会话锁: %s", lock_path)
             except Exception:
@@ -197,15 +210,41 @@ class DshClient:
         task: str,
         session_key: str = "",
         timeout: int | None = None,
+        meta: dict[str, Any] | None = None,
     ) -> str:
-        """委派给 DSH 执行任务，返回最终文本结果。"""
+        """委派给 DSH 执行任务，返回最终文本结果。
+
+        `meta` 由调用方传入时回填 `status`（ok/empty/timeout/error/interrupted/
+        rejected/unavailable）与 `session_recovered`，供 tool_usage 埋点使用。
+        并发已满时立刻返回「排队」而不是占住聊天线程。
+        """
+        meta = meta if meta is not None else {}
         if not self.is_available():
+            meta["status"] = "unavailable"
             return "本地 DSH 超级大脑环境尚未配置就绪（未检测到可用的 dsh 运行时或 API 密钥）。"
 
         task = (task or "").strip()
         if not task:
+            meta["status"] = "empty"
             return "任务内容为空。"
 
+        if not _RUN_SLOTS.acquire(blocking=False):
+            meta["status"] = "rejected"
+            return "前面还有超级大脑任务在跑，这个先排队，等会儿再叫我～"
+
+        try:
+            return self._execute_task(task, session_key, timeout, meta)
+        finally:
+            _RUN_SLOTS.release()
+
+    def _execute_task(
+        self,
+        task: str,
+        session_key: str = "",
+        timeout: int | None = None,
+        meta: dict[str, Any] | None = None,
+    ) -> str:
+        meta = meta if meta is not None else {}
         timeout = timeout or Config.DSH_TIMEOUT
         workspace = os.path.abspath(Config.DSH_WORKSPACE_DIR)
         os.makedirs(workspace, exist_ok=True)
@@ -221,12 +260,12 @@ class DshClient:
         env["HOME"] = "/home/appuser"
         if session_key:
             env["DSH_DELIVER_CHANNEL"] = session_key
-        
-        # 调试钩子：记录 DSH 运行时的环境变量
+
+        # 只记长度与会话，不把用户任务原文写进临时日志。
         with open("/tmp/dsh_run_debug.log", "a") as f:
             f.write(f"--- RUNNING TASK {time.time()} ---\n")
             f.write(f"CHANNEL: {env.get('DSH_DELIVER_CHANNEL')}\n")
-            f.write(f"TASK: {task}\n")
+            f.write(f"TASK_LEN: {len(task)}\n")
             f.flush()
 
         if patch_path and os.path.exists(patch_path):
@@ -235,8 +274,6 @@ class DshClient:
         cmd = [self._dsh_bin, "--profile", "headless", "--approval-policy", "never"]
 
         if session_id:
-            # 清理可能残留的死锁，防止被前次异常挂起的孤儿子进程阻塞
-            _clean_stale_session_lock(session_id)
             guarded_task = _guard_task_prompt(task, has_session=True)
             cmd_resume = list(cmd) + ["--session-id", session_id, guarded_task]
             try:
@@ -251,15 +288,24 @@ class DshClient:
                 if proc.returncode == 0:
                     out = proc.stdout.strip()
                     if out:
+                        meta["status"] = "ok"
+                        meta["session_recovered"] = True
                         return out
-                # 若旧 session 失效或死锁，清空记录并自动无感降级启动全新 session
-                logger.warning("DSH 恢复会话 %s 失败 (code=%s)，自动开启新会话执行", session_id, proc.returncode)
+                # 若旧 session 失效或死锁，清空记录并自动无感降级启动全新 session。
+                # 锁只在「续写已失败」之后清，且比超时还新的锁不碰。
+                logger.warning(
+                    "DSH 恢复会话 %s 失败 (code=%s)，自动开启新会话执行",
+                    session_id, proc.returncode,
+                )
+                _clean_stale_session_lock(session_id)
                 if self.db and session_key:
                     self.db.set_state(f"dsh_session:{session_key}", "")
             except subprocess.TimeoutExpired:
+                meta["status"] = "timeout"
                 return "任务执行时间过长，已在后台中止。"
-            except Exception as e:
+            except Exception as exc:
                 logger.exception("执行 DSH 续写任务异常，降级新会话")
+                meta["error"] = f"{type(exc).__name__}: {exc}"
                 if self.db and session_key:
                     self.db.set_state(f"dsh_session:{session_key}", "")
 
@@ -289,6 +335,7 @@ class DshClient:
                     stdout, stderr = proc.communicate(timeout=timeout)
                 except subprocess.TimeoutExpired:
                     proc.kill()
+                    meta["status"] = "timeout"
                     return "任务执行时间过长，已在后台中止。"
 
                 for line in stdout.splitlines():
@@ -310,14 +357,21 @@ class DshClient:
 
                 reply = "".join(final_answer).strip()
                 if reply:
+                    meta["status"] = "ok"
+                    meta["session_recovered"] = False
                     return reply
 
                 if proc.returncode != 0:
                     logger.warning("DSH 进程非零退出：%s, stderr: %s", proc.returncode, stderr[:200])
+                    meta["status"] = "error"
+                    meta["error"] = f"exit={proc.returncode} {stderr[:200]}"
                     return "超级大脑执行遇到了一点问题，没有产出有效回答。"
 
+                meta["status"] = "empty"
                 return "任务已执行完毕，但未产生文字输出。"
 
-        except Exception as e:
+        except Exception as exc:
             logger.exception("执行 DSH 初始化任务失败")
-            return f"执行超级大脑任务失败：{e}"
+            meta["status"] = "error"
+            meta["error"] = f"{type(exc).__name__}: {exc}"
+            return f"执行超级大脑任务失败：{exc}"
