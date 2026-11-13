@@ -82,6 +82,23 @@
 - `anchor_semantic`：把「锚点语义 + 候选回复」给 judge，只判 yes/no；baseline 和 layered 各判一次，记 B/L。
 - 单条 anchor false 不代表失败（背景事实不一定要复述）；看 layered 相对 baseline 的 delta。
 
+## 数据版本校验（使用前必看）
+
+- **当前 PR #64 head：`47f1d5a`**，字段是 `anchor_fact_short` + `anchor_semantic`，40 主 + 10 needle。
+- 旧 `8c16dbb` 只有 `anchor_short`；harness 的 `case.get("anchor_fact_short") or case.get("anchor_fact")` 会回退到语义说明，`anchor_in_summary` 会失真。**不要用 8c16dbb 跑 v3。**
+- 跑前先校验：
+
+```bash
+python3 - <<'PY'
+import json
+d = json.load(open("eval/memory_cases.json"))
+assert len(d["cases"]) == 40 and len(d["needles"]) == 10
+assert "anchor_fact_short" in d["cases"][0]
+assert "anchor_semantic" in d["cases"][0]
+print("v3 dataset OK", len(d["cases"]), len(d["needles"]))
+PY
+```
+
 ## 前置条件：摘要管线保真（必须先过）
 
 Aya 在 v2 摘要审计里实测到三个会直接影响线上记忆的问题，修完并通过下面 5 条审计，A/B 结果才算数：
@@ -109,6 +126,18 @@ Aya 在 v2 摘要审计里实测到三个会直接影响线上记忆的问题，
 | token | API `usage` 实测 p50/p90 增幅 ≤ **+30%**（不算字符估算） |
 | 缓存/延迟 | 缓存 ≥45%；chat p90 增幅 ≤15% |
 | 摘要保真 | 5 条审计全过：JSON 外壳 0、截断 100% 在句末、人名/日期/约定/未完成话题保留、生产与 eval 同一套清洗函数 |
+
+## 摘要保真审计记录表（Aya 填，5 条）
+
+| case | JSON 外壳 | 截断位置 | 人名/称呼 | 日期/时间 | 约定/未完成话题 | 结论 |
+|---|---|---|---|---|---|---|
+| P004 | — | — | — | — | — | — |
+| G004 | — | — | — | —（源里有「明天/下次」） | — | — |
+| G005 | — | — | — | — | — | — |
+| G006 | — | — | — | — | — | — |
+| N003 | — | — | — | —（2025-07-01） | — | — |
+
+> 判定：外壳必须「无」；截断必须「句末」；人名/日期/约定列填「保留/丢失/源里没有」，只要源里出现过的类别整类丢失即不通过。
 
 ## 历史结果（只作对照，不作验收）
 
