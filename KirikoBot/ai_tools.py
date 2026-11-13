@@ -1425,7 +1425,7 @@ class DshAgentTool:
                     task_id,
                     status=status,
                     duration_ms=int((time.monotonic() - t0) * 1000),
-                    session_recovered=bool(meta.get("session_recovered")),
+                    session_recovered=int(meta.get("session_recovered", -1)),
                     queue_wait_ms=0,
                     error=str(meta.get("error") or ""),
                     arguments=task,

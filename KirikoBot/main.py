@@ -1634,7 +1634,8 @@ def api_dsh_tasks():
     tasks = [{
         "id": r[0], "timestamp": r[1], "status": r[2] or "",
         "duration_ms": int(r[3] or 0), "session_key": r[4] or "",
-        "session_recovered": bool(r[5]), "queue_wait_ms": int(r[6] or 0),
+        "session_recovered": int(r[5] if r[5] is not None else -1),
+        "queue_wait_ms": int(r[6] or 0),
         "error": r[7] or "",
     } for r in rows]
 
@@ -1741,7 +1742,7 @@ def api_dsh_execute():
             db.finish_dsh_task(
                 task_id, status=status,
                 duration_ms=int((time.monotonic() - t0) * 1000),
-                session_recovered=bool(meta.get("session_recovered")),
+                session_recovered=int(meta.get("session_recovered", -1)),
                 error=str(meta.get("error") or ""),
                 arguments=task, result=str(result or "")[:500],
             )

@@ -87,7 +87,7 @@ class TestDshAgentRecords:
 
         def fake_run(task, session_key="", timeout=None, meta=None):
             meta["status"] = "ok"
-            meta["session_recovered"] = False
+            meta["session_recovered"] = -1     # 本来就没有存量 session
             return "结果"
 
         monkeypatch.setattr(tool.client, "run_task", fake_run)
@@ -108,11 +108,13 @@ class TestDshAgentRecords:
         tool.dsh_agent_call(robot, ai)
 
         rows = db.fetch_data(
-            "SELECT status, arguments, result FROM tool_usage WHERE tool_name='dsh_agent'",
+            "SELECT status, arguments, result, session_recovered "
+            "FROM tool_usage WHERE tool_name='dsh_agent'",
         )
         assert len(rows) == 1
         assert rows[0][0] == "ok"
         assert rows[0][1] == "写脚本"
+        assert rows[0][3] == -1, "bool(-1) 会把无会话任务误记成恢复成功"
 
 
 class TestDshStatusApi:
