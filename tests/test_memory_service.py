@@ -485,3 +485,19 @@ def test_empty_twice_returns_empty(monkeypatch):
     )
     assert memory_service.generate_summary("用户：普通聊天") == ("", [])
     assert len(calls) == 2
+
+
+def test_key_info_line_survives_truncation(monkeypatch):
+    long_body = "很长的正文。" * 100  # 600 字，超过 500 上限
+    monkeypatch.setattr(
+        memory_service, "quick_chat",
+        lambda *a, **k: json.dumps({"summary": long_body, "facts": []}),
+    )
+
+    summary, _ = memory_service.generate_summary("需要记住 SlicesIndex 这个标识符")
+
+    assert len(summary) <= memory_service.Config.MEMORY_SUMMARY_MAX_CHARS
+    assert "【关键信息】" in summary
+    assert "SlicesIndex" in summary
+    # 关键信息行在末尾且完整（以句号收尾），没有被截断切掉
+    assert summary.endswith("。")

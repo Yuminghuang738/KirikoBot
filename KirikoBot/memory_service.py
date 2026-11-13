@@ -261,21 +261,20 @@ def generate_summary(chunk_text: str, previous: str = "", db: Any = None,
     # 不再依赖模型重试：关键信息由程序确定性地补在末尾，并预留 80 字预算。
     # 注意：缺失判断必须基于「最终正文」，否则正文截断会把已写到的日期吃掉。
     limit = Config.MEMORY_SUMMARY_MAX_CHARS
-    body = _truncate_summary(summary, limit)
-    key_line = _key_info_line(chunk_text, body, db, user_id)
-    if key_line:
-        body = _truncate_summary(summary, max(limit - len(key_line) - 1, 100))
-        # 正文截断后可能又丢了词，重新判定一次缺失。
+    # 先判断最终是否还缺关键信息；缺就固定预留 80 字给「关键信息」行，
+    # 保证它永远不会被截断逻辑切掉。
+    probe = _key_info_line(chunk_text, _truncate_summary(summary, limit), db, user_id)
+    if probe:
+        body = _truncate_summary(summary, max(limit - 81, 100))
         key_line = _key_info_line(chunk_text, body, db, user_id)
         summary = f"{body}\n{key_line}".strip() if key_line else body
         if len(summary) > limit:
-            # 二次截断后 key_line 变长时再收一次，确保绝不超上限。
-            body = _truncate_summary(body, max(limit - len(key_line) - 1, 100))
+            # 兜底（key 最多 80 字、body ≤ limit-81，正常不会走到）：
+            # 只再收正文，绝不裁 key_line。
+            body = _truncate_summary(summary, max(limit - len(key_line) - 1, 100))
             summary = f"{body}\n{key_line}".strip()
-        if len(summary) > limit:
-            summary = summary[:limit].rstrip()
     else:
-        summary = body
+        summary = _truncate_summary(summary, limit)
     return summary, facts
 
 
