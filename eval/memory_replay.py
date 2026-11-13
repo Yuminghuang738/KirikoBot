@@ -1,6 +1,8 @@
 """分层记忆 A/B replay（3b）：baseline 16 条 vs layered 24 条 + 摘要。
 
 * 摘要只用目标回合**之前**的消息生成，绝不把未来信息喂进去。
+* 本工具**只测记忆层**：system 用 PERSONA，不挂工具 schema / 群背景 / 画像，
+  结果不能代表完整生产链路的绝对质量，只能用于 baseline vs layered 的相对比较。
 * 只读 DB 副本；不写生产库。
 * 双顺序 pairwise judge（A/B 与 B/A 各一次）抵消位置偏差，外加锚点 yes/no。
 * 输出 eval/out/memory_<ts>.json；`--dry-run` 不联网，只验证构造与输出结构。
@@ -27,6 +29,7 @@ sys.path.insert(0, str(APP))
 from chat_history import to_messages  # noqa: E402
 from memory_service import (  # noqa: E402
     SUMMARY_SYSTEM,
+    _clean_summary,
     _parse_summary,
     render_summary_block,
 )
@@ -39,6 +42,8 @@ API_URL = os.getenv("DEEPSEEK_API") or "https://api.deepseek.com/chat/completion
 
 BASELINE_RAW = 16
 LAYERED_RAW = 24
+SUMMARY_SOURCE_LIMIT = 48   # 摘要只看 raw 窗口之前最近 48 条，避免超长历史爆上下文
+SUMMARY_MAX_CHARS = 400
 DIMS = ("memory", "coherence", "persona", "natural", "leak")
 DIM_LABELS = {
     "memory": "记忆准确", "coherence": "连贯", "persona": "人设",
@@ -116,7 +121,12 @@ def _as_messages(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def summarize_older(older: list[dict[str, Any]], key: str) -> str:
-    """把 raw 窗口之外的更早消息压成 ≤400 字摘要；空输入返回 ''。"""
+    """把 raw 窗口之外最近的 48 条压成 ≤400 字摘要；空输入返回 ''。
+
+    只取最近 48 条：线上是每 24 条滚动摘要，而 eval 一次性压全部旧消息；
+    不设上限时真实样本会出现 4000+ 条、直接把上下文撑爆。
+    """
+    older = older[-SUMMARY_SOURCE_LIMIT:]
     if not older:
         return ""
     lines = []
@@ -140,7 +150,8 @@ def summarize_older(older: list[dict[str, Any]], key: str) -> str:
     }
     raw = _post(payload, key)
     summary, _ = _parse_summary(raw)
-    return summary
+    # 与线上一致：截到 400 字，并过滤指令性行。
+    return _clean_summary(summary)[:SUMMARY_MAX_CHARS].strip()
 
 
 def generate_reply(history: list[dict[str, Any]], user_text: str, key: str) -> str:
@@ -289,6 +300,8 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
             "case_id": case["case_id"],
             "kind": case.get("kind", "case"),
             "category": case.get("category"),
+            "baseline_reply": baseline_reply,
+            "layered_reply": layered_reply,
             "variants": {
                 "baseline": {"context_messages": len(baseline_hist), "reply_len": len(baseline_reply), "summary_len": 0},
                 "layered": {"context_messages": len(layered_hist), "reply_len": len(layered_reply), "summary_len": len(summary)},
@@ -315,6 +328,10 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
         "db": Path(db_path).name,
         "results": results,
         "summary": summary_stats,
+        "notes": (
+            "只测记忆层：system=PERSONA，不含工具 schema / 群背景 / 画像；"
+            "结论只用于 baseline vs layered 的相对比较，不代表完整生产链路。"
+        ),
     }
     return payload
 

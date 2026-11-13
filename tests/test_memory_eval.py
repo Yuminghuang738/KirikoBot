@@ -161,6 +161,27 @@ def test_summarize_older_empty_returns_empty():
     assert memory_replay.summarize_older([], "k") == ""
 
 
+def test_summarize_older_limits_to_recent_48_and_truncates(monkeypatch):
+    captured = {}
+
+    def fake_post(payload, key):
+        captured["text"] = payload["messages"][-1]["content"]
+        return json.dumps({"summary": "字" * 600, "facts": []})
+
+    monkeypatch.setattr(memory_replay, "_post", fake_post)
+    older = [
+        {"role": "user" if i % 2 == 0 else "assistant", "content": f"OLD{i}", "id": i}
+        for i in range(60)
+    ]
+
+    summary = memory_replay.summarize_older(older, "k")
+
+    assert len(summary) == memory_replay.SUMMARY_MAX_CHARS   # 强制截到 400
+    assert "OLD0" not in captured["text"]
+    assert "OLD11" not in captured["text"]                   # 只保留最近 48 条
+    assert "OLD12" in captured["text"]
+
+
 def test_parse_judge_accepts_strings_and_objects():
     raw = ('```json\n{"memory":"A","coherence":"平",'
            '"persona":{"win":"B","a":3,"b":4},"natural":"A","leak":"平"}\n```')
@@ -225,8 +246,10 @@ def test_run_dry_run_structure(tmp_path):
     assert entry["variants"]["baseline"]["context_messages"] == 16
     assert entry["variants"]["layered"]["context_messages"] == 24
     assert entry["variants"]["layered"]["summary_len"] == 0
+    assert entry["baseline_reply"] == "" and entry["layered_reply"] == ""
     assert "judge" not in entry and "anchor" not in entry
     assert payload["summary"]["case_count"] == 1
+    assert payload["notes"].startswith("只测记忆层")
 
 
 def test_run_skips_case_without_trailing_user(tmp_path):
@@ -239,3 +262,25 @@ def test_run_skips_case_without_trailing_user(tmp_path):
     }
     payload = memory_replay.run([case], db, dry_run=True)
     assert payload["results"] == []
+
+
+def test_run_keeps_replies_for_audit(tmp_path, monkeypatch):
+    db = _make_db(tmp_path)
+    case = {
+        "case_id": "G001", "user_id": "g_user0", "group_id": "700000",
+        "target_history_id": 42, "anchor_history_id": 1, "anchor_fact": "在练琴",
+        "category": "group", "kind": "case",
+    }
+    monkeypatch.setattr(memory_replay, "_read_token", lambda: "k")
+    monkeypatch.setattr(memory_replay, "summarize_older", lambda older, key: "摘要")
+    replies = iter(["baseline 回复原文", "layered 回复原文"])
+    monkeypatch.setattr(memory_replay, "generate_reply", lambda hist, user, key: next(replies))
+    monkeypatch.setattr(memory_replay, "judge_call", lambda *a, **k: {})
+    monkeypatch.setattr(memory_replay, "anchor_call", lambda *a, **k: None)
+
+    payload = memory_replay.run([case], db)
+
+    entry = payload["results"][0]
+    assert entry["baseline_reply"] == "baseline 回复原文"
+    assert entry["layered_reply"] == "layered 回复原文"
+    assert entry["variants"]["layered"]["summary_len"] == len("摘要")
