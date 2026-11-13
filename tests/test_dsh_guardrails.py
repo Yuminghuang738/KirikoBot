@@ -52,7 +52,10 @@ class TestDshGuardrailsPrompt:
 
 
 class TestSessionLockSelfHealing:
-    def test_clean_stale_lock_removes_file(self, tmp_path, monkeypatch):
+    def test_clean_stale_lock_removes_only_old_files(self, tmp_path, monkeypatch):
+        import os
+        import time
+
         fake_home = tmp_path / "home"
         session_dir = fake_home / ".dsh" / "sessions" / "test-workspace" / "session-xyz"
         session_dir.mkdir(parents=True)
@@ -62,6 +65,12 @@ class TestSessionLockSelfHealing:
         monkeypatch.setenv("HOME", str(fake_home))
         assert lock_file.exists()
 
+        # 新锁不删：可能还有任务在跑（旧实现无条件删，会误伤 600 秒任务）
+        _clean_stale_session_lock("session-xyz")
+        assert lock_file.exists()
+
+        old = time.time() - 10_000
+        os.utime(lock_file, (old, old))
         _clean_stale_session_lock("session-xyz")
         assert not lock_file.exists()
 

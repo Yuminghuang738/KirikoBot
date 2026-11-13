@@ -54,7 +54,9 @@ class TestDshConsoleEndpoints:
     def test_dsh_execute_success_workflow(self, client, monkeypatch):
         import main
 
-        def fake_run(task, session_key="", timeout=None):
+        def fake_run(task, session_key="", timeout=None, meta=None):
+            if meta is not None:
+                meta["status"] = "ok"
             return f"执行完成: {task}"
 
         monkeypatch.setattr(main.dsh_agent_tool.client, "run_task", fake_run)

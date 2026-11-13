@@ -96,7 +96,9 @@ class TestDshAgentToolAutonomousDeduplication:
         tool = DshAgentTool(db)
 
         # 模拟 DSH 进程执行时自主调用了 deliver 并更新了戳记
-        def fake_run(task, session_key="", timeout=None):
+        def fake_run(task, session_key="", timeout=None, meta=None):
+            if meta is not None:
+                meta["status"] = "ok"
             db.set_state(f"dsh_delivered:{session_key}", str(time.time() + 1))
             return "这是被输出在终端的文本"
 

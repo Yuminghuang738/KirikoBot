@@ -162,6 +162,8 @@ class Config:
     DSH_REASONING_EFFORT: Final[str] = os.getenv("DSH_REASONING_EFFORT") or "low"
     DSH_PATCH_PATH: Final[str] = os.getenv("DSH_PATCH_PATH") or os.path.expanduser("~/.dsh/profiles/web/cordis.patch.yml")
     DSH_WORKSPACE_DIR: Final[str] = os.getenv("DSH_WORKSPACE_DIR") or "/tmp/kiriko_dsh_workspace"
+    # 同时在跑的 DSH 任务上限；满了立刻回「排队」而不是占住聊天线程等 600 秒。
+    DSH_MAX_CONCURRENCY: Final[int] = int(os.getenv("DSH_MAX_CONCURRENCY") or 2)
 
     # ── 分层记忆（conversation_summaries）───────────────
     # 紧急总开关：改它需要 force-recreate 容器；日常灰度走
