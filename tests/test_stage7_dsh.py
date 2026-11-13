@@ -151,3 +151,46 @@ class TestDshStatusApi:
         assert body["stats"]["n"] == 3
         assert body["stats"]["success_rate"] == pytest.approx(2 / 3, abs=0.01)
         assert body["stats"]["p50_ms"] == 3000
+
+
+def test_delivery_failure_is_recorded_as_error(db, monkeypatch):
+    from ai_tools import DshAgentTool
+
+    tool = DshAgentTool(db)
+
+    def fake_run(task, session_key="", timeout=None, meta=None):
+        meta["status"] = "ok"
+        return "结果"
+
+    monkeypatch.setattr(tool.client, "run_task", fake_run)
+
+    class Robot:
+        msg_type = "group"
+        group_id = "g1"
+        user_id = "u1"
+        user_name = "小明"
+        msg = "原问题"
+
+        def reply(self, text):
+            pass
+
+        def reply_chunked(self, text):
+            raise RuntimeError("QQ send failed")
+
+        def send_file(self, path):
+            pass
+
+    class AI:
+        ai_message = {"tool_calls": [{"id": "1", "function": {
+            "name": "dsh_agent", "arguments": '{"task": "写脚本"}'}}]}
+        handled_summary = ""
+        user_text = ""
+        reasoning_content = ""
+
+    tool.dsh_agent_call(Robot(), AI())
+
+    row = db.fetch_data(
+        "SELECT status, error FROM tool_usage WHERE tool_name='dsh_agent'",
+    )[0]
+    assert row[0] == "error"
+    assert "delivery_failed" in row[1]

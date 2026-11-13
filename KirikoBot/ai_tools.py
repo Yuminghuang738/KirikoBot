@@ -1416,7 +1416,9 @@ class DshAgentTool:
         if status == "unavailable":
             status = "error"
         if delivery_error:
+            # 结果没送到用户手里 = 这条任务没完成到「可发送」，按 error 记。
             meta["error"] = f"delivery_failed: {delivery_error}"
+            status = "error"
         if self.db and task_id:
             try:
                 self.db.finish_dsh_task(
