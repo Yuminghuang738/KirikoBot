@@ -154,7 +154,7 @@ def _as_messages(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def summarize_older(older: list[dict[str, Any]], key: str) -> str:
-    """把 raw 窗口之外最近的 48 条压成 ≤400 字摘要；空输入返回 ''。
+    """把 raw 窗口之外最近的 48 条压成 ≤500 字摘要；空输入返回 ''。
 
     只取最近 48 条：线上是每 24 条滚动摘要，而 eval 一次性压全部旧消息；
     不设上限时真实样本会出现 4000+ 条、直接把上下文撑爆。
@@ -183,7 +183,7 @@ def summarize_older(older: list[dict[str, Any]], key: str) -> str:
     }
     raw = _post(payload, key, tag="summary")
     summary, _ = _parse_summary(raw)
-    # 与线上一致：截到 400 字，并过滤指令性行。
+    # 与线上一致：截到 500 字（句末），并过滤指令性行。
     return _clean_summary(summary)
 
 
