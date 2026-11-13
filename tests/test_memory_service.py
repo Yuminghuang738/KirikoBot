@@ -64,7 +64,7 @@ def test_trigger_compresses_oldest_24(db, chat_calls):
     assert latest["msg_count"] == 24
     assert len(chat_calls) == 1
     _, kwargs = chat_calls[0]
-    assert kwargs["max_tokens"] == 350
+    assert kwargs["max_tokens"] == 800
     assert kwargs["temperature"] == 0.2
     assert kwargs["thinking"] is False
     assert kwargs["source"] == "summary"
@@ -251,3 +251,59 @@ def test_retry_state_cleared_after_success(db, chat_calls, monkeypatch):
     )
     assert memory_service.maybe_summarize(db, "u1", "g1") is True
     assert db.get_state(memory_service._retry_key("u1", "g1")) == ""
+
+
+# ── 摘要质量：纯文本、解析失败不污染、句末截断 ──────────────────
+
+def test_summary_prompt_requires_plain_text_and_key_facts():
+    prompt = memory_service.SUMMARY_SYSTEM
+    for keyword in ("人名", "日期", "约定", "未完成", "纯文本", "不要 JSON"):
+        assert keyword in prompt
+
+
+def test_parse_summary_plain_text_with_facts():
+    raw = "用户上周在准备概率论考试，还答应了帮朋友听录音。\n事实：用户在准备概率论考试\n事实：用户答应帮朋友听录音"
+    summary, facts = memory_service._parse_summary(raw)
+
+    assert summary == "用户上周在准备概率论考试，还答应了帮朋友听录音。"
+    assert facts == ["用户在准备概率论考试", "用户答应帮朋友听录音"]
+
+
+def test_parse_summary_never_returns_json_shell():
+    # 被 max_tokens 截断、没闭合的 JSON：要么剥壳出 summary，要么作废，绝不返回原文
+    raw = '{\n"summary": "用户问 Linux 驱动模型'
+    summary, _ = memory_service._parse_summary(raw)
+    assert not summary.startswith("{")
+    assert "\"summary\"" not in summary
+
+
+def test_parse_summary_rejects_broken_json():
+    assert memory_service._parse_summary('{"foo": ') == ("", [])
+    assert memory_service._parse_summary("[ERROR] timeout") == ("", [])
+
+
+def test_truncate_summary_cuts_at_sentence_end():
+    text = "甲。" * 150 + "乙" * 200   # 前 300 字符句末，之后全是词中
+    out = memory_service._truncate_summary(text, 400)
+
+    assert len(out) <= 400
+    assert out.endswith("。")
+    assert "乙" not in out
+
+
+def test_clean_summary_drops_json_shell_and_truncates():
+    text = "正常内容。" * 100
+    out = memory_service._clean_summary(text)
+    assert len(out) <= memory_service.Config.MEMORY_SUMMARY_MAX_CHARS
+    assert out.endswith("。")
+
+
+def test_truncated_json_shell_is_not_saved(db, monkeypatch):
+    _seed(db, n=25)
+    monkeypatch.setattr(
+        memory_service, "quick_chat",
+        lambda *a, **k: '{\n"summary": "用户问 Linux 驱动模型',
+    )
+
+    assert memory_service.maybe_summarize(db, "u1", "g1") is False
+    assert _count(db) == 0
