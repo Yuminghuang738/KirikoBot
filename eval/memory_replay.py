@@ -176,7 +176,7 @@ def summarize_older(older: list[dict[str, Any]], key: str) -> str:
             {"role": "system", "content": SUMMARY_SYSTEM},
             {"role": "user", "content": "新的聊天记录：\n" + "\n".join(lines)},
         ],
-        "max_tokens": 350,
+        "max_tokens": 800,
         "temperature": 0.2,
         "thinking": {"type": "disabled"},
         "stream": False,
