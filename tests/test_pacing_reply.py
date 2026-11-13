@@ -29,13 +29,43 @@ class TestSplitIntoPacingChunks:
         text = "对比：\n| 方案 | 效果 |\n| A | 好 |\n| B | 差 |"
         assert split_into_pacing_chunks(text) == [text]
 
-    def test_newlines_without_sentence_endings_are_not_forced_apart(self):
-        """模型可能只为排版换行；没有可靠句末时宁可不拆，避免割断完整语义。"""
+    def test_newlines_without_sentence_endings_still_split(self):
+        """2026-11 回归：模型改用换行断句后，行尾没有句末标点也要按行拆。"""
         text = (
             "module_param 是把外面的参数引进来，变量还是在模块内部\n"
             "EXPORT_SYMBOL 才是把符号放进内核符号表供别人引用\n"
             "两个方向正好相反，不能混在一块"
         )
+        chunks = split_into_pacing_chunks(text)
+        assert len(chunks) == 3
+        assert chunks[0].startswith("module_param")
+        assert chunks[1].startswith("EXPORT_SYMBOL")
+        assert chunks[2] == "两个方向正好相反，不能混在一块"
+
+    def test_four_plain_lines_merge_to_three_without_losing_content(self):
+        text = (
+            "第一行内容够长但是没句号\n"
+            "第二行内容够长但是没句号\n"
+            "第三行内容够长但是没句号\n"
+            "第四行内容够长但是没句号"
+        )
+        chunks = split_into_pacing_chunks(text, max_chunks=3)
+        assert len(chunks) == 3
+        assert "\n".join(chunks).replace("\n", "") == text.replace("\n", "")
+
+    @pytest.mark.parametrize("ending", ["，", "；", "：", "、", "（"])
+    def test_line_ending_with_soft_punctuation_is_not_a_boundary(self, ending):
+        """行尾是逗号/分号/冒号/顿号/开括号说明没说完，不能单独成段。"""
+        text = f"第一行写得足够长但结尾是{ending}\n第二行也够长没有句末标点"
+        assert split_into_pacing_chunks(text) == [text]
+
+    def test_comma_inside_closing_quote_is_still_not_a_boundary(self):
+        """行尾是「，”」时，去掉闭引号后仍是没说完的逗号，不能成段。"""
+        text = "他说“你先别急，”\n后面的话还没说完呢真的"
+        assert split_into_pacing_chunks(text) == [text]
+
+    def test_short_line_blocks_the_newline_boundary_rule(self):
+        text = "好\n这行其实够长但没有句末标点"
         assert split_into_pacing_chunks(text) == [text]
 
     def test_complete_newline_sentences_split_into_chunks(self):
