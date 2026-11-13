@@ -79,8 +79,10 @@ class TestDshAgentToolExecution:
         # 模拟 client.run_task 返回结果
         run_calls = []
 
-        def fake_run(task, session_key="", timeout=None):
+        def fake_run(task, session_key="", timeout=None, meta=None):
             run_calls.append((task, session_key))
+            if meta is not None:
+                meta["status"] = "ok"
             return "代码已经生成并执行完毕：\nprint('success')"
 
         monkeypatch.setattr(tool.client, "run_task", fake_run)
@@ -110,7 +112,13 @@ class TestDshAgentToolExecution:
     def test_tool_call_fallback_to_robot_msg_when_args_empty(self, monkeypatch):
         tool = DshAgentTool(object())
         run_calls = []
-        monkeypatch.setattr(tool.client, "run_task", lambda task, session_key="": run_calls.append(task) or "done")
+        def fake_run(task, session_key="", timeout=None, meta=None):
+            run_calls.append(task)
+            if meta is not None:
+                meta["status"] = "ok"
+            return "done"
+
+        monkeypatch.setattr(tool.client, "run_task", fake_run)
 
         robot = FakeRobot("帮我计算哈希值")
         ai = FakeAI({})  # 无 task 参数
