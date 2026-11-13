@@ -376,3 +376,21 @@ def test_summarize_results_reports_means_and_lengths():
     assert summary["score_means"]["memory"] == {"baseline": 3.5, "layered": 4.0, "diff": 0.5}
     assert summary["anchor_hit_rate"] == {"baseline": 0.5, "layered": 1.0, "delta_pp": 50.0}
     assert summary["reply_len_mean"] == {"baseline": 2.5, "layered": 4.5}
+
+
+def test_anchor_in_summary_is_case_insensitive(tmp_path, monkeypatch):
+    db = _make_db(tmp_path)
+    case = {
+        "case_id": "G003", "user_id": "g_user0", "group_id": "700000",
+        "target_history_id": 42, "anchor_history_id": 1, "anchor_fact_short": "Tele",
+        "anchor_semantic": "Telegram", "category": "group", "kind": "case",
+    }
+    monkeypatch.setattr(memory_replay, "_read_token", lambda: "k")
+    monkeypatch.setattr(memory_replay, "summarize_older", lambda older, key: "用户提到 telegram 的使用")
+    monkeypatch.setattr(memory_replay, "generate_reply", lambda *a, **k: "回复")
+    monkeypatch.setattr(memory_replay, "judge_call", lambda *a, **k: {})
+    monkeypatch.setattr(memory_replay, "anchor_call", lambda *a, **k: None)
+
+    payload = memory_replay.run([case], db)
+
+    assert payload["results"][0]["anchor_in_summary"] is True

@@ -353,7 +353,7 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
             "summary": summary,
             "anchor_fact_short": anchor_short,
             "anchor_fact_semantic": anchor_semantic,
-            "anchor_in_summary": bool(anchor_short and anchor_short in summary),
+            "anchor_in_summary": bool(anchor_short and anchor_short.lower() in summary.lower()),
             "baseline_reply": baseline_reply,
             "layered_reply": layered_reply,
             "variants": {
