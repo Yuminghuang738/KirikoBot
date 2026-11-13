@@ -107,3 +107,17 @@ def test_takeout_chat_history_limit_param(db):
     # limit 参数返回的是最近 3 条，仍按旧→新排序
     rows = db.takeout_chat_history("u1", "g1", limit=3)
     assert rows[-1][1] == "msg9"
+
+
+def test_maintenance_prunes_old_summaries(db):
+    import maintenance_service
+
+    db.save_summary("u1", "g1", "g1", 1, 24, "很老的摘要")
+    db.execute_action(
+        "UPDATE conversation_summaries SET created_at = '2000-01-01 00:00:00'",
+    )
+
+    deleted = maintenance_service.prune_old_data(db, days=1)
+
+    assert deleted.get("conversation_summaries") == 1
+    assert _count(db) == 0
