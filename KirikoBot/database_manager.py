@@ -367,6 +367,7 @@ class DatabaseManager:
                         id                INTEGER PRIMARY KEY AUTOINCREMENT,
                         user_id           TEXT NOT NULL,
                         group_id          TEXT NOT NULL,
+                        scope             TEXT DEFAULT 'group',
                         user_name         TEXT NOT NULL,
                         affection_score   REAL DEFAULT 50.0,
                         interaction_count INTEGER DEFAULT 0,
@@ -387,6 +388,7 @@ class DatabaseManager:
                         id         INTEGER PRIMARY KEY AUTOINCREMENT,
                         user_id    TEXT NOT NULL,
                         group_id   TEXT NOT NULL,
+                        scope      TEXT DEFAULT 'group',
                         date       TEXT NOT NULL,
                         delta      REAL DEFAULT 0,
                         event      TEXT DEFAULT 'misc',
@@ -398,6 +400,10 @@ class DatabaseManager:
                     "ALTER TABLE user_affection ADD COLUMN streak_days INTEGER DEFAULT 0",
                     "ALTER TABLE user_affection ADD COLUMN last_seen_date TEXT DEFAULT ''",
                     "ALTER TABLE user_affection_log ADD COLUMN event TEXT DEFAULT 'misc'",
+                    # 阶段 6：群/私聊分量。旧行默认 group，私聊分量用 group_id=''，
+                    # 重复执行安全；不 backfill、不建汇总表。
+                    "ALTER TABLE user_affection ADD COLUMN scope TEXT DEFAULT 'group'",
+                    "ALTER TABLE user_affection_log ADD COLUMN scope TEXT DEFAULT 'group'",
                 ):
                     try:
                         connect.execute(stmt)

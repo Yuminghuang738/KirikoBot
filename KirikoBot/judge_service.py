@@ -53,11 +53,12 @@ class JudgeService:
     def judge_turn(self, db: Any, robot: Any, *, affection_on: bool = True) -> dict[str, Any] | None:
         """Judge the sentiment of the current message. Returns a summary dict, or
         None on any failure. Never raises."""
-        if not affection_on or not robot.group_id:
+        if not affection_on:
             return None
 
+        group_id = getattr(robot, "group_id", None) or ""
         record = AffectionService.get_or_create(
-            db, robot.user_id, robot.group_id, robot.user_name,
+            db, robot.user_id, group_id, robot.user_name,
         )
         raw = self._call_api(self._build_prompt(robot, record))
         if raw is None:
@@ -71,7 +72,7 @@ class JudgeService:
         if abs(delta) >= self.MIN_DELTA:
             # 情绪分单条 ±0.3、正负分别有每日净额上限（钳制在 service 里）。
             new_score = AffectionService.apply_judge_delta(
-                db, robot.user_id, robot.group_id, robot.user_name, sentiment=delta,
+                db, robot.user_id, group_id, robot.user_name, sentiment=delta,
             )
 
         logger.info(
@@ -84,7 +85,11 @@ class JudgeService:
     # ── Prompt ────────────────────────────────────────────
 
     def _build_prompt(self, robot: Any, record: dict[str, Any] | None) -> str:
-        lines = [f"【待判断消息】\n群「{robot.group_name or ''}」中用户 {robot.user_name} 说：{robot.msg}"]
+        if getattr(robot, "group_id", None):
+            where = f"群「{robot.group_name or ''}」中用户 {robot.user_name} 说："
+        else:
+            where = f"私聊中用户 {robot.user_name} 说："
+        lines = [f"【待判断消息】\n{where}{robot.msg}"]
 
         if record is not None:
             label, _ = AffectionService.get_relationship(record["affection_score"])

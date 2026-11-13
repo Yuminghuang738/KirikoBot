@@ -80,7 +80,9 @@ def test_the_speaker_block_has_no_learning_text(db, monkeypatch):
         user_id = "u1"
         user_name = "小明"
 
-    assert main._speaker_context(Robot(), set()) == ""
+    block = main._speaker_context(Robot(), set())
+    assert "learning" not in block.lower()
+    assert "学习" not in block
 
 
 def test_the_learning_table_is_dropped_on_startup(db_file):
