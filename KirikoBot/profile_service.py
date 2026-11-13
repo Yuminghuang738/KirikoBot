@@ -30,12 +30,17 @@ from __future__ import annotations
 import json
 import re
 import logging
+import threading
 from typing import Any
 
 from ai_server import quick_chat
 from config import Config
 
 logger = logging.getLogger(__name__)
+
+# 私聊消息进入画像取样后，很多用户会同时达到重分析阈值。分析一次要调模型，
+# 2 核 1.6G 的机器扛不住 59 个并发；拿不到信号量就跳过本轮，下条消息再试。
+MAX_CONCURRENT_ANALYSES = 2
 
 
 def normalize_profile(data: Any) -> dict[str, Any]:
@@ -178,6 +183,8 @@ class ProfileService:
     def __init__(self) -> None:
         self._analyzing: set[str] = set()  # prevent duplicate analysis
         self._extracting: set[str] = set()  # 记忆提取的并发保护
+        # 每个服务实例一份信号量；生产只用一个实例，测试之间也不会互相卡住。
+        self._analysis_semaphore = threading.BoundedSemaphore(MAX_CONCURRENT_ANALYSES)
 
     @staticmethod
     def _is_bot(user_id: str) -> bool:
@@ -210,11 +217,15 @@ class ProfileService:
             return None
         if self._is_bot(user_id):
             return None
+        if not self._analysis_semaphore.acquire(blocking=False):
+            logger.info("Profile analysis skipped for %s: concurrency limit", user_id)
+            return None
         self._analyzing.add(user_id)
         try:
             return self._do_analyze(db, user_id, user_name, group_id)
         finally:
             self._analyzing.discard(user_id)
+            self._analysis_semaphore.release()
 
     def should_extract_memory(self, db: Any, user_id: str) -> bool:
         """累计够 MEMORY_GAP 轮 bot 对话，才提取一次。计数的是 bot 对话轮数，不是群聊条数。"""
@@ -244,6 +255,15 @@ class ProfileService:
                 f"{'Kiriko' if role == 'assistant' else user_name}: {str(content)[:160]}"
                 for role, content in rows
             )
+            # 有摘要时先给模型「更早发生的事」，否则最近窗口一滑走，
+            # 之前约定过的内容就再也进不了长期记忆。
+            try:
+                latest = db.get_latest_summary_any_scope(user_id)
+            except Exception:
+                latest = None
+            summary = ((latest or {}).get("summary") or "").strip()
+            if summary:
+                convo = f"摘要（较早的对话）：{summary[:400]}\n" + convo
             if not convo.strip():
                 return []
             raw = quick_chat(self.MEMORY_SYSTEM, convo, max_tokens=300, temperature=0.2,

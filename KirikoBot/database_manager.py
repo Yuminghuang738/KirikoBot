@@ -634,6 +634,22 @@ class DatabaseManager:
             logger.exception("save_summary failed for %s/%s", user_id, scope_id)
             return False
 
+    def get_latest_summary_any_scope(self, user_id: str) -> dict[str, Any] | None:
+        """该用户任意 scope 的最新摘要（画像提取时拼在最近对话前）。"""
+        rows = self.fetch_data(
+            "SELECT id, scope_id, from_history_id, to_history_id, summary, facts_json, msg_count "
+            "FROM conversation_summaries WHERE user_id = ? ORDER BY id DESC LIMIT 1",
+            (user_id,),
+        )
+        if not rows:
+            return None
+        return {
+            "id": rows[0][0], "scope_id": rows[0][1],
+            "from_history_id": rows[0][2], "to_history_id": rows[0][3],
+            "summary": rows[0][4] or "", "facts_json": rows[0][5] or "[]",
+            "msg_count": rows[0][6] or 0,
+        }
+
     def list_recent_summaries(self, user_id: str, scope_id: str,
                               limit: int = 6) -> list[dict[str, Any]]:
         rows = self.fetch_data(
@@ -734,19 +750,48 @@ class DatabaseManager:
     ) -> list[tuple[Any, ...]]:
         """这个用户说过的话 —— **跨所有群 + 私聊**。
 
-        画像是全局一份，所以取样也必须跨群：只在当前群取样会让画像变成「他在这个
-        群的样子」，而不是「他这个人」。
+        画像是全局一份，所以取样也必须跨群；私聊消息只存在历史表
+        （``history.role='user'``，group_id 为 NULL），以前漏了它，导致占
+        85% 对话量的私聊完全不进画像。两表按 (content, 分钟) 去重，避免在群里
+        对 bot 说的话被算两次。
         """
-        return self.fetch_data(
-            "SELECT content, timestamp FROM group_messages "
-            "WHERE user_id = ? ORDER BY id DESC LIMIT ?",
-            (user_id, limit),
-        )
+        try:
+            rows = self.fetch_data(
+                "SELECT content, timestamp FROM group_messages WHERE user_id = ? "
+                "UNION ALL "
+                "SELECT content, timestamp FROM history "
+                "WHERE user_id = ? AND role = 'user'",
+                (user_id, user_id),
+            )
+        except sqlite3.Error:
+            logger.exception("get_user_messages failed for %s", user_id)
+            return []
+        seen: set[tuple[str, str]] = set()
+        merged: list[tuple[Any, ...]] = []
+        for content, timestamp in rows:
+            text = (content or "").strip()
+            if not text:
+                continue
+            key = (text, str(timestamp or "")[:16])
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append((content, timestamp))
+        merged.sort(key=lambda r: str(r[1] or ""), reverse=True)
+        return merged[:limit]
 
     def count_user_messages(self, user_id: str) -> int:
-        """这个用户一共说过多少话（跨所有群 + 私聊）。"""
+        """这个用户一共说过多少话（跨所有群 + 私聊，按内容+分钟去重）。"""
         rows = self.fetch_data(
-            "SELECT COUNT(*) FROM group_messages WHERE user_id = ?", (user_id,)
+            "SELECT COUNT(*) FROM ("
+            "  SELECT DISTINCT content, substr(timestamp, 1, 16) FROM ("
+            "    SELECT content, timestamp FROM group_messages WHERE user_id = ? "
+            "    UNION ALL "
+            "    SELECT content, timestamp FROM history "
+            "    WHERE user_id = ? AND role = 'user'"
+            "  ) WHERE content IS NOT NULL AND content <> ''"
+            ")",
+            (user_id, user_id),
         )
         return rows[0][0] if rows else 0
 
