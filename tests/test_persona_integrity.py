@@ -7,6 +7,8 @@ rule is present, and the outgoing-reply guard actually catches a recital.
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from prompt_builder import (LEAK_MARKERS, PERSONA, deflection_for,
@@ -94,13 +96,19 @@ class TestPersonaIsPresentAndWhole:
     def test_the_daily_routine_section(self):
         section = _persona_section("【你的日常】", "【你的性格】")
         assert "闹钟定三个" in section
-        assert "充电宝买了三个丢了两个" in section
+        assert "洗澡的时候会唱歌" in section
         assert "多肉" in section
 
     def test_the_relationship_ladder_section(self):
         section = _persona_section("【关系是分层的】", "【你的爱好】")
         for word in ("不熟", "眼熟", "熟人", "亲密", "被表白", "不站队", "不翻脸"):
             assert word in section, f"关系分层缺少 {word}"
+
+    def test_every_persona_header_is_a_leak_marker(self):
+        """PERSONA 里每个【…】标题都必须在 LEAK_MARKERS 里，防止新增章节漏标。"""
+        headers = re.findall(r"^【[^】]+】", PERSONA, re.M)
+        missing = [h for h in headers if h not in LEAK_MARKERS]
+        assert not missing, f"标题未进泄露标记: {missing}"
 
     def test_the_chat_rhythm_section(self):
         section = _persona_section("【聊天的节奏】", "【说话的语感】")
