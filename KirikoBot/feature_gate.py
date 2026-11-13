@@ -1,9 +1,10 @@
 """Per-group / per-user feature toggles.
 
-Every feature defaults to ON. Settings are stored in the `feature_settings`
-DB table; `settings_json` only contains DISABLED keys ({"weather": false}).
-Missing row / missing key → enabled. Scope: ('group', group_id) for group
-chats, ('user', user_id) for private chats.
+Most features default to ON. Settings are stored in the `feature_settings`
+DB table; `settings_json` stores DISABLED keys ({"weather": false}) and, for
+the few features listed in `FEATURE_DEFAULTS` as off, an explicit `true` to
+turn them on. Missing row / missing key → the default. Scope: ('group',
+group_id) for group chats, ('user', user_id) for private chats.
 """
 from __future__ import annotations
 
@@ -41,9 +42,16 @@ FEATURE_DEFS: list[dict[str, str]] = [
     {"key": "voice",           "label": "语音回复",     "category": "群功能",   "desc": "偶尔直接用语音说话，而不是打字（需要 QQ 的 AI 语音功能）"},
     {"key": "dsh_agent",       "label": "超级大脑",     "category": "重度任务", "desc": "调用本地 DeepSeek Harness 智能体执行复杂编程与深度分析"},
     {"key": "send_file",       "label": "发送文件",     "category": "群功能",   "desc": "允许机器人向群聊或私聊发送本地文件"},
+    {"key": "memory_layers",   "label": "记忆分层",     "category": "对话",     "desc": "较早对话滚动压缩成摘要，原文窗口扩到 24 条（默认关，试点开启）"},
 ]
 
 FEATURE_KEYS: list[str] = [f["key"] for f in FEATURE_DEFS]
+
+# 默认关的功能。必须显式写 true 才能打开；删除该键 = 回到默认关。
+# 注意与 disabled_keys 的语义区分：这里没有出现 = 默认开。
+FEATURE_DEFAULTS: dict[str, bool] = {
+    "memory_layers": False,
+}
 FEATURE_LABELS: dict[str, str] = {f["key"]: f["label"] for f in FEATURE_DEFS}
 VALID_SCOPES: tuple[str, ...] = ("group", "user")
 
@@ -114,11 +122,27 @@ class FeatureGate:
             return set()
 
     def is_enabled(self, scope_type: str, scope_id: str, key: str) -> bool:
-        return key not in self.disabled_keys(scope_type, scope_id)
+        if key not in FEATURE_KEYS:
+            return True
+        try:
+            raw = self._raw_json(scope_type, scope_id)
+        except Exception:
+            logger.exception("Failed to read feature settings for %s:%s", scope_type, scope_id)
+            return FEATURE_DEFAULTS.get(key, True)
+        if key in raw:
+            return bool(raw[key])
+        return FEATURE_DEFAULTS.get(key, True)
 
     def effective_map(self, scope_type: str, scope_id: str) -> dict[str, bool]:
-        disabled = self.disabled_keys(scope_type, scope_id)
-        return {k: k not in disabled for k in FEATURE_KEYS}
+        try:
+            raw = self._raw_json(scope_type, scope_id)
+        except Exception:
+            logger.exception("Failed to read feature settings for %s:%s", scope_type, scope_id)
+            raw = {}
+        return {
+            k: (bool(raw[k]) if k in raw else FEATURE_DEFAULTS.get(k, True))
+            for k in FEATURE_KEYS
+        }
 
     def set_enabled(self, scope_type: str, scope_id: str, key: str, enabled: bool) -> dict[str, bool]:
         if scope_type not in VALID_SCOPES:
@@ -126,10 +150,18 @@ class FeatureGate:
         if key not in FEATURE_KEYS:
             raise ValueError(f"unknown feature key: {key}")
         data = self._raw_json(scope_type, scope_id)
+        default_on = FEATURE_DEFAULTS.get(key, True)
         if enabled:
-            data.pop(key, None)
+            # 默认开的 key：删除记录即回到开；默认关的 key：必须显式写 true。
+            if default_on:
+                data.pop(key, None)
+            else:
+                data[key] = True
         else:
-            data[key] = False
+            if default_on:
+                data[key] = False
+            else:
+                data.pop(key, None)
         if data:
             self.db.execute_action(
                 "INSERT INTO feature_settings(scope_type, scope_id, settings_json) "
