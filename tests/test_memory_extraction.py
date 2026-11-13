@@ -193,12 +193,12 @@ class TestTriggerFiresForPrivateChats:
         main._trigger_profile_update(self._Robot("private", None), set())
         assert "extract_memories" in submitted
 
-    def test_private_chats_do_not_trigger_profile_analysis(self, db, wired):
-        """画像分析的原有行为不变：只在群里触发。"""
+    def test_private_chats_trigger_profile_analysis_too(self, db, wired):
+        """阶段 6：画像是「这个人」唯一的一份，私聊也要触发。"""
         main, submitted = wired
         _talk(db, "u1", ProfileService.MEMORY_GAP)
         main._trigger_profile_update(self._Robot("private", None), set())
-        assert "analyze_user" not in submitted
+        assert "analyze_user" in submitted
 
     def test_a_group_message_submits_both_jobs(self, db, wired):
         main, submitted = wired
