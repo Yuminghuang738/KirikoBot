@@ -281,6 +281,72 @@ def test_anchor_in_summary_is_case_insensitive(tmp_path, monkeypatch):
     assert payload["results"][0]["anchor_in_summary"] is True
 
 
+def test_token_cost_counts_summary_generation(tmp_path, monkeypatch):
+    """layered 的成本必须含摘要生成侧：生产 generate_summary 走 ai_metrics sink。"""
+    db = _make_db(tmp_path)
+    monkeypatch.setattr(memory_replay, "_read_token", lambda: "k")
+
+    def fake_summarize(older, key):
+        memory_replay.ai_metrics.record(
+            source="summary", kind="quick",
+            usage={"usage": {"prompt_tokens": 1000, "completion_tokens": 50}},
+        )
+        return "摘要"
+
+    def fake_reply(hist, user, key, tag=""):
+        memory_replay._record_usage(tag, {"prompt_tokens": 100, "completion_tokens": 10})
+        return "回复"
+
+    monkeypatch.setattr(memory_replay, "summarize_older", fake_summarize)
+    monkeypatch.setattr(memory_replay, "generate_reply", fake_reply)
+    monkeypatch.setattr(memory_replay, "judge_call", lambda *a, **k: {})
+    monkeypatch.setattr(memory_replay, "anchor_call", lambda *a, **k: None)
+
+    payload = memory_replay.run([_case()], db)
+    cost = payload["token_cost"]
+
+    assert cost["summary_prompt_tokens"] == 1000
+    assert cost["summary_calls"] == 1
+    assert cost["variants"]["layered"]["prompt_tokens"] - cost["variants"]["raw24"]["prompt_tokens"] == 1000
+
+
+def test_summary_sink_ignores_other_sources():
+    memory_replay._SUMMARY_METRICS.update(
+        {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cache_hit_tokens": 0},
+    )
+    memory_replay._summary_sink({"source": "judge", "prompt_tokens": 999})
+    memory_replay._summary_sink({"source": "summary", "prompt_tokens": 120,
+                                "completion_tokens": 30, "cache_hit_tokens": 80})
+
+    assert memory_replay._SUMMARY_METRICS == {
+        "calls": 1, "prompt_tokens": 120, "completion_tokens": 30, "cache_hit_tokens": 80,
+    }
+
+
+# ── 摘要成本单跑 ─────────────────────────────────────────────────
+
+def test_measure_summary_cost_reports_tokens_and_lengths(tmp_path, monkeypatch):
+    db = _make_db(tmp_path)
+    monkeypatch.setattr(memory_replay, "_read_token", lambda: "k")
+
+    def fake_summarize(older, key):
+        memory_replay.ai_metrics.record(
+            source="summary", kind="quick",
+            usage={"usage": {"prompt_tokens": 700, "completion_tokens": 40}},
+        )
+        return "摘要。"
+
+    monkeypatch.setattr(memory_replay, "summarize_older", fake_summarize)
+
+    payload = memory_replay.measure_summary_cost([_case()], db)
+
+    assert payload["summary_count"] == 1
+    assert payload["end_punct"] == 1
+    assert payload["over_limit"] == 0
+    assert payload["usage"]["calls"] == 1
+    assert payload["usage"]["prompt_tokens"] == 700
+
+
 # ── 汇总 ─────────────────────────────────────────────────────────
 
 def test_summarize_results_reads_scores_dim_variant_shape():

@@ -33,6 +33,7 @@ from memory_service import (  # noqa: E402
 )
 from prompt_builder import PERSONA  # noqa: E402
 
+import ai_metrics  # noqa: E402
 import requests  # noqa: E402
 
 MODEL = os.getenv("DEEPSEEK_MODEL") or "deepseek-flash"
@@ -67,6 +68,26 @@ ANCHOR_SYSTEM = """你只回答一个 yes/no 问题：候选回复是否**正确
 
 
 _USAGE: list[dict[str, Any]] = []
+
+# 摘要走生产 `generate_summary` → `quick_chat(..., source="summary")`，不经过本文件的
+# `_post`；这里接住 ai_metrics 的 sink，把摘要生成侧的真实 token 也算进 layered 成本。
+_SUMMARY_METRICS: dict[str, int] = {
+    "calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cache_hit_tokens": 0,
+}
+
+
+def _summary_sink(entry: dict[str, Any]) -> None:
+    if (entry or {}).get("source") != "summary":
+        return
+    _SUMMARY_METRICS["calls"] += 1
+    for field in ("prompt_tokens", "completion_tokens", "cache_hit_tokens"):
+        _SUMMARY_METRICS[field] += int(entry.get(field) or 0)
+
+
+def _wire_summary_metrics() -> None:
+    for field in _SUMMARY_METRICS:
+        _SUMMARY_METRICS[field] = 0
+    ai_metrics.set_sink(_summary_sink)
 
 
 def _record_usage(tag: str, usage: Any) -> None:
@@ -304,6 +325,7 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
         dry_run: bool = False) -> dict[str, Any]:
     key = "" if dry_run else _read_token()
     _USAGE.clear()
+    _wire_summary_metrics()
     conn = connect_ro(db_path)
     results: list[dict[str, Any]] = []
 
@@ -369,10 +391,12 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
     summary_stats = summarize_results(results)
     usage = _usage_summary()
     baseline_tokens = usage.get("baseline", {}).get("prompt_tokens", 0)
-    summary_tokens = usage.get("summary", {}).get("prompt_tokens", 0)
+    summary_tokens = _SUMMARY_METRICS["prompt_tokens"] or usage.get("summary", {}).get("prompt_tokens", 0)
     token_cost: dict[str, Any] = {
         "baseline_prompt_tokens": baseline_tokens,
         "summary_prompt_tokens": summary_tokens,
+        "summary_calls": _SUMMARY_METRICS["calls"],
+        "summary_completion_tokens": _SUMMARY_METRICS["completion_tokens"],
         "variants": {},
     }
     for variant in VARIANTS[1:]:
@@ -396,6 +420,41 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
             "四变体 baseline16 / raw24 / raw48 / layered(24+摘要)，"
             "结论只用于相对比较，不代表完整生产链路。"
         ),
+    }
+
+
+def measure_summary_cost(cases: list[dict[str, Any]], db_path: str,
+                         dry_run: bool = False) -> dict[str, Any]:
+    """只跑摘要生成，量真实 token / 调用次数 / 长度，不跑回复与 judge。
+
+    用途：四变体 A/B 已跑完但摘要 token 漏记时，补这一趟即可算准 layered 成本。
+    """
+    key = "" if dry_run else _read_token()
+    _wire_summary_metrics()
+    conn = connect_ro(db_path)
+    lengths: list[int] = []
+    end_punct = 0
+    for case in cases:
+        rows = fetch_context_rows(conn, case)
+        if len(rows) < 2 or rows[-1]["role"] != "user":
+            continue
+        older = rows[:-1][:-LAYERED_RAW]
+        summary = "" if dry_run else summarize_older(older, key)
+        if not summary:
+            continue
+        lengths.append(len(summary))
+        if summary.rstrip().endswith(("。", "！", "？", "…", "」", "】", "!", "?")):
+            end_punct += 1
+    return {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "dry_run": dry_run,
+        "db": Path(db_path).name,
+        "summary_count": len(lengths),
+        "summary_len_mean": _mean([float(n) for n in lengths]),
+        "summary_len_max": max(lengths) if lengths else None,
+        "over_limit": sum(1 for n in lengths if n > SUMMARY_MAX_CHARS),
+        "end_punct": end_punct,
+        "usage": dict(_SUMMARY_METRICS),
     }
 
 
@@ -492,10 +551,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--out", default="")
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--summary-only", action="store_true",
+                        help="只跑摘要生成，量 token/长度，不跑回复与 judge")
     args = parser.parse_args(argv)
 
     raw = json.loads(Path(args.cases).read_text(encoding="utf-8"))
     cases = [*raw.get("cases", []), *raw.get("needles", [])]
+    if args.summary_only:
+        payload = measure_summary_cost(cases, args.db, dry_run=args.dry_run)
+        out = Path(args.out) if args.out else (
+            Path("eval/out") / f"summary_cost_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        )
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        print(f"-> {out}")
+        return 0
     payload = run(cases, args.db, limit=args.limit or None, dry_run=args.dry_run)
 
     out = Path(args.out) if args.out else (
