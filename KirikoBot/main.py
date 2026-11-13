@@ -238,7 +238,7 @@ def _memory_context(robot: Any) -> tuple[list[dict[str, Any]], str, bool]:
         )
         return history, summary, True
     except Exception:
-        logger.exception("memory_service.load_context 失败，本回合退回 16 条原文")
+        logger.exception("memory_service.load_context 失败，本回合退回 24 条原文")
         return _load_history(robot.user_id, robot.group_id), "", False
 
 

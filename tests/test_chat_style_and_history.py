@@ -13,9 +13,9 @@ import pytest
 
 
 class TestHistoryDepth:
-    def test_the_cap_is_eight_turns_not_four(self):
+    def test_the_cap_is_twelve_turns(self):
         from chat_history import MAX_HISTORY
-        assert MAX_HISTORY == 16, "16 条消息 = 8 轮；8 条只有 4 轮，是实测的注意力瓶颈"
+        assert MAX_HISTORY == 24, "24 条消息 = 12 轮；阶段 3 从 16 条（8 轮）拉上来"
 
     def test_takeout_reaches_past_the_old_twelve_row_limit(self, db):
         for i in range(30):
@@ -34,14 +34,14 @@ class TestHistoryDepth:
         roles = {r[0] for r in db.takeout_chat_history("u1", "g1")}
         assert roles <= {"user", "assistant"}
 
-    def test_loaded_history_fills_sixteen_messages_when_available(self, db):
+    def test_loaded_history_fills_twenty_four_messages_when_available(self, db):
         from chat_history import load_history
-        for i in range(12):
+        for i in range(20):
             db.deposit_chat_history("user", "u1", "g1", f"问{i}", "", "")
             db.deposit_chat_history("assistant", "u1", "g1", f"答{i}", "", "")
         history = load_history(db, "u1", "g1")
-        assert len(history) == 16
-        assert history[-1]["content"] == "答11", "最新的一轮必须在最后"
+        assert len(history) == 24
+        assert history[-1]["content"] == "答19", "最新的一轮必须在最后"
 
     def test_group_and_private_scopes_stay_separate(self, db):
         db.deposit_chat_history("user", "u1", "g1", "群里的话", "", "")

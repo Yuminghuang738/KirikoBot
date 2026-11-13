@@ -562,7 +562,7 @@ class DatabaseManager:
         self.deposit("tarot_history", "(user_id, card_name)", "(?, ?)", (user_id, card_name))
 
     # 上下文取数上限（原始行）。通用 takeout() 写死了 LIMIT 12，而 tool 行也占名额，
-    # 实际只能拿到 4 轮。这里专用一条 SQL：只取 user/assistant，取 40 行，足够装满 16 条消息。
+    # 实际只能拿到 4 轮。这里专用一条 SQL：只取 user/assistant，取 40 行，足够装满 24 条消息。
     CHAT_HISTORY_RAW_LIMIT = 40
 
     def takeout_chat_history(self, user_id: str, group_id: str | None,

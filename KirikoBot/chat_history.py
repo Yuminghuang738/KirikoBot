@@ -21,8 +21,9 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# 单位是**消息条数**（user + assistant 各算一条）。8 条 = 4 轮，是实测的注意力瓶颈。
-MAX_HISTORY = 16  # 8 轮
+# 单位是**消息条数**（user + assistant 各算一条）。16 条 = 8 轮曾是实测的注意力瓶颈，
+# 阶段 3 精简版拉到 24 条 = 12 轮（摘要层保持默认关，不引入额外调用）。
+MAX_HISTORY = 24  # 12 轮
 
 
 def to_messages(rows: list[Any]) -> list[dict[str, Any]]:
@@ -66,8 +67,8 @@ def load_history(db: Any, uid: str, gid: str | None,
                  raw_messages: int | None = None) -> list[dict[str, Any]]:
     """Recent turns for this user in this scope, oldest first.
 
-    ``raw_messages`` 默认仍是 16 条（3a 不改行为）；记忆分层试点时由
-    ``memory_service.load_context`` 显式传 24。
+    ``raw_messages`` 默认 24 条；记忆分层试点时由 ``memory_service.load_context``
+    显式传同一口径。
     """
     limit = raw_messages or MAX_HISTORY
     try:
