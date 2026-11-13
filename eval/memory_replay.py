@@ -43,7 +43,7 @@ API_URL = os.getenv("DEEPSEEK_API") or "https://api.deepseek.com/chat/completion
 BASELINE_RAW = 16
 LAYERED_RAW = 24
 SUMMARY_SOURCE_LIMIT = 48   # 摘要只看 raw 窗口之前最近 48 条，避免超长历史爆上下文
-SUMMARY_MAX_CHARS = 400
+SUMMARY_MAX_CHARS = 500
 DIMS = ("memory", "coherence", "persona", "natural", "leak")
 DIM_LABELS = {
     "memory": "记忆准确", "coherence": "连贯", "persona": "人设",
@@ -184,7 +184,7 @@ def summarize_older(older: list[dict[str, Any]], key: str) -> str:
     raw = _post(payload, key, tag="summary")
     summary, _ = _parse_summary(raw)
     # 与线上一致：截到 400 字，并过滤指令性行。
-    return _clean_summary(summary)[:SUMMARY_MAX_CHARS].strip()
+    return _clean_summary(summary)
 
 
 def generate_reply(history: list[dict[str, Any]], user_text: str, key: str,

@@ -188,7 +188,7 @@ def test_summarize_older_limits_to_recent_48_and_truncates(monkeypatch):
 
     summary = memory_replay.summarize_older(older, "k")
 
-    assert len(summary) == memory_replay.SUMMARY_MAX_CHARS   # 强制截到 400
+    assert len(summary) <= memory_replay.SUMMARY_MAX_CHARS   # 句末截断，交给 _clean_summary
     assert "OLD0" not in captured["text"]
     assert "OLD11" not in captured["text"]                   # 只保留最近 48 条
     assert "OLD12" in captured["text"]
