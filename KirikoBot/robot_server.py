@@ -237,7 +237,10 @@ def split_into_pacing_chunks(text: str, max_chunks: int = 3) -> list[str]:
     # 结构化内容和 URL 密集内容宁可一条发完，避免排版或链接被拆坏。
     if (
         "```" in text
-        or re.search(r"(?m)^\s*(?:[-+*]|\d+[.)、]|[①-⑳])\s*", text)
+        or re.search(
+            r"(?m)^\s*(?:[-+*]\s+|\d+[.)](?!\d)\s*|\d+、\s*|[①-⑳])\s*",
+            text,
+        )
         or "|" in text
     ):
         return [text]

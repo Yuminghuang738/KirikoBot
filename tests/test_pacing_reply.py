@@ -71,6 +71,35 @@ class TestSplitIntoPacingChunks:
         assert chunks[0] == "这个写法表面上能跑，但有个前提需要确认\n所以要先把空指针挡住再谈其他"
         assert chunks[1] == "不然它会直接在回调里崩溃掉"
 
+    def test_negative_number_at_line_start_is_not_a_list(self):
+        """`-1 在补码里…` 是正文，不是 Markdown 列表，不能整条单发。"""
+        text = (
+            "第一句讲原理这件事其实挺长的。\n"
+            "-1 在补码里是最大负数这点要知道。\n"
+            "第三句给结论不要搞混了。"
+        )
+        chunks = split_into_pacing_chunks(text)
+        assert len(chunks) == 3
+        assert chunks[1].startswith("-1 在补码里")
+
+    def test_pointer_deref_at_line_start_is_not_a_list(self):
+        text = (
+            "先看这个指针的用法其实很简单。\n"
+            "*x = 5 只是把值写进去而已。\n"
+            "再看下一段就明白了。"
+        )
+        chunks = split_into_pacing_chunks(text)
+        assert len(chunks) == 3
+
+    def test_decimal_at_line_start_is_not_a_list(self):
+        text = (
+            "先说结论这件事已经确认过了。\n"
+            "3.5 倍性能提升这点很明显。\n"
+            "最后说下怎么复现。"
+        )
+        chunks = split_into_pacing_chunks(text)
+        assert len(chunks) == 3
+
     def test_chinese_numbered_list_is_never_split(self):
         text = "几点：\n1、先看日志\n2、再复现\n3、最后改代码"
         assert split_into_pacing_chunks(text) == [text]
