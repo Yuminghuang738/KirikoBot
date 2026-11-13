@@ -43,7 +43,7 @@ API_URL = os.getenv("DEEPSEEK_API") or "https://api.deepseek.com/chat/completion
 BASELINE_RAW = 16
 LAYERED_RAW = 24
 SUMMARY_SOURCE_LIMIT = 48   # 摘要只看 raw 窗口之前最近 48 条，避免超长历史爆上下文
-SUMMARY_MAX_CHARS = 400
+SUMMARY_MAX_CHARS = 500
 DIMS = ("memory", "coherence", "persona", "natural", "leak")
 DIM_LABELS = {
     "memory": "记忆准确", "coherence": "连贯", "persona": "人设",
