@@ -26,7 +26,7 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 SUMMARY_SYSTEM = (
-    "你是 Kiriko 的对话记录整理器。把下面这段较早的聊天压缩成一段不超过 400 字的摘要，"
+    "你是 Kiriko 的对话记录整理器。把下面这段较早的聊天压缩成一段不超过 500 字的摘要，"
     "供 Kiriko 以后回忆。\n\n"
     "只写聊天里明确出现的事实。必须保留：人物/人名/称呼、日期与时间、约定与承诺、"
     "偏好与雷点、未完成的话题。\n"
