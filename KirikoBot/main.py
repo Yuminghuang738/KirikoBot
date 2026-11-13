@@ -33,6 +33,7 @@ from config import Config
 import ai_metrics
 import dashboard_auth
 from chat_history import load_history, save_turn
+import memory_service
 import webhook_auth
 from prompt_builder import (
     build_role_prompt,
@@ -216,6 +217,40 @@ def _save_turn(uid: str, gid: str | None, user_msg: str, ai_text: str,
                reasoning: str = "", tool_chain: str = "",
                handled: bool = False) -> None:
     save_turn(db, uid, gid, user_msg, ai_text, reasoning, tool_chain, handled)
+
+
+def _memory_context(robot: Any) -> tuple[list[dict[str, Any]], str, bool]:
+    """本回合的 (history, summary, memory_on)。
+
+    开关判断必须走 is_enabled：``disabled_keys`` 只认识「显式关闭」，
+    对 FEATURE_DEFAULTS 里默认关的 memory_layers 会误判为开。
+    """
+    scope_type, scope_id = feature_gate.scope_of(robot)
+    memory_on = bool(
+        Config.MEMORY_LAYERS_ENABLED
+        and feature_gate.is_enabled(scope_type, scope_id, "memory_layers")
+    )
+    if not memory_on:
+        return _load_history(robot.user_id, robot.group_id), "", False
+    try:
+        history, summary = memory_service.load_context(
+            db, robot.user_id, robot.group_id,
+        )
+        return history, summary, True
+    except Exception:
+        logger.exception("memory_service.load_context 失败，本回合退回 16 条原文")
+        return _load_history(robot.user_id, robot.group_id), "", False
+
+
+def _schedule_memory_summary(runner: Any, robot: Any, memory_on: bool) -> None:
+    """回复落库后异步摘要；失败绝不影响本轮回复。"""
+    try:
+        runner.submit(
+            memory_service.maybe_summarize,
+            db, robot.user_id, robot.group_id, memory_on,
+        )
+    except Exception:
+        logger.debug("main._schedule_memory_summary 忽略了异常", exc_info=True)
 
 # ── Group seeding ───────────────────────────────────────
 def _seed_group(gid: str) -> None:
@@ -620,12 +655,13 @@ def main_logic(robot: RobotServer) -> None:
         # Trigger profile analysis for group messages (async, non-blocking)
         _trigger_profile_update(robot, disabled)
 
-        history = _load_history(robot.user_id, robot.group_id)
+        history, memory_summary, memory_on = _memory_context(robot)
         is_private = robot.msg_type == "private"
         user_text = _context(robot, _reply_note(robot),
                              _ambient_group_context(robot, disabled),
                              mood=_mood_signal(robot),
-                             speaker=_speaker_context(robot, disabled))
+                             speaker=_speaker_context(robot, disabled),
+                             summary=memory_summary)
         system_prompt = _build_system_prompt(
             robot, db, profile_service, affection_service, disabled,
         )
@@ -725,6 +761,7 @@ def main_logic(robot: RobotServer) -> None:
                    # A self-contained tool replied on its own, so this turn is
                    # answered even though final_text stayed empty.
                    handled=handled)
+        _schedule_memory_summary(executor, robot, memory_on)
         if final_text:
             robot.reply_chunked(final_text)
 
