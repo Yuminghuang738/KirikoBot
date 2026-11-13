@@ -435,6 +435,7 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
         "dry_run": dry_run,
         "db": Path(db_path).name,
         "case_count": len(results),
+        "new_result_count": len(results) - len(done_entries),
         "skipped_missing_probe": skipped,
         "results": results,
         "summary": summarize_probe(results, token_cost),
@@ -501,11 +502,11 @@ def main(argv: list[str] | None = None) -> int:
     jsonl = args.jsonl or (str(out) + ".jsonl")
     payload = run(cases, args.db, limit=args.limit or None, dry_run=args.dry_run,
                   jsonl_path=jsonl, resume=args.resume, repeat=args.repeat)
-    if args.resume and not payload["results"]:
+    if args.resume and payload["new_result_count"] == 0:
         if payload["skipped_missing_probe"]:
             print(f"没有可跑的 case：{payload['skipped_missing_probe']} 条缺 probe 字段；不覆盖 out 文件")
         else:
-            print("checkpoint 里所有 case 都已完成，本次没有新结果；不覆盖 out 文件")
+            print("checkpoint 已覆盖全部 case，本次没有新结果；不覆盖 out 文件")
         return 0
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     print_summary(payload["summary"])

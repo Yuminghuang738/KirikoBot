@@ -130,6 +130,7 @@ def test_resume_merges_checkpoint_with_new_cases(tmp_path):
                               jsonl_path=str(jsonl), resume=True)
 
     assert payload["case_count"] == 2
+    assert payload["new_result_count"] == 1
     assert [r["case_id"] for r in payload["results"]] == ["P001", "P002"]
 
 
@@ -258,3 +259,17 @@ def test_pick_repeat_ids_is_stratified_by_tier():
     assert picked == {"A0", "B0", "C0", "A1"}
     assert memory_probe._pick_repeat_ids(cases, 0) == set()
     assert len(memory_probe._pick_repeat_ids(cases, 99)) == 7
+
+
+def test_cli_resume_all_done_does_not_overwrite_out(tmp_path):
+    db = _make_db(tmp_path)
+    cases = tmp_path / "cases.json"
+    cases.write_text(json.dumps({"cases": [_case()], "needles": []}), encoding="utf-8")
+    out = tmp_path / "probe_out.json"
+    args = ["--db", db, "--cases", str(cases), "--out", str(out), "--dry-run"]
+
+    assert memory_probe.main(args) == 0
+    before = out.read_text(encoding="utf-8")
+
+    assert memory_probe.main([*args, "--resume"]) == 0
+    assert out.read_text(encoding="utf-8") == before

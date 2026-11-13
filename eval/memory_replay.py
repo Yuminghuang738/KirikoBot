@@ -427,6 +427,7 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
         "dry_run": dry_run,
         "db": Path(db_path).name,
         "results": results,
+        "new_result_count": len(results) - len(done_entries),
         "summary": summary_stats,
         "usage": usage,
         "token_cost": token_cost,
@@ -434,6 +435,7 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
             "只测记忆层：system=PERSONA，不含工具 schema / 群背景 / 画像；"
             "四变体 baseline16 / raw24 / raw48 / layered(24+摘要)，"
             "结论只用于相对比较，不代表完整生产链路。"
+            + ("resume 时结果含 checkpoint 里的条目，token/usage 只统计本次新跑的 case。" if resume else "")
         ),
     }
 
@@ -617,8 +619,8 @@ def main(argv: list[str] | None = None) -> int:
     jsonl = args.jsonl or (str(out) + ".jsonl")
     payload = run(cases, args.db, limit=args.limit or None, dry_run=args.dry_run,
                   jsonl_path=jsonl, resume=args.resume)
-    if args.resume and not payload["results"]:
-        print("checkpoint 里所有 case 都已完成，本次没有新结果；不覆盖 out 文件")
+    if args.resume and payload["new_result_count"] == 0:
+        print("checkpoint 已覆盖全部 case，本次没有新结果；不覆盖 out 文件")
         return 0
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     print_summary(payload["summary"])
