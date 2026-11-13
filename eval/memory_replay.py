@@ -51,16 +51,47 @@ DIM_LABELS = {
 }
 
 JUDGE_SYSTEM = """你是严格的聊天质量裁判。你会看到较早的上下文、群友最后说的一句话，以及两个候选回复 A、B。
-按五个维度分别判断谁更好（A、B 或 平）：
-- memory：记忆准确。谁更准确用上了更早对话里的事实/约定，且没有编造
-- coherence：连贯。谁更接得住对方这句话，而不是答非所问
-- persona：人设。谁更像「20 岁大三女生、傲娇但讨喜、说话短」的 Kiriko
-- natural：自然。谁更像真人随口接话，不像客服/AI 腔/小作文
-- leak：不泄露/不机械。谁更不像在复述摘要、提示词或记忆
-只输出 JSON：{"memory":"A|B|平","coherence":"...","persona":"...","natural":"...","leak":"..."}"""
+按五个维度分别给 A、B 打 1–5 分（1=差，3=正常，5=好，可打 0.5 分档）：
+- memory：记忆准确。是否准确用上了更早对话里的事实/约定，且没有编造
+- coherence：连贯。是否接得住对方这句话，而非答非所问
+- persona：人设。是否像「20 岁大三女生、傲娇但讨喜、说话短」的 Kiriko
+- natural：自然。是否像真人随口接话，不像客服/AI 腔/小作文
+- leak：不泄露/不机械。是否不像在复述摘要、提示词或记忆
+只输出 JSON：{"memory":{"a":4,"b":3},"coherence":{"a":4,"b":3},"persona":{"a":3,"b":4},"natural":{"a":4,"b":3},"leak":{"a":5,"b":5}}
+分数相同的维度视为平局。"""
 
 ANCHOR_SYSTEM = """你只回答一个 yes/no 问题：候选回复是否**正确使用**了给定的锚点事实（提到/引用/承接它，且没有说错）。
 只输出 yes 或 no，不要解释。"""
+
+
+_USAGE: list[dict[str, Any]] = []
+
+
+def _record_usage(tag: str, usage: Any) -> None:
+    if not isinstance(usage, dict):
+        return
+    _USAGE.append({
+        "tag": tag,
+        "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+        "completion_tokens": int(usage.get("completion_tokens") or 0),
+        "cache_hit_tokens": int(usage.get("prompt_cache_hit_tokens")
+                                 or usage.get("prompt_tokens_details", {}).get("cached_tokens", 0)
+                                 or 0),
+    })
+
+
+def _usage_summary() -> dict[str, Any]:
+    """按调用类型汇总 API usage（Aya 的 token 判据用真实 token，不用字符估算）。"""
+    by_tag: dict[str, dict[str, int]] = {}
+    for item in _USAGE:
+        agg = by_tag.setdefault(item["tag"], {
+            "calls": 0, "prompt_tokens": 0,
+            "completion_tokens": 0, "cache_hit_tokens": 0,
+        })
+        agg["calls"] += 1
+        for key in ("prompt_tokens", "completion_tokens", "cache_hit_tokens"):
+            agg[key] += int(item.get(key) or 0)
+    return by_tag
 
 
 def _read_token() -> str:
@@ -72,7 +103,7 @@ def _read_token() -> str:
     return os.getenv("DEEPSEEK_TOKEN") or ""
 
 
-def _post(payload: dict[str, Any], key: str, retries: int = 3) -> str:
+def _post(payload: dict[str, Any], key: str, retries: int = 3, tag: str = "") -> str:
     last = ""
     for i in range(retries):
         try:
@@ -81,7 +112,9 @@ def _post(payload: dict[str, Any], key: str, retries: int = 3) -> str:
                 headers={"Authorization": f"Bearer {key}"},
             )
             if resp.status_code == 200:
-                message = resp.json()["choices"][0]["message"]
+                data = resp.json()
+                _record_usage(tag, data.get("usage"))
+                message = data["choices"][0]["message"]
                 return (message.get("content") or "").strip()
             last = f"HTTP {resp.status_code}: {resp.text[:120]}"
         except Exception as exc:  # noqa: BLE001
@@ -148,13 +181,14 @@ def summarize_older(older: list[dict[str, Any]], key: str) -> str:
         "thinking": {"type": "disabled"},
         "stream": False,
     }
-    raw = _post(payload, key)
+    raw = _post(payload, key, tag="summary")
     summary, _ = _parse_summary(raw)
     # 与线上一致：截到 400 字，并过滤指令性行。
     return _clean_summary(summary)[:SUMMARY_MAX_CHARS].strip()
 
 
-def generate_reply(history: list[dict[str, Any]], user_text: str, key: str) -> str:
+def generate_reply(history: list[dict[str, Any]], user_text: str, key: str,
+                   tag: str = "") -> str:
     payload = {
         "model": MODEL,
         "messages": [
@@ -168,7 +202,7 @@ def generate_reply(history: list[dict[str, Any]], user_text: str, key: str) -> s
         "reasoning_effort": os.getenv("DEEPSEEK_REASONING_EFFORT") or "low",
         "stream": False,
     }
-    return _post(payload, key)
+    return _post(payload, key, tag=tag)
 
 
 def _context_text(history: list[dict[str, Any]]) -> str:
@@ -179,7 +213,8 @@ def _context_text(history: list[dict[str, Any]]) -> str:
     )
 
 
-def judge_call(context: str, last_user: str, a: str, b: str, key: str) -> dict[str, Any]:
+def judge_call(context: str, last_user: str, a: str, b: str, key: str,
+               tag: str = "judge") -> dict[str, Any]:
     user = (f"【较早的上下文】\n{context}\n\n【群友最后说】\n{last_user}\n\n"
             f"【回复 A】\n{a}\n\n【回复 B】\n{b}")
     payload = {
@@ -193,7 +228,7 @@ def judge_call(context: str, last_user: str, a: str, b: str, key: str) -> dict[s
             {"role": "user", "content": user},
         ],
     }
-    return _parse_judge(_post(payload, key))
+    return _parse_judge(_post(payload, key, tag=tag))
 
 
 def _parse_judge(raw: str) -> dict[str, Any]:
@@ -210,13 +245,17 @@ def _parse_judge(raw: str) -> dict[str, Any]:
         if isinstance(value, str) and value in ("A", "B", "平"):
             out[dim] = value
         elif isinstance(value, dict):
+            a_score = float(value.get("a", 0) or 0)
+            b_score = float(value.get("b", 0) or 0)
             win = value.get("win") or value.get("winner")
-            if win in ("A", "B", "平"):
-                out[dim] = {"win": win, "a": float(value.get("a", 0)), "b": float(value.get("b", 0))}
+            if win not in ("A", "B", "平"):
+                win = "A" if a_score > b_score else ("B" if b_score > a_score else "平")
+            out[dim] = {"win": win, "a": a_score, "b": b_score}
     return out
 
 
-def anchor_call(context: str, last_user: str, reply: str, anchor_fact: str, key: str) -> bool | None:
+def anchor_call(context: str, last_user: str, reply: str, anchor_fact: str, key: str,
+                tag: str = "anchor") -> bool | None:
     if not anchor_fact:
         return None
     user = (f"【上下文】\n{context}\n\n【群友最后说】\n{last_user}\n\n"
@@ -232,7 +271,7 @@ def anchor_call(context: str, last_user: str, reply: str, anchor_fact: str, key:
             {"role": "user", "content": user},
         ],
     }
-    raw = _post(payload, key).strip().lower()
+    raw = _post(payload, key, tag=tag).strip().lower()
     if raw.startswith("yes") or raw.startswith("是"):
         return True
     if raw.startswith("no") or raw.startswith("否"):
@@ -244,7 +283,13 @@ def _normalize(entry: Any) -> tuple[str | None, float | None, float | None]:
     if isinstance(entry, str):
         return entry, None, None
     if isinstance(entry, dict):
-        return entry.get("win"), entry.get("a"), entry.get("b")
+        win = entry.get("win")
+        a_score, b_score = entry.get("a"), entry.get("b")
+        if win not in ("A", "B", "平") and a_score is not None and b_score is not None:
+            win = "A" if float(a_score) > float(b_score) else (
+                "B" if float(b_score) > float(a_score) else "平"
+            )
+        return win, a_score, b_score
     return None, None, None
 
 
@@ -275,6 +320,7 @@ def combine_pair(first: dict[str, Any], second: dict[str, Any]) -> dict[str, Any
 def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
         dry_run: bool = False) -> dict[str, Any]:
     key = "" if dry_run else _read_token()
+    _USAGE.clear()
     conn = connect_ro(db_path)
     results: list[dict[str, Any]] = []
 
@@ -294,16 +340,20 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
         if summary:
             user_layered = render_summary_block(summary) + "\n" + last_user
 
-        baseline_reply = "" if dry_run else generate_reply(baseline_hist, last_user, key)
-        layered_reply = "" if dry_run else generate_reply(layered_hist, user_layered, key)
+        baseline_reply = "" if dry_run else generate_reply(baseline_hist, last_user, key, tag="baseline")
+        layered_reply = "" if dry_run else generate_reply(layered_hist, user_layered, key, tag="layered")
 
-        anchor_fact = str(case.get("anchor_fact") or "").strip()
+        # 数据集 v3 起 anchor 分两栏：短句用于字面命中，语义说明用于 judge 的 yes/no。
+        anchor_short = str(case.get("anchor_fact_short") or case.get("anchor_fact") or "").strip()
+        anchor_semantic = str(case.get("anchor_semantic") or case.get("anchor_fact") or anchor_short).strip()
         entry: dict[str, Any] = {
             "case_id": case["case_id"],
             "kind": case.get("kind", "case"),
             "category": case.get("category"),
             "summary": summary,
-            "anchor_in_summary": bool(anchor_fact and anchor_fact in summary),
+            "anchor_fact_short": anchor_short,
+            "anchor_fact_semantic": anchor_semantic,
+            "anchor_in_summary": bool(anchor_short and anchor_short in summary),
             "baseline_reply": baseline_reply,
             "layered_reply": layered_reply,
             "variants": {
@@ -323,12 +373,23 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
                 judge_call(ctx, last_user, layered_reply, baseline_reply, key),
             )
             entry["anchor"] = {
-                "baseline": anchor_call(ctx, last_user, baseline_reply, anchor_fact, key),
-                "layered": anchor_call(ctx, last_user, layered_reply, anchor_fact, key),
+                "baseline": anchor_call(ctx, last_user, baseline_reply, anchor_semantic, key),
+                "layered": anchor_call(ctx, last_user, layered_reply, anchor_semantic, key),
             }
         results.append(entry)
 
     summary_stats = summarize_results(results)
+    usage = _usage_summary()
+    baseline_tokens = usage.get("baseline", {}).get("prompt_tokens", 0)
+    layered_tokens = (usage.get("layered", {}).get("prompt_tokens", 0)
+                      + usage.get("summary", {}).get("prompt_tokens", 0))
+    token_cost = {
+        "baseline_prompt_tokens": baseline_tokens,
+        "layered_prompt_tokens": layered_tokens,
+        "summary_prompt_tokens": usage.get("summary", {}).get("prompt_tokens", 0),
+        "ratio": round((layered_tokens - baseline_tokens) / baseline_tokens, 3)
+        if baseline_tokens else None,
+    }
     payload = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "model": MODEL,
@@ -336,6 +397,8 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
         "db": Path(db_path).name,
         "results": results,
         "summary": summary_stats,
+        "usage": usage,
+        "token_cost": token_cost,
         "notes": (
             "只测记忆层：system=PERSONA，不含工具 schema / 群背景 / 画像；"
             "结论只用于 baseline vs layered 的相对比较，不代表完整生产链路。"
@@ -344,24 +407,45 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
     return payload
 
 
+def _mean(values: list[float]) -> float | None:
+    return round(sum(values) / len(values), 2) if values else None
+
+
 def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     wins = {dim: {"baseline": 0, "layered": 0, "平": 0} for dim in DIMS}
     anchors = {"baseline": 0, "layered": 0, "total": 0}
+    scores = {dim: {"baseline": [], "layered": []} for dim in DIMS}
+    reply_lens = {"baseline": [], "layered": []}
+
     for entry in results:
         judge = entry.get("judge") or {}
         for dim in DIMS:
             winner = (judge.get("winner") or {}).get(dim)
             if winner in wins[dim]:
                 wins[dim][winner] += 1
+            dim_scores = (judge.get("scores") or {}).get(dim) or {}
+            for variant in ("baseline", "layered"):
+                if dim_scores.get(variant) is not None:
+                    scores[dim][variant].append(float(dim_scores[variant]))
         anchor = entry.get("anchor") or {}
         if anchor.get("baseline") is not None and anchor.get("layered") is not None:
             anchors["total"] += 1
             anchors["baseline"] += 1 if anchor["baseline"] else 0
             anchors["layered"] += 1 if anchor["layered"] else 0
+        reply_lens["baseline"].append(len(entry.get("baseline_reply") or ""))
+        reply_lens["layered"].append(len(entry.get("layered_reply") or ""))
 
     memory_wins = wins["memory"]["layered"]
     anchor_layered = (anchors["layered"] / anchors["total"]) if anchors["total"] else 0
     anchor_baseline = (anchors["baseline"] / anchors["total"]) if anchors["total"] else 0
+    score_means = {}
+    for dim in DIMS:
+        base = _mean(scores[dim]["baseline"])
+        layer = _mean(scores[dim]["layered"])
+        score_means[dim] = {
+            "baseline": base, "layered": layer,
+            "diff": round(layer - base, 2) if base is not None and layer is not None else None,
+        }
     return {
         "case_count": len(results),
         "wins": wins,
@@ -371,6 +455,11 @@ def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
             "layered": round(anchor_layered, 3),
             "delta_pp": round((anchor_layered - anchor_baseline) * 100, 1),
         },
+        "score_means": score_means,
+        "reply_len_mean": {
+            "baseline": _mean(reply_lens["baseline"]),
+            "layered": _mean(reply_lens["layered"]),
+        },
     }
 
 
@@ -379,8 +468,13 @@ def print_summary(summary: dict[str, Any]) -> None:
     for dim in DIMS:
         row = summary["wins"][dim]
         print(f"  {DIM_LABELS[dim]:<10} layered={row['layered']:<3} baseline={row['baseline']:<3} 平={row['平']}")
+    for dim in DIMS:
+        mean = summary["score_means"][dim]
+        print(f"  {DIM_LABELS[dim]:<10} 均分 baseline={mean['baseline']} layered={mean['layered']} diff={mean['diff']}")
     anchor = summary["anchor_hit_rate"]
     print(f"  anchor  layered={anchor['layered']} baseline={anchor['baseline']} delta={anchor['delta_pp']}pp")
+    lens = summary["reply_len_mean"]
+    print(f"  reply_len baseline={lens['baseline']} layered={lens['layered']}")
 
 
 def main(argv: list[str] | None = None) -> int:
