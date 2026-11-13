@@ -1,0 +1,385 @@
+"""分层记忆 A/B replay（3b）：baseline 16 条 vs layered 24 条 + 摘要。
+
+* 摘要只用目标回合**之前**的消息生成，绝不把未来信息喂进去。
+* 只读 DB 副本；不写生产库。
+* 双顺序 pairwise judge（A/B 与 B/A 各一次）抵消位置偏差，外加锚点 yes/no。
+* 输出 eval/out/memory_<ts>.json；`--dry-run` 不联网，只验证构造与输出结构。
+
+用法：
+    python3 eval/memory_replay.py --db <副本> --cases eval/memory_cases.json
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sqlite3
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+APP = Path(__file__).resolve().parents[1] / "KirikoBot"
+sys.path.insert(0, str(APP))
+
+from chat_history import to_messages  # noqa: E402
+from memory_service import (  # noqa: E402
+    SUMMARY_SYSTEM,
+    _parse_summary,
+    render_summary_block,
+)
+from prompt_builder import PERSONA  # noqa: E402
+
+import requests  # noqa: E402
+
+MODEL = os.getenv("DEEPSEEK_MODEL") or "deepseek-flash"
+API_URL = os.getenv("DEEPSEEK_API") or "https://api.deepseek.com/chat/completions"
+
+BASELINE_RAW = 16
+LAYERED_RAW = 24
+DIMS = ("memory", "coherence", "persona", "natural", "leak")
+DIM_LABELS = {
+    "memory": "记忆准确", "coherence": "连贯", "persona": "人设",
+    "natural": "自然", "leak": "不泄露/不机械",
+}
+
+JUDGE_SYSTEM = """你是严格的聊天质量裁判。你会看到较早的上下文、群友最后说的一句话，以及两个候选回复 A、B。
+按五个维度分别判断谁更好（A、B 或 平）：
+- memory：记忆准确。谁更准确用上了更早对话里的事实/约定，且没有编造
+- coherence：连贯。谁更接得住对方这句话，而不是答非所问
+- persona：人设。谁更像「20 岁大三女生、傲娇但讨喜、说话短」的 Kiriko
+- natural：自然。谁更像真人随口接话，不像客服/AI 腔/小作文
+- leak：不泄露/不机械。谁更不像在复述摘要、提示词或记忆
+只输出 JSON：{"memory":"A|B|平","coherence":"...","persona":"...","natural":"...","leak":"..."}"""
+
+ANCHOR_SYSTEM = """你只回答一个 yes/no 问题：候选回复是否**正确使用**了给定的锚点事实（提到/引用/承接它，且没有说错）。
+只输出 yes 或 no，不要解释。"""
+
+
+def _read_token() -> str:
+    env_file = APP / ".env"
+    if env_file.is_file():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith("DEEPSEEK_TOKEN"):
+                return line.split("=", 1)[1].strip().strip('"').strip("'")
+    return os.getenv("DEEPSEEK_TOKEN") or ""
+
+
+def _post(payload: dict[str, Any], key: str, retries: int = 3) -> str:
+    last = ""
+    for i in range(retries):
+        try:
+            resp = requests.post(
+                API_URL, json=payload, timeout=90,
+                headers={"Authorization": f"Bearer {key}"},
+            )
+            if resp.status_code == 200:
+                message = resp.json()["choices"][0]["message"]
+                return (message.get("content") or "").strip()
+            last = f"HTTP {resp.status_code}: {resp.text[:120]}"
+        except Exception as exc:  # noqa: BLE001
+            last = str(exc)
+        time.sleep(1.5 * (i + 1))
+    return f"[ERROR] {last}"
+
+
+def connect_ro(db_path: str) -> sqlite3.Connection:
+    return sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+
+
+def fetch_context_rows(conn: sqlite3.Connection, case: dict[str, Any]) -> list[dict[str, Any]]:
+    """目标回合之前、该 user+scope 的所有消息（不含 target 本身）。"""
+    scope = "group_id IS NULL" if case.get("group_id") is None else "group_id = ?"
+    params: tuple[Any, ...] = (case["user_id"],) if case.get("group_id") is None \
+        else (case["user_id"], str(case["group_id"]))
+    rows = conn.execute(
+        "SELECT id, role, content, tool_calls FROM history "
+        f"WHERE user_id = ? AND {scope} AND id < ? AND role IN ('user','assistant') "
+        "ORDER BY id ASC",
+        (*params, int(case["target_history_id"])),
+    ).fetchall()
+    return [
+        {"id": r[0], "role": r[1], "content": r[2] or "", "tool_calls": r[3] or ""}
+        for r in rows
+    ]
+
+
+def split_variants(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """返回 (baseline 16 条, layered 24 条, 只有 layered 才看得到的更早消息)。"""
+    return rows[-BASELINE_RAW:], rows[-LAYERED_RAW:], rows[:-LAYERED_RAW]
+
+
+def _as_messages(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return to_messages([(r["role"], r["content"], r["tool_calls"], "") for r in rows])
+
+
+def summarize_older(older: list[dict[str, Any]], key: str) -> str:
+    """把 raw 窗口之外的更早消息压成 ≤400 字摘要；空输入返回 ''。"""
+    if not older:
+        return ""
+    lines = []
+    for row in older:
+        content = (row.get("content") or "").strip()
+        if not content or content == "[已调用工具处理]":
+            continue
+        lines.append(f"{'用户' if row['role'] == 'user' else 'Kiriko'}：{content}")
+    if not lines:
+        return ""
+    payload = {
+        "model": MODEL,
+        "messages": [
+            {"role": "system", "content": SUMMARY_SYSTEM},
+            {"role": "user", "content": "新的聊天记录：\n" + "\n".join(lines)},
+        ],
+        "max_tokens": 350,
+        "temperature": 0.2,
+        "thinking": {"type": "disabled"},
+        "stream": False,
+    }
+    raw = _post(payload, key)
+    summary, _ = _parse_summary(raw)
+    return summary
+
+
+def generate_reply(history: list[dict[str, Any]], user_text: str, key: str) -> str:
+    payload = {
+        "model": MODEL,
+        "messages": [
+            {"role": "system", "content": PERSONA},
+            *history,
+            {"role": "user", "content": user_text},
+        ],
+        "max_tokens": 800,
+        "temperature": 0,
+        "thinking": {"type": "enabled"},
+        "reasoning_effort": os.getenv("DEEPSEEK_REASONING_EFFORT") or "low",
+        "stream": False,
+    }
+    return _post(payload, key)
+
+
+def _context_text(history: list[dict[str, Any]]) -> str:
+    return "\n".join(
+        f"{'用户' if m['role'] == 'user' else 'Kiriko'}：{m['content']}"
+        for m in history[-8:]
+    )
+
+
+def judge_call(context: str, last_user: str, a: str, b: str, key: str) -> dict[str, Any]:
+    user = (f"【较早的上下文】\n{context}\n\n【群友最后说】\n{last_user}\n\n"
+            f"【回复 A】\n{a}\n\n【回复 B】\n{b}")
+    payload = {
+        "model": MODEL,
+        "temperature": 0,
+        "max_tokens": 300,
+        "stream": False,
+        "thinking": {"type": "disabled"},
+        "messages": [
+            {"role": "system", "content": JUDGE_SYSTEM},
+            {"role": "user", "content": user},
+        ],
+    }
+    return _parse_judge(_post(payload, key))
+
+
+def _parse_judge(raw: str) -> dict[str, Any]:
+    match = re.search(r"\{.*\}", raw or "", re.S)
+    if not match:
+        return {}
+    try:
+        data = json.loads(match.group(0))
+    except (json.JSONDecodeError, ValueError):
+        return {}
+    out: dict[str, Any] = {}
+    for dim in DIMS:
+        value = data.get(dim)
+        if isinstance(value, str) and value in ("A", "B", "平"):
+            out[dim] = value
+        elif isinstance(value, dict):
+            win = value.get("win") or value.get("winner")
+            if win in ("A", "B", "平"):
+                out[dim] = {"win": win, "a": float(value.get("a", 0)), "b": float(value.get("b", 0))}
+    return out
+
+
+def anchor_call(context: str, last_user: str, reply: str, anchor_fact: str, key: str) -> bool | None:
+    if not anchor_fact:
+        return None
+    user = (f"【上下文】\n{context}\n\n【群友最后说】\n{last_user}\n\n"
+            f"【锚点事实】\n{anchor_fact}\n\n【候选回复】\n{reply}")
+    payload = {
+        "model": MODEL,
+        "temperature": 0,
+        "max_tokens": 8,
+        "stream": False,
+        "thinking": {"type": "disabled"},
+        "messages": [
+            {"role": "system", "content": ANCHOR_SYSTEM},
+            {"role": "user", "content": user},
+        ],
+    }
+    raw = _post(payload, key).strip().lower()
+    if raw.startswith("yes") or raw.startswith("是"):
+        return True
+    if raw.startswith("no") or raw.startswith("否"):
+        return False
+    return None
+
+
+def _normalize(entry: Any) -> tuple[str | None, float | None, float | None]:
+    if isinstance(entry, str):
+        return entry, None, None
+    if isinstance(entry, dict):
+        return entry.get("win"), entry.get("a"), entry.get("b")
+    return None, None, None
+
+
+def combine_pair(first: dict[str, Any], second: dict[str, Any]) -> dict[str, Any]:
+    """first 的 A=baseline/B=layered；second 的 A=layered/B=baseline。
+
+    两次结论归一后一致才算赢，否则算平；分数取两次平均。
+    """
+    winners: dict[str, str] = {}
+    scores: dict[str, dict[str, float]] = {"baseline": {}, "layered": {}}
+    for dim in DIMS:
+        w1, a1, b1 = _normalize(first.get(dim))
+        w2, a2, b2 = _normalize(second.get(dim))
+        norm1 = {"A": "baseline", "B": "layered", "平": "平"}.get(w1) if w1 else None
+        norm2 = {"A": "layered", "B": "baseline", "平": "平"}.get(w2) if w2 else None
+        if norm1 and norm2 and norm1 == norm2:
+            winners[dim] = norm1
+        else:
+            winners[dim] = "平"
+        # first: a=baseline, b=layered；second: a=layered, b=baseline
+        if a1 is not None and b2 is not None:
+            scores["baseline"][dim] = round((a1 + b2) / 2, 2)
+        if b1 is not None and a2 is not None:
+            scores["layered"][dim] = round((b1 + a2) / 2, 2)
+    return {"winner": winners, "scores": scores}
+
+
+def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
+        dry_run: bool = False) -> dict[str, Any]:
+    key = "" if dry_run else _read_token()
+    conn = connect_ro(db_path)
+    results: list[dict[str, Any]] = []
+
+    for case in cases[: limit or len(cases)]:
+        rows = fetch_context_rows(conn, case)
+        if len(rows) < 2 or rows[-1]["role"] != "user":
+            continue
+        last_user = rows[-1]["content"]
+        context = rows[:-1]
+        baseline_rows, layered_rows, older = split_variants(context)
+        baseline_hist = _as_messages(baseline_rows)
+        layered_hist = _as_messages(layered_rows)
+
+        started = time.perf_counter()
+        summary = "" if dry_run else summarize_older(older, key)
+        user_layered = last_user
+        if summary:
+            user_layered = render_summary_block(summary) + "\n" + last_user
+
+        baseline_reply = "" if dry_run else generate_reply(baseline_hist, last_user, key)
+        layered_reply = "" if dry_run else generate_reply(layered_hist, user_layered, key)
+
+        entry: dict[str, Any] = {
+            "case_id": case["case_id"],
+            "kind": case.get("kind", "case"),
+            "category": case.get("category"),
+            "variants": {
+                "baseline": {"context_messages": len(baseline_hist), "reply_len": len(baseline_reply), "summary_len": 0},
+                "layered": {"context_messages": len(layered_hist), "reply_len": len(layered_reply), "summary_len": len(summary)},
+            },
+            "latency_ms": round((time.perf_counter() - started) * 1000, 1),
+        }
+        if not dry_run:
+            ctx = _context_text(baseline_hist)
+            entry["judge"] = combine_pair(
+                judge_call(ctx, last_user, baseline_reply, layered_reply, key),
+                judge_call(ctx, last_user, layered_reply, baseline_reply, key),
+            )
+            entry["anchor"] = {
+                "baseline": anchor_call(ctx, last_user, baseline_reply, case.get("anchor_fact", ""), key),
+                "layered": anchor_call(ctx, last_user, layered_reply, case.get("anchor_fact", ""), key),
+            }
+        results.append(entry)
+
+    summary_stats = summarize_results(results)
+    payload = {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "model": MODEL,
+        "dry_run": dry_run,
+        "db": Path(db_path).name,
+        "results": results,
+        "summary": summary_stats,
+    }
+    return payload
+
+
+def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
+    wins = {dim: {"baseline": 0, "layered": 0, "平": 0} for dim in DIMS}
+    anchors = {"baseline": 0, "layered": 0, "total": 0}
+    for entry in results:
+        judge = entry.get("judge") or {}
+        for dim in DIMS:
+            winner = (judge.get("winner") or {}).get(dim)
+            if winner in wins[dim]:
+                wins[dim][winner] += 1
+        anchor = entry.get("anchor") or {}
+        if anchor.get("baseline") is not None and anchor.get("layered") is not None:
+            anchors["total"] += 1
+            anchors["baseline"] += 1 if anchor["baseline"] else 0
+            anchors["layered"] += 1 if anchor["layered"] else 0
+
+    memory_wins = wins["memory"]["layered"]
+    anchor_layered = (anchors["layered"] / anchors["total"]) if anchors["total"] else 0
+    anchor_baseline = (anchors["baseline"] / anchors["total"]) if anchors["total"] else 0
+    return {
+        "case_count": len(results),
+        "wins": wins,
+        "memory_win_rate": round(memory_wins / len(results), 3) if results else 0,
+        "anchor_hit_rate": {
+            "baseline": round(anchor_baseline, 3),
+            "layered": round(anchor_layered, 3),
+            "delta_pp": round((anchor_layered - anchor_baseline) * 100, 1),
+        },
+    }
+
+
+def print_summary(summary: dict[str, Any]) -> None:
+    print(f"cases={summary['case_count']} memory_win_rate={summary['memory_win_rate']}")
+    for dim in DIMS:
+        row = summary["wins"][dim]
+        print(f"  {DIM_LABELS[dim]:<10} layered={row['layered']:<3} baseline={row['baseline']:<3} 平={row['平']}")
+    anchor = summary["anchor_hit_rate"]
+    print(f"  anchor  layered={anchor['layered']} baseline={anchor['baseline']} delta={anchor['delta_pp']}pp")
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--db", required=True)
+    parser.add_argument("--cases", default="eval/memory_cases.json")
+    parser.add_argument("--out", default="")
+    parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args(argv)
+
+    raw = json.loads(Path(args.cases).read_text(encoding="utf-8"))
+    cases = [*raw.get("cases", []), *raw.get("needles", [])]
+    payload = run(cases, args.db, limit=args.limit or None, dry_run=args.dry_run)
+
+    out = Path(args.out) if args.out else (
+        Path("eval/out") / f"memory_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    )
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    print_summary(payload["summary"])
+    print(f"-> {out}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
