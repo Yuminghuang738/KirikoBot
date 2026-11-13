@@ -163,6 +163,17 @@ class Config:
     DSH_PATCH_PATH: Final[str] = os.getenv("DSH_PATCH_PATH") or os.path.expanduser("~/.dsh/profiles/web/cordis.patch.yml")
     DSH_WORKSPACE_DIR: Final[str] = os.getenv("DSH_WORKSPACE_DIR") or "/tmp/kiriko_dsh_workspace"
 
+    # ── 分层记忆（conversation_summaries）───────────────
+    # 紧急总开关：改它需要 force-recreate 容器；日常灰度走
+    # feature_settings.memory_layers（默认关，面板/DB 即时生效）。
+    MEMORY_LAYERS_ENABLED: Final[bool] = os.getenv("MEMORY_LAYERS_ENABLED", "1") == "1"
+    MEMORY_RAW_MESSAGES: Final[int] = int(os.getenv("MEMORY_RAW_MESSAGES") or 24)
+    MEMORY_RAW_MAX_CHARS: Final[int] = int(os.getenv("MEMORY_RAW_MAX_CHARS") or 3000)
+    MEMORY_SUMMARY_MAX_CHARS: Final[int] = int(os.getenv("MEMORY_SUMMARY_MAX_CHARS") or 400)
+    MEMORY_SUMMARY_FACTS: Final[int] = int(os.getenv("MEMORY_SUMMARY_FACTS") or 2)
+    MEMORY_SUMMARY_KEEP: Final[int] = int(os.getenv("MEMORY_SUMMARY_KEEP") or 6)
+    MEMORY_SUMMARY_RETRY_TURNS: Final[int] = int(os.getenv("MEMORY_SUMMARY_RETRY_TURNS") or 3)
+
     @classmethod
     def validate(cls) -> None:
         required: dict[str, str | None] = {

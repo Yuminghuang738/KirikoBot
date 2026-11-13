@@ -25,12 +25,12 @@ logger = logging.getLogger(__name__)
 MAX_HISTORY = 16  # 8 轮
 
 
-def load_history(db: Any, uid: str, gid: str | None) -> list[dict[str, Any]]:
-    """Recent turns for this user in this scope, oldest first."""
-    try:
-        rows = db.takeout_chat_history(uid, gid)
-    except Exception:
-        return []
+def to_messages(rows: list[Any]) -> list[dict[str, Any]]:
+    """清洗原始 history 行，输出可直接进 messages 的 turn 列表。
+
+    纯函数，方便记忆分层复用：连续 user 只留最新、尾部孤立 user 丢掉、
+    assistant 空但带 tool_calls 的保留一条「已调用工具处理」标记。
+    """
     history: list[dict[str, Any]] = []
     for role, content, tool_calls, _ in rows:
         if role == "user":
@@ -59,7 +59,22 @@ def load_history(db: Any, uid: str, gid: str | None) -> list[dict[str, Any]]:
     if history and history[-1]["role"] == "user":
         history.pop()
 
-    return history[-MAX_HISTORY:]
+    return history
+
+
+def load_history(db: Any, uid: str, gid: str | None,
+                 raw_messages: int | None = None) -> list[dict[str, Any]]:
+    """Recent turns for this user in this scope, oldest first.
+
+    ``raw_messages`` 默认仍是 16 条（3a 不改行为）；记忆分层试点时由
+    ``memory_service.load_context`` 显式传 24。
+    """
+    limit = raw_messages or MAX_HISTORY
+    try:
+        rows = db.takeout_chat_history(uid, gid, limit=limit)
+    except Exception:
+        return []
+    return to_messages(rows)[-limit:]
 
 
 def save_turn(db: Any, uid: str, gid: str | None, user_msg: str, ai_text: str,
