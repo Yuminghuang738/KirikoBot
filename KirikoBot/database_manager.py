@@ -340,7 +340,7 @@ class DatabaseManager:
                     ("duration_ms", "INTEGER DEFAULT 0"),
                     ("status", "TEXT DEFAULT ''"),
                     ("session_key", "TEXT DEFAULT ''"),
-                    ("session_recovered", "INTEGER DEFAULT 0"),
+                    ("session_recovered", "INTEGER DEFAULT -1"),
                     ("queue_wait_ms", "INTEGER DEFAULT 0"),
                     ("error", "TEXT DEFAULT ''"),
                 ]:
@@ -1960,7 +1960,7 @@ class DatabaseManager:
             return int(cur.lastrowid or 0)
 
     def finish_dsh_task(self, task_id: int, *, status: str, duration_ms: int,
-                        session_recovered: bool = False, queue_wait_ms: int = 0,
+                        session_recovered: int = -1, queue_wait_ms: int = 0,
                         error: str = "", arguments: str = "", result: str = "",
                         reasoning: str = "") -> None:
         if not task_id:
@@ -1969,7 +1969,8 @@ class DatabaseManager:
             connect.execute(
                 "UPDATE tool_usage SET status=?, duration_ms=?, session_recovered=?, "
                 "queue_wait_ms=?, error=?, arguments=?, result=?, reasoning=? WHERE id=?",
-                (status, max(0, int(duration_ms)), 1 if session_recovered else 0,
+                (status, max(0, int(duration_ms)),
+                 max(-1, min(1, int(session_recovered))),
                  max(0, int(queue_wait_ms)), (error or "")[:300],
                  (arguments or "")[:500], (result or "")[:500],
                  (reasoning or "")[:2000], int(task_id)),

@@ -1928,11 +1928,12 @@ async function dshHTML() {
     '<div class="kv"><span class="k">状态</span><span class="v">' + esc(statusText) + '</span></div>' +
     '<div class="kv"><span class="k">版本</span><span class="v">' + esc(status.version || '—') + '</span></div>' +
     '<div class="kv"><span class="k">可执行文件</span><span class="v">' + esc(status.dsh_bin || '—') + '</span></div>' +
-    '<div class="kv"><span class="k">超时 / 并发</span><span class="v">' + Number(status.timeout || 0) + 's</span></div>' +
+    '<div class="kv"><span class="k">超时 / 并发</span><span class="v">' + Number(status.timeout || 0) + 's / ' + Number(status.max_concurrency || 0) + '</span></div>' +
     '<div class="kv"><span class="k">最近任务</span><span class="v">n=' + (s.n ?? 0) +
       ' · p50=' + fmtMs(s.p50_ms) + ' · p90=' + fmtMs(s.p90_ms) +
       ' · 成功率=' + (s.success_rate == null ? '—' : (s.success_rate * 100).toFixed(0) + '%') +
       ' · 恢复率=' + (s.recovery_rate == null ? '—' : (s.recovery_rate * 100).toFixed(0) + '%') +
+      ' · 拒绝率=' + (s.reject_rate == null ? '—' : (s.reject_rate * 100).toFixed(0) + '%') +
     '</span></div>' +
     '</div></div></div>' +
     '<div class="panel"><div class="panel-header">🧩 插件</div><div class="panel-body tight">' + bundles + '</div></div>' +

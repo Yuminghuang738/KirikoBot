@@ -143,14 +143,27 @@ class TestDshStatusApi:
     def test_tasks_reports_duration_and_success_rate(self, db, client, monkeypatch):
         import main
 
-        for status, duration in (("ok", 1000), ("ok", 3000), ("timeout", 0)):
+        # 续写成功 / 新会话（本来没有 session，-1）/ timeout / rejected
+        rows = (
+            ("ok", 1000, 1), ("ok", 3000, -1), ("timeout", 0, -1), ("rejected", 0, -1),
+        )
+        for status, duration, recovered in rows:
             task_id = db.start_dsh_task("u1", "g1", "group:g1")
-            db.finish_dsh_task(task_id, status=status, duration_ms=duration)
+            db.finish_dsh_task(
+                task_id, status=status, duration_ms=duration,
+                session_recovered=recovered,
+            )
         monkeypatch.setattr(main, "db", db)
         body = client.get("/api/dsh/tasks").get_json()
-        assert body["stats"]["n"] == 3
-        assert body["stats"]["success_rate"] == pytest.approx(2 / 3, abs=0.01)
-        assert body["stats"]["p50_ms"] == 3000
+        stats = body["stats"]
+        assert stats["n"] == 3, "rejected 不进成功率分母"
+        assert stats["success_rate"] == pytest.approx(2 / 3, abs=0.01)
+        assert stats["rejected"] == 1
+        assert stats["reject_rate"] == pytest.approx(0.25)
+        assert stats["p50_ms"] == 2000, "线性插值：1000 与 3000 的中位是 2000"
+        assert stats["p90_ms"] == 2800
+        assert stats["session_tasks"] == 1, "-1 不算有存量 session"
+        assert stats["recovery_rate"] == 1.0
 
 
 def test_delivery_failure_is_recorded_as_error(db, monkeypatch):
@@ -194,3 +207,14 @@ def test_delivery_failure_is_recorded_as_error(db, monkeypatch):
     )[0]
     assert row[0] == "error"
     assert "delivery_failed" in row[1]
+
+
+class TestPercentileHelper:
+    def test_linear_interpolation(self):
+        import main
+
+        assert main._percentile([1000, 3000], 0.5) == 2000
+        assert main._percentile([1000, 3000], 0.9) == 2800
+        assert main._percentile([1000], 0.9) == 1000
+        assert main._percentile([], 0.5) is None
+        assert main._percentile([100, 200, 300, 400], 0.5) == 250

@@ -1597,11 +1597,25 @@ def api_dsh_status():
         "workspace": workspace,
         "patch_file": patch_file,
         "timeout": Config.DSH_TIMEOUT,
+        "max_concurrency": Config.DSH_MAX_CONCURRENCY,
         "sessions": sessions,
         # 3085 的官方 WebUI 需要浏览器侧 token 交换 + 287MB RSS，1.6G 机器上不划算；
         # 面板改用同源的原生状态页，这里显式说明，不再让前端拼 iframe。
         "web_ui": "native",
     })
+
+
+def _percentile(sorted_values: list[int], q: float) -> int | None:
+    """线性插值百分位（和 Hina 的离线口径一致，部署后才可比）。"""
+    if not sorted_values:
+        return None
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    pos = (len(sorted_values) - 1) * q
+    lower = int(pos)
+    upper = min(lower + 1, len(sorted_values) - 1)
+    frac = pos - lower
+    return int(round(sorted_values[lower] * (1 - frac) + sorted_values[upper] * frac))
 
 
 @app.route("/api/dsh/tasks")
@@ -1629,17 +1643,19 @@ def api_dsh_tasks():
             int(r[3] or 0) for r in rows if (r[2] or "") == "ok" and int(r[3] or 0) > 0
         )
         terminal = [r for r in rows if (r[2] or "") in
-                    ("ok", "empty", "timeout", "error", "interrupted", "rejected")]
+                    ("ok", "empty", "timeout", "error", "interrupted")]
         ok_count = sum(1 for r in terminal if (r[2] or "") == "ok")
-        resumed = [r for r in rows if (r[4] or "") and (r[2] or "") in
-                   ("ok", "empty", "timeout", "error", "interrupted", "rejected")]
-        recovered = sum(1 for r in resumed if bool(r[5]))
+        rejected = [r for r in rows if (r[2] or "") == "rejected"]
+        # 恢复率只看有存量 session 的任务（-1 = 本来就没有，不进分母）
+        resumed = [r for r in rows if int(r[5] if r[5] is not None else -1) in (0, 1)]
+        recovered = sum(1 for r in resumed if int(r[5]) == 1)
         stats = {
             "n": len(terminal),
-            "p50_ms": durations[len(durations) // 2] if durations else None,
-            "p90_ms": durations[min(len(durations) - 1, int(len(durations) * 0.9))]
-            if durations else None,
+            "p50_ms": _percentile(durations, 0.5),
+            "p90_ms": _percentile(durations, 0.9),
             "success_rate": round(ok_count / len(terminal), 3) if terminal else None,
+            "rejected": len(rejected),
+            "reject_rate": round(len(rejected) / len(rows), 3) if rows else None,
             "session_tasks": len(resumed),
             "recovery_rate": round(recovered / len(resumed), 3) if resumed else None,
         }

@@ -250,6 +250,8 @@ class DshClient:
         os.makedirs(workspace, exist_ok=True)
 
         session_id = self._get_stored_session(session_key)
+        # -1 = 本来就没有存量 session（不进恢复率分母）；0 = 有但没恢复；1 = 恢复成功
+        meta["session_recovered"] = 0 if session_id else -1
 
         # 确保自动生成或定位对齐的 DSH patch 配置
         patch_path = ensure_dsh_patch_file(workspace)
@@ -289,7 +291,7 @@ class DshClient:
                     out = proc.stdout.strip()
                     if out:
                         meta["status"] = "ok"
-                        meta["session_recovered"] = True
+                        meta["session_recovered"] = 1
                         return out
                 # 若旧 session 失效或死锁，清空记录并自动无感降级启动全新 session。
                 # 锁只在「续写已失败」之后清，且比超时还新的锁不碰。
@@ -358,7 +360,6 @@ class DshClient:
                 reply = "".join(final_answer).strip()
                 if reply:
                     meta["status"] = "ok"
-                    meta["session_recovered"] = False
                     return reply
 
                 if proc.returncode != 0:
