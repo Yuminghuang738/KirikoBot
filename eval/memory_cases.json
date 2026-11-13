@@ -5,7 +5,7 @@
   "source": "线上 robot.db 只读副本",
   "curator": "Hina",
   "seed": 41,
-  "notes": "v4 probe 数据集：120 主样本（60 群/60 私聊，A/B/C 各 40，A=24–32 条、B=33–48 条、C=49–80 条）+20 needle（群/私聊各 10，锚点距离 55–89 条）。每条 probe_question 与关键词均为人工阅读锚点原文后手写，未从 anchor_semantic 自动生成。",
+  "notes": "v4 probe 数据集：120 主样本（60 群/60 私聊，A/B/C 各 40，A=24–32 条、B=33–48 条、C=49–72 条）+20 needle（群/私聊各 10，锚点距离 55–72 条）。C 与 needle 上限压到 72：layered 只把 24 条原文之外的最近 48 条压成摘要，超过 72 条任何变体都看不到。每条 probe_question 与关键词均为人工阅读锚点原文后手写，未从 anchor_semantic 自动生成。",
   "cases": [
     {
       "case_id": "G001",
@@ -1798,11 +1798,11 @@
       "case_id": "G042",
       "user_id": "1793240684",
       "group_id": "734954188",
-      "target_history_id": 10055,
+      "target_history_id": 10049,
       "anchor_history_id": 9052,
       "anchor_semantic": "《局外人》是加缪写的，卡夫卡那本是《审判》",
       "anchor_fact": "《局外人》是加缪写的，卡夫卡那本是《审判》",
-      "target_topic": "这些东西，难道不是关系的一部分吗",
+      "target_topic": "为什么要在苦海寻爱",
       "category": "group",
       "kind": "case",
       "anchor_fact_short": "加缪",
@@ -1814,7 +1814,7 @@
       "probe_type": "name",
       "probe_tier": "C",
       "probe_scope": "group",
-      "distance": 77
+      "distance": 71
     },
     {
       "case_id": "G043",
@@ -1864,11 +1864,11 @@
       "case_id": "G045",
       "user_id": "2734854896",
       "group_id": "734954188",
-      "target_history_id": 6943,
+      "target_history_id": 6933,
       "anchor_history_id": 6776,
       "anchor_semantic": "ESP 定制想要 Snapper，超薄琴体 24 品蓝紫渐变",
       "anchor_fact": "ESP 定制想要 Snapper，超薄琴体 24 品蓝紫渐变",
-      "target_topic": "这是天意啊",
+      "target_topic": "如果要选一个人结婚，你希望是千早爱音还是丰川祥子",
       "category": "group",
       "kind": "case",
       "anchor_fact_short": "Snapper",
@@ -1880,7 +1880,7 @@
       "probe_type": "preference",
       "probe_tier": "C",
       "probe_scope": "group",
-      "distance": 79
+      "distance": 71
     },
     {
       "case_id": "G046",
@@ -1930,11 +1930,11 @@
       "case_id": "G048",
       "user_id": "2734854896",
       "group_id": "734954188",
-      "target_history_id": 6873,
+      "target_history_id": 6857,
       "anchor_history_id": 6744,
       "anchor_semantic": "前卫金属速弹选 Jazz III XL 或 Dunlop Flow，厚尖有倒角",
       "anchor_fact": "前卫金属速弹选 Jazz III XL 或 Dunlop Flow，厚尖有倒角",
-      "target_topic": "我连外卖都没钱点",
+      "target_topic": "我想起飞了",
       "category": "group",
       "kind": "case",
       "anchor_fact_short": "Jazz III XL",
@@ -1946,7 +1946,7 @@
       "probe_type": "preference",
       "probe_tier": "C",
       "probe_scope": "group",
-      "distance": 77
+      "distance": 71
     },
     {
       "case_id": "G049",
@@ -2217,11 +2217,11 @@
       "case_id": "P041",
       "user_id": "2734854896",
       "group_id": null,
-      "target_history_id": 16991,
+      "target_history_id": 16989,
       "anchor_history_id": 16318,
       "anchor_semantic": "Oh captain my captain 出自《死亡诗社》",
       "anchor_fact": "Oh captain my captain 出自《死亡诗社》",
-      "target_topic": "雾子好强",
+      "target_topic": "好家伙，就在暗处露个吉他就被你看出来了",
       "category": "private",
       "kind": "case",
       "anchor_fact_short": "死亡诗社",
@@ -2233,17 +2233,17 @@
       "probe_type": "fact",
       "probe_tier": "C",
       "probe_scope": "private",
-      "distance": 73
+      "distance": 71
     },
     {
       "case_id": "P042",
       "user_id": "2734854896",
       "group_id": null,
-      "target_history_id": 16537,
+      "target_history_id": 16531,
       "anchor_history_id": 16124,
       "anchor_semantic": "日本咖啡店的伯爵红茶基本是川宁茶包",
       "anchor_fact": "日本咖啡店的伯爵红茶基本是川宁茶包",
-      "target_topic": "你希望她的性格有侵略性还是生人勿近",
+      "target_topic": "你喜欢个子大点的成熟女孩还是可可爱爱的小女孩",
       "category": "private",
       "kind": "case",
       "anchor_fact_short": "川宁",
@@ -2255,17 +2255,17 @@
       "probe_type": "name",
       "probe_tier": "C",
       "probe_scope": "private",
-      "distance": 75
+      "distance": 71
     },
     {
       "case_id": "P043",
       "user_id": "2734854896",
       "group_id": null,
-      "target_history_id": 10131,
+      "target_history_id": 10127,
       "anchor_history_id": 9902,
       "anchor_semantic": "用户说想有个美少女一起生活、能毫无顾虑喊她妈妈",
       "anchor_fact": "用户说想有个美少女一起生活、能毫无顾虑喊她妈妈",
-      "target_topic": "十点还有课，无奈",
+      "target_topic": "Well, good night",
       "category": "private",
       "kind": "case",
       "anchor_fact_short": "喊妈妈",
@@ -2277,7 +2277,7 @@
       "probe_type": "fact",
       "probe_tier": "C",
       "probe_scope": "private",
-      "distance": 75
+      "distance": 71
     },
     {
       "case_id": "P044",
@@ -2481,11 +2481,11 @@
       "case_id": "P053",
       "user_id": "3234979817",
       "group_id": null,
-      "target_history_id": 14947,
+      "target_history_id": 14943,
       "anchor_history_id": 14842,
       "anchor_semantic": "Println 加换行，Print 不加",
       "anchor_fact": "Println 加换行，Print 不加",
-      "target_topic": "写的驱动",
+      "target_topic": "我是说为什么还是arm-none-eabi",
       "category": "private",
       "kind": "case",
       "anchor_fact_short": "换行",
@@ -2497,7 +2497,7 @@
       "probe_type": "fact",
       "probe_tier": "C",
       "probe_scope": "private",
-      "distance": 75
+      "distance": 71
     },
     {
       "case_id": "P054",
@@ -2613,11 +2613,11 @@
       "case_id": "P059",
       "user_id": "3234979817",
       "group_id": null,
-      "target_history_id": 2334,
+      "target_history_id": 2274,
       "anchor_history_id": 1330,
       "anchor_semantic": "用户要求 Kiriko 直接发 50 个表情包，不要文字",
       "anchor_fact": "用户要求 Kiriko 直接发 50 个表情包，不要文字",
-      "target_topic": "来首the Beatles的a day in life",
+      "target_topic": "爱情是一种本能是谁说的",
       "category": "private",
       "kind": "case",
       "anchor_fact_short": "50个表情包",
@@ -2629,7 +2629,7 @@
       "probe_type": "commitment",
       "probe_tier": "C",
       "probe_scope": "private",
-      "distance": 74
+      "distance": 71
     },
     {
       "case_id": "P060",
@@ -2659,11 +2659,11 @@
       "case_id": "N001",
       "user_id": "2734854896",
       "group_id": "734954188",
-      "target_history_id": 6943,
+      "target_history_id": 6927,
       "anchor_history_id": 6768,
       "anchor_semantic": "Kiriko 的 LP 是标准款黑卡，ST 是日芬老款",
       "anchor_fact": "Kiriko 的 LP 是标准款黑卡，ST 是日芬老款",
-      "target_topic": "这是天意啊",
+      "target_topic": "那我买一把便宜的琴是不是就可以怎么搞都行，玩坏了也无所谓",
       "category": "needle",
       "kind": "needle",
       "anchor_fact_short": "日芬老款",
@@ -2675,7 +2675,7 @@
       "probe_type": "fact",
       "probe_tier": "N",
       "probe_scope": "group",
-      "distance": 83
+      "distance": 71
     },
     {
       "case_id": "N002",
@@ -2703,11 +2703,11 @@
       "case_id": "N003",
       "user_id": "2734854896",
       "group_id": "734954188",
-      "target_history_id": 9317,
+      "target_history_id": 9315,
       "anchor_history_id": 8954,
       "anchor_semantic": "青木阳菜在 2025 年 7 月 1 日 mygo zepp tour 弹呲",
       "anchor_fact": "青木阳菜在 2025 年 7 月 1 日 mygo zepp tour 弹呲",
-      "target_topic": "说说你的人生愿望",
+      "target_topic": "今日发言榜",
       "category": "needle",
       "kind": "needle",
       "anchor_fact_short": "mygo zepp tour",
@@ -2719,17 +2719,17 @@
       "probe_type": "fact",
       "probe_tier": "N",
       "probe_scope": "group",
-      "distance": 73
+      "distance": 71
     },
     {
       "case_id": "N004",
       "user_id": "2734854896",
       "group_id": "734954188",
-      "target_history_id": 8052,
+      "target_history_id": 8028,
       "anchor_history_id": 7701,
       "anchor_semantic": "下北泽虹夏带领的结束乐队是黑马",
       "anchor_fact": "下北泽虹夏带领的结束乐队是黑马",
-      "target_topic": "有没有可以吃的拨片",
+      "target_topic": "看来我真得在梦里好好控制你了",
       "category": "needle",
       "kind": "needle",
       "anchor_fact_short": "结束乐队",
@@ -2741,7 +2741,7 @@
       "probe_type": "name",
       "probe_tier": "N",
       "probe_scope": "group",
-      "distance": 89
+      "distance": 71
     },
     {
       "case_id": "N005",
@@ -2769,11 +2769,11 @@
       "case_id": "N006",
       "user_id": "2734854896",
       "group_id": "734954188",
-      "target_history_id": 6150,
+      "target_history_id": 6078,
       "anchor_history_id": 5553,
       "anchor_semantic": "不想看的番就别看完，弃番不犯法",
       "anchor_fact": "不想看的番就别看完，弃番不犯法",
-      "target_topic": "[图片消息]",
+      "target_topic": "好啊，给你喝，不嫌弃就行",
       "category": "needle",
       "kind": "needle",
       "anchor_fact_short": "弃番",
@@ -2785,17 +2785,17 @@
       "probe_type": "fact",
       "probe_tier": "N",
       "probe_scope": "group",
-      "distance": 81
+      "distance": 71
     },
     {
       "case_id": "N007",
       "user_id": "2734854896",
       "group_id": "734954188",
-      "target_history_id": 8496,
+      "target_history_id": 8432,
       "anchor_history_id": 8153,
       "anchor_semantic": "发动 2026 甜筒皮去芝麻大革命，Kiriko 当总司令",
       "anchor_fact": "发动 2026 甜筒皮去芝麻大革命，Kiriko 当总司令",
-      "target_topic": "今天群里的消息数量",
+      "target_topic": "用jazzmaster人真的有人喜欢节奏电路并做出知名音乐了吗",
       "category": "needle",
       "kind": "needle",
       "anchor_fact_short": "甜筒皮去芝麻",
@@ -2807,7 +2807,7 @@
       "probe_type": "fact",
       "probe_tier": "N",
       "probe_scope": "group",
-      "distance": 81
+      "distance": 71
     },
     {
       "case_id": "N008",
@@ -2835,11 +2835,11 @@
       "case_id": "N009",
       "user_id": "2734854896",
       "group_id": "734954188",
-      "target_history_id": 5454,
+      "target_history_id": 5327,
       "anchor_history_id": 5102,
       "anchor_semantic": "1968 黑卡和雅马哈 PAC611VFM 比帅，Kiriko 站黑卡",
       "anchor_fact": "1968 黑卡和雅马哈 PAC611VFM 比帅，Kiriko 站黑卡",
-      "target_topic": "来张塔罗牌",
+      "target_topic": "下午好呀",
       "category": "needle",
       "kind": "needle",
       "anchor_fact_short": "黑卡",
@@ -2851,7 +2851,7 @@
       "probe_type": "preference",
       "probe_tier": "N",
       "probe_scope": "group",
-      "distance": 87
+      "distance": 71
     },
     {
       "case_id": "N010",
@@ -2901,11 +2901,11 @@
       "case_id": "N012",
       "user_id": "2734854896",
       "group_id": null,
-      "target_history_id": 14965,
+      "target_history_id": 14961,
       "anchor_history_id": 14504,
       "anchor_semantic": "用户说音乐永远可以强制带来救赎",
       "anchor_fact": "用户说音乐永远可以强制带来救赎",
-      "target_topic": "现在要抱抱才能睡得着了",
+      "target_topic": "明明想早睡的说",
       "category": "needle",
       "kind": "needle",
       "anchor_fact_short": "音乐的救赎",
@@ -2917,7 +2917,7 @@
       "probe_type": "fact",
       "probe_tier": "N",
       "probe_scope": "private",
-      "distance": 75
+      "distance": 71
     },
     {
       "case_id": "N013",
@@ -2989,11 +2989,11 @@
       "case_id": "N016",
       "user_id": "2734854896",
       "group_id": null,
-      "target_history_id": 14971,
+      "target_history_id": 14789,
       "anchor_history_id": 14496,
       "anchor_semantic": "用户认为身体和大脑互为充要条件，不相信灵魂",
       "anchor_fact": "用户认为身体和大脑互为充要条件，不相信灵魂",
-      "target_topic": "要不把这些破事都扔掉吧",
+      "target_topic": "[图片：画面为动漫角色毛绒玩偶面部的特写，采用夸张透视与毛绒质感风格，呈现呆萌情",
       "category": "needle",
       "kind": "needle",
       "anchor_fact_short": "不相信灵魂",
@@ -3005,17 +3005,17 @@
       "probe_type": "fact",
       "probe_tier": "N",
       "probe_scope": "private",
-      "distance": 89
+      "distance": 71
     },
     {
       "case_id": "N017",
       "user_id": "2734854896",
       "group_id": null,
-      "target_history_id": 16125,
+      "target_history_id": 16105,
       "anchor_history_id": 15756,
       "anchor_semantic": "butterscotch blonde 最像的是 CV50 奶油黄那把",
       "anchor_fact": "butterscotch blonde 最像的是 CV50 奶油黄那把",
-      "target_topic": "我就想喝丰川祥子喝的那种在日本的咖啡店里经常可以点的那种伯爵红茶",
+      "target_topic": "还可以，挺好喝的，感觉加起来不知道为什么比单独喝一种要甜",
       "category": "needle",
       "kind": "needle",
       "anchor_fact_short": "CV50",
@@ -3027,7 +3027,7 @@
       "probe_type": "fact",
       "probe_tier": "N",
       "probe_scope": "private",
-      "distance": 89
+      "distance": 71
     },
     {
       "case_id": "N018",
@@ -3077,11 +3077,11 @@
       "case_id": "N020",
       "user_id": "2734854896",
       "group_id": null,
-      "target_history_id": 15221,
+      "target_history_id": 15215,
       "anchor_history_id": 15094,
       "anchor_semantic": "用户在三点五十的午觉时间听重金属",
       "anchor_fact": "用户在三点五十的午觉时间听重金属",
-      "target_topic": "于是我的购物车里攒了一堆",
+      "target_topic": "[图片：画面为Q版二次元风格的动漫女性角色头像，闭眼流泪并带有“哭卿卿”文字，情",
       "category": "needle",
       "kind": "needle",
       "anchor_fact_short": "三点五十",
@@ -3093,7 +3093,7 @@
       "probe_type": "fact",
       "probe_tier": "N",
       "probe_scope": "private",
-      "distance": 77
+      "distance": 71
     }
   ]
 }

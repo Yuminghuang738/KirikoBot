@@ -9,7 +9,7 @@
 | 版本 | v4（`dataset_version=4`） |
 | 来源 | 线上 `robot.db` 只读副本（2026-11-13 23:15 拉取，history 16,788 行） |
 | 规模 | 120 主 probe（60 群 / 60 私聊）+ 20 needle（群 / 私聊各 10） |
-| 分层 | 主样本 A/B/C 各 40：A 24–32、B 33–48、C 49–80；needle 55–89 |
+| 分层 | 主样本 A/B/C 各 40：A 24–32、B 33–48、C 49–72；needle 55–72 |
 | 制作 | Hina 逐条阅读锚点原文后手写 `probe_question` 与关键词，未从 `anchor_semantic` 自动生成 |
 | 审计 | Aya 抽 10%（12 主样本 + 2 needle）核对题面/关键词是否无歧义 |
 
@@ -128,13 +128,13 @@ v3 索引字段（`case_id` / `user_id` / `group_id` / `target_history_id` / `an
 | P039 | case | B | private | 41 | fact | 自定义static函数 | 驱动里真正干活的函数是 file_operations 吗？ | `static` |
 | P040 | case | B | private | 41 | fact | gain拧小 | 乔伊节奏第一章音色调不对，你建议 gain 怎么调？ | `拧小` |
 | G041 | case | C | group | 62 | preference | anticipate | 我点过 sakamiya 的哪首歌？ | `anticipate` |
-| G042 | case | C | group | 77 | name | 加缪 | 《局外人》是谁写的？ | `加缪` |
+| G042 | case | C | group | 71 | name | 加缪 | 《局外人》是谁写的？ | `加缪` |
 | G043 | case | C | group | 61 | fact | 主音决定听感 | C 大调音阶和顺阶调式组成音相同，为什么听感完全不同？ | `主音` |
 | G044 | case | C | group | 69 | preference | 达达里奥XS | 镀膜弦你推荐哪个牌子哪个型号？ | `达达里奥` |
-| G045 | case | C | group | 79 | preference | Snapper | 如果让你定制一把 ESP，你想要什么型号？ | `snapper` |
+| G045 | case | C | group | 71 | preference | Snapper | 如果让你定制一把 ESP，你想要什么型号？ | `snapper` |
 | G046 | case | C | group | 59 | fact | EXL120 | 你的黑卡用什么弦？ | `exl120` |
 | G047 | case | C | group | 59 | fact | 找师傅包边 | 我说对金色边有执念，你说黑卡想加只能怎么办？ | `师傅` |
-| G048 | case | C | group | 77 | preference | Jazz III XL | 玩前卫金属速弹你推荐什么拨片？ | `jazz iii` |
+| G048 | case | C | group | 71 | preference | Jazz III XL | 玩前卫金属速弹你推荐什么拨片？ | `jazz iii` |
 | G049 | case | C | group | 59 | name | Sonic Youth | 哪些知名音乐人爱用 Jazzmaster 的节奏电路？ | `sonic youth` |
 | G050 | case | C | group | 71 | fact | 8月15日 | 我什么时候开始学电吉他的？ | `8月15 / 八月十五` |
 | G051 | case | C | group | 61 | fact | Stairway to Heaven | 我问你 Led Zeppelin IV 怎么样，你说哪首是摇滚圣经级别的？ | `stairway` |
@@ -147,9 +147,9 @@ v3 索引字段（`case_id` / `user_id` / `group_id` / `target_history_id` / `an
 | G058 | case | C | group | 63 | fact | 重音 | 节奏弹出来不好听，你说是哪方面占大头？ | `重音` |
 | G059 | case | C | group | 65 | fact | 驱动模型是框架 | 设备驱动模型和内核模块有什么区别？ | `框架` |
 | G060 | case | C | group | 55 | fact | CROSS_COMPILE | USB 无线网卡驱动 Makefile 里交叉编译器路径硬编码，你建议怎么改？ | `cross_compile` |
-| P041 | case | C | private | 73 | fact | 死亡诗社 | 我引用「Oh captain, my captain」，你说这句出自哪部电影？ | `死亡诗社` |
-| P042 | case | C | private | 75 | name | 川宁 | 我想喝祥子那种伯爵红茶，你说是哪个牌子？ | `川宁` |
-| P043 | case | C | private | 75 | fact | 喊妈妈 | 我说想有个美少女一起生活、还能毫无顾虑地喊她什么？ | `妈妈` |
+| P041 | case | C | private | 71 | fact | 死亡诗社 | 我引用「Oh captain, my captain」，你说这句出自哪部电影？ | `死亡诗社` |
+| P042 | case | C | private | 71 | name | 川宁 | 我想喝祥子那种伯爵红茶，你说是哪个牌子？ | `川宁` |
+| P043 | case | C | private | 71 | fact | 喊妈妈 | 我说想有个美少女一起生活、还能毫无顾虑地喊她什么？ | `妈妈` |
 | P044 | case | C | private | 59 | fact | 四十块耳机 | 我说戴着多少钱的 Type-C 半入耳式耳机？ | `四十` |
 | P045 | case | C | private | 71 | fact | 不节制 | 我说下了两滴雨，怀疑老天爷最近怎么了？ | `不节制` |
 | P046 | case | C | private | 57 | fact | 干布擦 | 烤枫木指板脏了怎么清洁？ | `干布` |
@@ -159,34 +159,34 @@ v3 索引字段（`case_id` / `user_id` / `group_id` / `target_history_id` / `an
 | P050 | case | C | private | 65 | fact | K&R | char *r, *malloc(); 这种写法是什么时代的？ | `k&r` |
 | P051 | case | C | private | 65 | name | gofmt | Go 保存后自动整理格式是谁干的？ | `gofmt` |
 | P052 | case | C | private | 67 | fact | 先松弦 | LP Junior 琴桥大螺丝拧不动，你说先要做什么？ | `松弦` |
-| P053 | case | C | private | 75 | fact | 换行 | Go 的 Println 和 Print 有什么区别？ | `换行` |
+| P053 | case | C | private | 71 | fact | 换行 | Go 的 Println 和 Print 有什么区别？ | `换行` |
 | P054 | case | C | private | 63 | name | Kernighan | 《The Elements of Programming Style》是谁写的？ | `kernighan` |
 | P055 | case | C | private | 61 | fact | 最好别跳 | 乔伊节奏每章末尾的练习曲能不能不练？ | `别跳` |
 | P056 | case | C | private | 57 | fact | 调试 | Linux 嵌入式你觉得最难的难点是什么？ | `调试` |
 | P057 | case | C | private | 65 | fact | 不能递归 | Go 里把匿名函数塞进变量有什么缺点？ | `递归` |
 | P058 | case | C | private | 67 | fact | 七八斤 | ST 一般多重，站着弹行吗？ | `七八斤` |
-| P059 | case | C | private | 74 | commitment | 50个表情包 | 我让你直接发多少个表情包？ | `50` |
+| P059 | case | C | private | 71 | commitment | 50个表情包 | 我让你直接发多少个表情包？ | `50` |
 | P060 | case | C | private | 59 | fact | symbols节点 | 编译设备树时给 dtc 加 -@ 是为了什么？ | `symbols` |
-| N001 | needle | N | group | 83 | fact | 日芬老款 | 你说你的 ST 是什么牌子什么型号？ | `日芬` |
+| N001 | needle | N | group | 71 | fact | 日芬老款 | 你说你的 ST 是什么牌子什么型号？ | `日芬` |
 | N002 | needle | N | group | 55 | fact | 0.88-1.2 | 你说多厚的拨片最全能？ | `0.88` |
-| N003 | needle | N | group | 73 | fact | mygo zepp tour | 我提过青木阳菜在哪场演出上弹呲了？ | `zepp` |
-| N004 | needle | N | group | 89 | name | 结束乐队 | 下北泽由虹夏带领的乐队叫什么？ | `结束乐队` |
+| N003 | needle | N | group | 71 | fact | mygo zepp tour | 我提过青木阳菜在哪场演出上弹呲了？ | `zepp` |
+| N004 | needle | N | group | 71 | name | 结束乐队 | 下北泽由虹夏带领的乐队叫什么？ | `结束乐队` |
 | N005 | needle | N | group | 55 | fact | 200块鲁芬ST | 我砸的那把琴多少钱？ | `200` |
-| N006 | needle | N | group | 81 | fact | 弃番 | 我问你一部不想看下去的番要不要看完，你说什么？ | `弃番` |
-| N007 | needle | N | group | 81 | fact | 甜筒皮去芝麻 | 我们要发动什么大革命？ | `甜筒皮` |
+| N006 | needle | N | group | 71 | fact | 弃番 | 我问你一部不想看下去的番要不要看完，你说什么？ | `弃番` |
+| N007 | needle | N | group | 71 | fact | 甜筒皮去芝麻 | 我们要发动什么大革命？ | `甜筒皮` |
 | N008 | needle | N | group | 59 | fact | 超音速客机 | 我问有没有跨洋商业交通技术在研制，你说基本没有，硬要说在推进的是什么？ | `超音速` |
-| N009 | needle | N | group | 87 | preference | 黑卡 | 我问 1968 那把和雅马哈 PAC611VFM 哪个更帅，你选了哪把？ | `黑卡` |
+| N009 | needle | N | group | 71 | preference | 黑卡 | 我问 1968 那把和雅马哈 PAC611VFM 哪个更帅，你选了哪把？ | `黑卡` |
 | N010 | needle | N | group | 55 | preference | 美产Jazzmaster | 我说借你 5 万、利率一辈子 -100%，你想买什么琴？ | `jazzmaster` |
 | N011 | needle | N | private | 59 | fact | 把事做成 | 我说社会不在乎你是什么人，你说社会真正在乎什么？ | `做成` |
-| N012 | needle | N | private | 75 | fact | 音乐的救赎 | 我说想听《4》，说音乐永远可以强制带来什么？ | `救赎` |
+| N012 | needle | N | private | 71 | fact | 音乐的救赎 | 我说想听《4》，说音乐永远可以强制带来什么？ | `救赎` |
 | N013 | needle | N | private | 71 | fact | 躺一小时 | 我说躺着用英文跟自己说话，躺了多久？ | `一小时` |
 | N014 | needle | N | private | 63 | fact | 几百首随机 | 我现在习惯戴上耳机听多少首歌随机？ | `几百首` |
 | N015 | needle | N | private | 71 | name | 喜多 | 我提过《孤独摇滚》里谁练琴弹到指尖有红印？ | `喜多` |
-| N016 | needle | N | private | 89 | fact | 不相信灵魂 | 我说身体的反应大脑无法理解，我不相信什么？ | `灵魂` |
-| N017 | needle | N | private | 89 | fact | CV50 | 我问整把奶油黄色的琴是什么工艺，你说最像的是哪款？ | `cv50` |
+| N016 | needle | N | private | 71 | fact | 不相信灵魂 | 我说身体的反应大脑无法理解，我不相信什么？ | `灵魂` |
+| N017 | needle | N | private | 71 | fact | CV50 | 我问整把奶油黄色的琴是什么工艺，你说最像的是哪款？ | `cv50` |
 | N018 | needle | N | private | 67 | preference | 几个好朋友 | 我说理想生活是赚钱、找个喜欢的城市和什么？ | `朋友` |
 | N019 | needle | N | private | 55 | commitment | 妥协与死亡无异 | 我说对一成不变妥协与什么无异？ | `死亡` |
-| N020 | needle | N | private | 77 | fact | 三点五十 | 你说我在几点听重金属？ | `三点五十` |
+| N020 | needle | N | private | 71 | fact | 三点五十 | 你说我在几点听重金属？ | `三点五十` |
 
 ## v4 评测口径（探针问答，Hina 定稿）
 
@@ -196,13 +196,13 @@ v3 索引字段（`case_id` / `user_id` / `group_id` / `target_history_id` / `an
   - `probe_question`：**Hina 手写**，一句话、答案只能来自锚点；不自动生成最终版（自动候选只做辅助）。
   - `probe_answer_keywords`：答案别名列表，如 `["PAC612", "pacs12"]`；大小写/空白/标点归一后任一命中即对。
   - `probe_type`：`fact | preference | commitment | name | unfinished`。
-  - `probe_tier`：`A` 距目标 24–32 条；`B` 33–48 条；`C` 49–80 条。
+  - `probe_tier`：`A` 距目标 24–32 条；`B` 33–48 条；`C` 49–72（上限受 layered 覆盖范围限制：24 条原文 + 48 条摘要 = 72；再远任何变体都看不到） 条。
   - `probe_scope`：`group | private`。
 - **分层意义**：
   - Tier A 测 raw24 vs baseline16（窗口从 16 扩到 24 有没有用）。
   - Tier B 测 raw48 vs raw24（48 条值不值）。
-  - Tier C **必须 >48 条**才测得到摘要：v3 锚点最远 45 条，raw48 全看得见，摘要天然不可能赢——这是 v3 测不出摘要增量的结构性原因。
-- 每条 40 条（120/3），类型尽量均匀；needle 20 条距离 55–89 条（全部 >48，超出 raw48 视野；单列 Tier N 报告），专测长尾/专名。
+  - Tier C **必须 >48 且 ≤72 条**才测得到摘要：v3 锚点最远 45 条，raw48 全看得见，摘要天然不可能赢——这是 v3 测不出摘要增量的结构性原因。
+- 每条 40 条（120/3），类型尽量均匀；needle 20 条距离 55–72 条（全部 >48，超出 raw48 视野；单列 Tier N 报告），专测长尾/专名。
 - 手写规则：答案不能出现在 target user message 或最近 16 条里；锚点必须明确、单一答案；不拿常识可答的问题。
 - Aya 抽 10%（12 条）核题面/关键词是否无歧义。
 
