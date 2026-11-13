@@ -328,14 +328,15 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
     _USAGE.clear()
     _wire_summary_metrics()
     conn = connect_ro(db_path)
-    results: list[dict[str, Any]] = []
     selected = cases[: limit or len(cases)]
-    done: set[str] = set()
+    done_entries: list[dict[str, Any]] = []
     if jsonl_path:
         if resume and Path(jsonl_path).exists():
-            done = _load_done_ids(jsonl_path)
+            done_entries = _load_done_entries(jsonl_path)
         else:
             Path(jsonl_path).write_text("", encoding="utf-8")
+    done = {str(entry.get("case_id")) for entry in done_entries}
+    results: list[dict[str, Any]] = list(done_entries)
 
     for index, case in enumerate(selected, 1):
         if case["case_id"] in done:
@@ -426,6 +427,7 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
         "dry_run": dry_run,
         "db": Path(db_path).name,
         "results": results,
+        "new_result_count": len(results) - len(done_entries),
         "summary": summary_stats,
         "usage": usage,
         "token_cost": token_cost,
@@ -433,22 +435,29 @@ def run(cases: list[dict[str, Any]], db_path: str, limit: int | None = None,
             "只测记忆层：system=PERSONA，不含工具 schema / 群背景 / 画像；"
             "四变体 baseline16 / raw24 / raw48 / layered(24+摘要)，"
             "结论只用于相对比较，不代表完整生产链路。"
+            + ("resume 时结果含 checkpoint 里的条目，token/usage 只统计本次新跑的 case。" if resume else "")
         ),
     }
 
 
-def _load_done_ids(jsonl_path: str) -> set[str]:
-    """读 checkpoint：一次运行可能被杀，续跑只跳过已完成的 case。"""
-    done: set[str] = set()
+def _load_done_entries(jsonl_path: str) -> list[dict[str, Any]]:
+    """读 checkpoint：一次运行可能被杀，续跑把已完成条目并回结果。"""
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
     for line in Path(jsonl_path).read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
         try:
-            done.add(str(json.loads(line)["case_id"]))
-        except (ValueError, KeyError, TypeError):
+            entry = json.loads(line)
+        except ValueError:
             continue
-    return done
+        case_id = str(entry.get("case_id") or "")
+        if not case_id or case_id in seen:
+            continue
+        seen.add(case_id)
+        entries.append(entry)
+    return entries
 
 
 def measure_summary_cost(cases: list[dict[str, Any]], db_path: str,
@@ -610,8 +619,8 @@ def main(argv: list[str] | None = None) -> int:
     jsonl = args.jsonl or (str(out) + ".jsonl")
     payload = run(cases, args.db, limit=args.limit or None, dry_run=args.dry_run,
                   jsonl_path=jsonl, resume=args.resume)
-    if args.resume and not payload["results"]:
-        print("checkpoint 里所有 case 都已完成，本次没有新结果；不覆盖 out 文件")
+    if args.resume and payload["new_result_count"] == 0:
+        print("checkpoint 已覆盖全部 case，本次没有新结果；不覆盖 out 文件")
         return 0
     out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     print_summary(payload["summary"])

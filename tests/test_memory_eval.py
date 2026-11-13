@@ -363,10 +363,11 @@ def test_run_checkpoints_each_case_and_resumes(tmp_path, monkeypatch):
 
     assert payload["summary"]["case_count"] == 1
     assert len(jsonl.read_text(encoding="utf-8").splitlines()) == 1
-    assert memory_replay._load_done_ids(str(jsonl)) == {case["case_id"]}
+    assert [e["case_id"] for e in memory_replay._load_done_entries(str(jsonl))] == [case["case_id"]]
 
     again = memory_replay.run([case], db, jsonl_path=str(jsonl), resume=True)
-    assert again["results"] == []
+    assert again["summary"]["case_count"] == 1
+    assert again["results"][0]["case_id"] == case["case_id"]
     # 不带 --resume 重跑会清空旧 checkpoint，不会把上一次的条目算进来
     fresh = memory_replay.run([case], db, jsonl_path=str(jsonl))
     assert fresh["summary"]["case_count"] == 1
