@@ -100,6 +100,14 @@ BATTLE_TIMEOUT = 60  # seconds before battle auto-ends
 llbot = LLBotClient(Config.ONEBOT_API or "http://llbot:3000", Config.ONEBOT_TOKEN or "")
 db = DatabaseManager()
 
+# 上个进程留下的 running DSH 行改 interrupted，否则成功率/耗时永远缺这些任务。
+try:
+    _stale_dsh = db.mark_stale_dsh_tasks_interrupted()
+    if _stale_dsh:
+        logger.info("启动时将 %d 条遗留 DSH running 任务标记为 interrupted", _stale_dsh)
+except Exception:
+    logger.debug("标记遗留 DSH 任务失败", exc_info=True)
+
 # 回复频率限制：按群 / 按用户两个维度，配置存在 group_rate_limits 表里，
 # 在群设置面板里改。装进 robot_server 之后，所有出站回复都会过它一道。
 rate_limiter = RateLimiter(db)
@@ -706,15 +714,17 @@ def main_logic(robot: RobotServer) -> None:
 
                 # Recorded after the handler so the chain also carries the
                 # outcome — this is what explain_self replays back to the user.
-                try:
-                    db.record_tool_usage(
-                        fn, robot.user_id, robot.group_id,
-                        arguments=tc.get("function", {}).get("arguments", ""),
-                        result=getattr(ai, "tool_result_text", "") or "",
-                        reasoning=ai.reasoning_content or "",
-                    )
-                except Exception:
-                    logger.debug("tool chain record failed", exc_info=True)
+                # dsh_agent 自己写 running→终态一行，通用记录跳过避免双行。
+                if fn != "dsh_agent":
+                    try:
+                        db.record_tool_usage(
+                            fn, robot.user_id, robot.group_id,
+                            arguments=tc.get("function", {}).get("arguments", ""),
+                            result=getattr(ai, "tool_result_text", "") or "",
+                            reasoning=ai.reasoning_content or "",
+                        )
+                    except Exception:
+                        logger.debug("tool chain record failed", exc_info=True)
 
             if follow_up_tcs:
                 ai.follow_up_request(follow_up_tcs)
@@ -1588,7 +1598,54 @@ def api_dsh_status():
         "patch_file": patch_file,
         "timeout": Config.DSH_TIMEOUT,
         "sessions": sessions,
+        # 3085 的官方 WebUI 需要浏览器侧 token 交换 + 287MB RSS，1.6G 机器上不划算；
+        # 面板改用同源的原生状态页，这里显式说明，不再让前端拼 iframe。
+        "web_ui": "native",
     })
+
+
+@app.route("/api/dsh/tasks")
+def api_dsh_tasks():
+    """最近 DSH 任务与指标：p50/p90（只算 ok）、成功率、恢复率。"""
+    limit = request.args.get("limit", 20, type=int)
+    try:
+        rows = db.fetch_data(
+            "SELECT id, timestamp, status, duration_ms, session_key, "
+            "session_recovered, queue_wait_ms, error "
+            "FROM tool_usage WHERE tool_name='dsh_agent' ORDER BY id DESC LIMIT ?",
+            (max(1, min(limit, 100)),),
+        )
+    except Exception:
+        rows = []
+    tasks = [{
+        "id": r[0], "timestamp": r[1], "status": r[2] or "",
+        "duration_ms": int(r[3] or 0), "session_key": r[4] or "",
+        "session_recovered": bool(r[5]), "queue_wait_ms": int(r[6] or 0),
+        "error": r[7] or "",
+    } for r in rows]
+
+    try:
+        durations = sorted(
+            int(r[3] or 0) for r in rows if (r[2] or "") == "ok" and int(r[3] or 0) > 0
+        )
+        terminal = [r for r in rows if (r[2] or "") in
+                    ("ok", "empty", "timeout", "error", "interrupted", "rejected")]
+        ok_count = sum(1 for r in terminal if (r[2] or "") == "ok")
+        resumed = [r for r in rows if (r[4] or "") and (r[2] or "") in
+                   ("ok", "empty", "timeout", "error", "interrupted", "rejected")]
+        recovered = sum(1 for r in resumed if bool(r[5]))
+        stats = {
+            "n": len(terminal),
+            "p50_ms": durations[len(durations) // 2] if durations else None,
+            "p90_ms": durations[min(len(durations) - 1, int(len(durations) * 0.9))]
+            if durations else None,
+            "success_rate": round(ok_count / len(terminal), 3) if terminal else None,
+            "session_tasks": len(resumed),
+            "recovery_rate": round(recovered / len(resumed), 3) if resumed else None,
+        }
+    except Exception:
+        stats = {}
+    return jsonify({"tasks": tasks, "stats": stats})
 
 
 @app.route("/api/dsh/plugins")
@@ -1630,22 +1687,59 @@ def api_dsh_execute():
     data = request.get_json(silent=True) or {}
     task = str(data.get("task") or "").strip()
     session_key = str(data.get("session_key") or "web_console").strip()
-    timeout = int(data.get("timeout") or 120)
+    if not re.fullmatch(r"[A-Za-z0-9_:.\-]{1,80}", session_key):
+        session_key = "web_console"
+    # 前端传来的 timeout 不能超过服务端配置，避免一个请求占住线程远超预算。
+    try:
+        timeout = int(data.get("timeout") or 120)
+    except (TypeError, ValueError):
+        timeout = 120
+    timeout = max(1, min(timeout, int(Config.DSH_TIMEOUT or 600)))
 
     if not task:
         return jsonify({"ok": False, "error": "任务内容不能为空"}), 400
 
+    task_id = 0
+    t0 = time.monotonic()
     try:
-        result = dsh_agent_tool.client.run_task(task, session_key=session_key, timeout=timeout)
-        return jsonify({
-            "ok": True,
-            "task": task,
-            "session_key": session_key,
-            "result": result,
-        })
+        task_id = db.start_dsh_task("web_console", None, session_key)
+    except Exception:
+        logger.debug("web console dsh row insert failed", exc_info=True)
+
+    meta: dict[str, Any] = {}
+    try:
+        result = dsh_agent_tool.client.run_task(
+            task, session_key=session_key, timeout=timeout, meta=meta,
+        )
     except Exception as e:
         logger.exception("Web 控制台触发 DSH 任务失败")
-        return jsonify({"ok": False, "error": str(e)}), 500
+        meta.setdefault("status", "error")
+        meta.setdefault("error", f"{type(e).__name__}: {e}")
+        result = f"执行失败：{e}"
+
+    status = str(meta.get("status") or "error")
+    if status == "unavailable":
+        status = "error"
+    if task_id:
+        try:
+            db.finish_dsh_task(
+                task_id, status=status,
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                session_recovered=bool(meta.get("session_recovered")),
+                error=str(meta.get("error") or ""),
+                arguments=task, result=str(result or "")[:500],
+            )
+        except Exception:
+            logger.debug("web console dsh row update failed", exc_info=True)
+
+    return jsonify({
+        "ok": status in ("ok", "empty"),
+        "task": task,
+        "session_key": session_key,
+        "timeout": timeout,
+        "status": status,
+        "result": result,
+    })
 
 
 def _webhook_signature_ok(raw_body: bytes) -> bool:

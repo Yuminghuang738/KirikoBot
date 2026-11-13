@@ -1350,7 +1350,24 @@ class DshAgentTool:
 
         session_key = f"{robot.msg_type}:{robot.group_id or robot.user_id}"
         t_start = time.time()
-        result = self.client.run_task(task, session_key=session_key)
+        t0 = time.monotonic()
+        task_id = 0
+        if self.db:
+            try:
+                task_id = self.db.start_dsh_task(
+                    getattr(robot, "user_id", ""), getattr(robot, "group_id", None),
+                    session_key,
+                )
+            except Exception:
+                logger.debug("dsh task row insert failed", exc_info=True)
+
+        meta: dict[str, Any] = {}
+        try:
+            result = self.client.run_task(task, session_key=session_key, meta=meta)
+        except Exception as exc:
+            meta.setdefault("status", "error")
+            meta.setdefault("error", f"{type(exc).__name__}: {exc}")
+            result = "执行超级大脑任务失败。"
 
         # 检查 DSH 是否已经在执行过程中通过 /app/dsh_deliver.py 自主完成了交付
         already_delivered = False
@@ -1362,33 +1379,59 @@ class DshAgentTool:
             except Exception:
                 pass
 
+        delivery_error = ""
         if not already_delivered:
-            # 兜底链路：DSH 未调用 deliver 命令时，解析其文本输出与文件标记并自动发出
-            found_files = re.findall(r"\[FILE:\s*([^\]]+)\]", result)
-            clean_result = re.sub(r"\[FILE:\s*[^\]]+\]", "", result).strip()
-            # QQ 气泡不渲染 Markdown，这里必须压成纯文本，否则会露出 ** 和 [] 之类的符号
-            from dsh_deliver import clean_markdown
+            try:
+                # 兜底链路：DSH 未调用 deliver 命令时，解析其文本输出与文件标记并自动发出
+                found_files = re.findall(r"\[FILE:\s*([^\]]+)\]", result)
+                clean_result = re.sub(r"\[FILE:\s*[^\]]+\]", "", result).strip()
+                # QQ 气泡不渲染 Markdown，这里必须压成纯文本，否则会露出 ** 和 [] 之类的符号
+                from dsh_deliver import clean_markdown
 
-            clean_result = clean_markdown(clean_result)
+                clean_result = clean_markdown(clean_result)
 
-            robot.reply_chunked(clean_result or "搞定啦，结果如上～")
+                robot.reply_chunked(clean_result or "搞定啦，结果如上～")
 
-            last_file = None
-            for fpath in found_files:
-                fpath = fpath.strip().strip("\"'")
-                if os.path.isfile(fpath):
-                    logger.info("DshAgent 兜底发送文件: %s 到 %s", fpath, session_key)
-                    robot.send_file(fpath)
-                    last_file = fpath
+                last_file = None
+                for fpath in found_files:
+                    fpath = fpath.strip().strip("\"'")
+                    if os.path.isfile(fpath):
+                        logger.info("DshAgent 兜底发送文件: %s 到 %s", fpath, session_key)
+                        robot.send_file(fpath)
+                        last_file = fpath
 
-            if last_file and self.db:
-                try:
-                    self.db.set_state(f"last_artifact:{session_key}", last_file)
-                    uid = getattr(robot, "user_id", "")
-                    if uid:
-                        self.db.set_state(f"last_artifact:user:{uid}", last_file)
-                except Exception:
-                    pass
+                if last_file and self.db:
+                    try:
+                        self.db.set_state(f"last_artifact:{session_key}", last_file)
+                        uid = getattr(robot, "user_id", "")
+                        if uid:
+                            self.db.set_state(f"last_artifact:user:{uid}", last_file)
+                    except Exception:
+                        pass
+            except Exception as exc:
+                delivery_error = f"{type(exc).__name__}: {exc}"
+                logger.exception("DshAgent 兜底发送失败")
+
+        status = str(meta.get("status") or "error")
+        if status == "unavailable":
+            status = "error"
+        if delivery_error:
+            meta["error"] = f"delivery_failed: {delivery_error}"
+        if self.db and task_id:
+            try:
+                self.db.finish_dsh_task(
+                    task_id,
+                    status=status,
+                    duration_ms=int((time.monotonic() - t0) * 1000),
+                    session_recovered=bool(meta.get("session_recovered")),
+                    queue_wait_ms=0,
+                    error=str(meta.get("error") or ""),
+                    arguments=task,
+                    result=str(ai.handled_summary or result or "")[:500],
+                    reasoning=ai.reasoning_content or "",
+                )
+            except Exception:
+                logger.debug("dsh task row update failed", exc_info=True)
 
         ai.handled_summary = f"[超级大脑] 任务完成：{task[:50]}"
         ai.user_text = f"超级大脑执行：{task}\n结果：{result[:300]}"

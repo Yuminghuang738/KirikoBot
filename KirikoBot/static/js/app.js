@@ -1877,38 +1877,67 @@ setInterval(refreshLLBotPill,30000);
 
 // ── DSH Official WebUI (官方原生控制台完整内嵌) ──
 async function dshHTML() {
-  let token = '';
-  let port = 3085;
+  let status = null;
+  let tasks = { tasks: [], stats: {} };
+  let plugins = { bundles: [], dependencies: {} };
+  let error = '';
   try {
-    const res = await fetch('/api/dsh/status');
-    const d = await res.json();
-    token = d.web_token || '';
-    port = d.web_port || 3085;
+    const [r1, r2, r3] = await Promise.all([
+      fetch('/api/dsh/status').then(r => r.json()),
+      fetch('/api/dsh/tasks?limit=20').then(r => r.json()),
+      fetch('/api/dsh/plugins').then(r => r.json()),
+    ]);
+    status = r1; tasks = r2; plugins = r3;
   } catch (err) {
-    console.error('获取 DSH 状态失败:', err);
+    error = String(err);
   }
 
-  const host = location.hostname || 'localhost';
-  const query = token ? ('?token=' + encodeURIComponent(token)) : '';
-  const dshUrl = 'http://' + host + ':' + port + '/' + query;
+  const head = '<div class="page-head"><div>' +
+    '<div class="ph-title">🧠 <span class="em">超级大脑 (DSH)</span></div>' +
+    '<div class="ph-sub">同源状态页：运行时、会话、插件与最近任务（不再依赖 3085 端口）</div>' +
+    '</div><div class="ph-right">' +
+    '<button class="btn" onclick="loadPage(\'dsh\')">🔄 刷新</button>' +
+    '</div></div>';
 
-  return '<div class="page-head">' +
-    '<div>' +
-      '<div class="ph-title">🧠 <span class="em">超级大脑 (DSH)</span></div>' +
-      '<div class="ph-sub">DeepSeek Harness 官方 WebUI 完整内嵌 · 会话树、插件生态、自主智能体全功能</div>' +
-    '</div>' +
-    '<div class="ph-right">' +
-      '<button class="btn" onclick="var f=document.getElementById(\'dshFrame\');if(f)f.src=f.src">🔄 重新加载</button>' +
-      '<a class="btn accent" href="' + esc(dshUrl) + '" target="_blank" rel="noopener">↗ 新标签打开</a>' +
-    '</div>' +
-  '</div>' +
-  '<div class="embed-shell">' +
-    '<div class="embed-bar">' +
-      '<span>🔗 ' + esc(dshUrl) + '</span>' +
-      '<span class="eb-right"><span class="pill info">DSH 原生 Web 界面就绪</span></span>' +
-    '</div>' +
-    '<iframe id="dshFrame" src="' + esc(dshUrl) + '" title="DeepSeek Harness WebUI" referrerpolicy="no-referrer"></iframe>' +
-  '</div>';
+  if (!status) {
+    return head + '<div class="panel"><div class="panel-header">读取失败</div>' +
+      '<div class="panel-body tight"><div class="kv-list">' +
+      '<div class="kv"><span class="k">原因</span><span class="v">' + esc(error || '未知错误') + '</span></div>' +
+      '</div></div></div>';
+  }
+
+  const fmtMs = ms => (ms == null ? '—' : (ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms'));
+  const s = tasks.stats || {};
+  const statusText = status.available ? '可用' : '不可用（未检测到 dsh 或 API 密钥）';
+  const sessions = (status.sessions || []).map(x =>
+    '<div class="msg-row"><span class="m-who">' + esc(x.target) + '</span>' +
+    '<span class="m-text">' + esc(x.session_id) + '</span></div>').join('')
+    || '<div class="empty">暂无活跃会话</div>';
+  const bundles = (plugins.bundles || []).map(b =>
+    '<span class="tag u">' + esc(typeof b === 'string' ? b : JSON.stringify(b)) + '</span>').join(' ')
+    || '<span class="ph-sub">未读取到插件清单</span>';
+  const taskRows = (tasks.tasks || []).map(t =>
+    '<div class="msg-row"><span class="m-time">' + esc(String(t.timestamp || '').slice(5, 19)) + '</span>' +
+    '<span class="m-who">' + esc(t.status || '?') + '</span>' +
+    '<span class="m-text">' + fmtMs(t.duration_ms) + ' · ' + esc(t.session_key || '—') +
+    (t.error ? ' · ' + esc(t.error) : '') + '</span></div>').join('')
+    || '<div class="empty">还没有 DSH 任务记录</div>';
+
+  return head +
+    '<div class="panel"><div class="panel-header">⚙️ 运行时</div><div class="panel-body tight"><div class="kv-list">' +
+    '<div class="kv"><span class="k">状态</span><span class="v">' + esc(statusText) + '</span></div>' +
+    '<div class="kv"><span class="k">版本</span><span class="v">' + esc(status.version || '—') + '</span></div>' +
+    '<div class="kv"><span class="k">可执行文件</span><span class="v">' + esc(status.dsh_bin || '—') + '</span></div>' +
+    '<div class="kv"><span class="k">超时 / 并发</span><span class="v">' + Number(status.timeout || 0) + 's</span></div>' +
+    '<div class="kv"><span class="k">最近任务</span><span class="v">n=' + (s.n ?? 0) +
+      ' · p50=' + fmtMs(s.p50_ms) + ' · p90=' + fmtMs(s.p90_ms) +
+      ' · 成功率=' + (s.success_rate == null ? '—' : (s.success_rate * 100).toFixed(0) + '%') +
+      ' · 恢复率=' + (s.recovery_rate == null ? '—' : (s.recovery_rate * 100).toFixed(0) + '%') +
+    '</span></div>' +
+    '</div></div></div>' +
+    '<div class="panel"><div class="panel-header">🧩 插件</div><div class="panel-body tight">' + bundles + '</div></div>' +
+    '<div class="panel"><div class="panel-header">💬 活跃会话</div><div class="panel-body tight">' + sessions + '</div></div>' +
+    '<div class="panel"><div class="panel-header">📊 最近任务</div><div class="panel-body tight">' + taskRows + '</div></div>';
 }
 
 function bindDSH() {
