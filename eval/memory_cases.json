@@ -5,7 +5,7 @@
   "source": "线上 robot.db 只读副本",
   "curator": "Hina",
   "seed": 7,
-  "notes": "v3：40 主样本（20 群/20 私聊）+10 needle；anchor 拆 anchor_short（摘要字面命中）与 anchor_semantic（语义说明）。",
+  "notes": "v3：40 主样本（20 群/20 私聊）+10 needle；anchor 拆 anchor_fact_short（摘要字面命中）与 anchor_semantic（语义说明）。",
   "cases": [
     {
       "case_id": "P001",
