@@ -1781,21 +1781,20 @@ if(location.hash==='#affection'){
 setInterval(refreshLLBotPill,30000);
 
 // ── DSH Official WebUI (官方原生控制台完整内嵌) ──
-async function dshHTML() {
-  let status = null;
-  let tasks = { tasks: [], stats: {} };
-  let plugins = { bundles: [], dependencies: {} };
-  let error = '';
-  try {
-    const [r1, r2, r3] = await Promise.all([
+let DshTaskFilters = { status: '', session: '', limit: 20 };
+
+function dshFmtMs(ms){
+  return ms == null ? '—' : (ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms');
+}
+
+async function dshHTML(){
+  let status = null, plugins = { bundles: [], dependencies: {} }, error = '';
+  try{
+    [status, plugins] = await Promise.all([
       fetch('/api/dsh/status').then(r => r.json()),
-      fetch('/api/dsh/tasks?limit=20').then(r => r.json()),
       fetch('/api/dsh/plugins').then(r => r.json()),
     ]);
-    status = r1; tasks = r2; plugins = r3;
-  } catch (err) {
-    error = String(err);
-  }
+  }catch(err){ error = String(err); }
 
   const head = '<div class="page-head"><div>' +
     '<div class="ph-title">🧠 <span class="em">超级大脑</span></div>' +
@@ -1804,15 +1803,13 @@ async function dshHTML() {
     '<button class="btn" onclick="loadPage(\'dsh\')">🔄 刷新</button>' +
     '</div></div>';
 
-  if (!status) {
+  if(!status){
     return head + '<div class="panel"><div class="panel-header">读取失败</div>' +
       '<div class="panel-body tight"><div class="kv-list">' +
       '<div class="kv"><span class="k">原因</span><span class="v">' + esc(error || '未知错误') + '</span></div>' +
       '</div></div></div>';
   }
 
-  const fmtMs = ms => (ms == null ? '—' : (ms >= 1000 ? (ms / 1000).toFixed(1) + 's' : ms + 'ms'));
-  const s = tasks.stats || {};
   const statusText = status.available ? '可用' : '不可用（未检测到 dsh 或 API 密钥）';
   const sessions = (status.sessions || []).map(x =>
     '<div class="msg-row"><span class="m-who">' + esc(x.target) + '</span>' +
@@ -1821,12 +1818,6 @@ async function dshHTML() {
   const bundles = (plugins.bundles || []).map(b =>
     '<span class="tag u">' + esc(typeof b === 'string' ? b : JSON.stringify(b)) + '</span>').join(' ')
     || '<span class="ph-sub">未读取到插件清单</span>';
-  const taskRows = (tasks.tasks || []).map(t =>
-    '<div class="msg-row"><span class="m-time">' + esc(String(t.timestamp || '').slice(5, 19)) + '</span>' +
-    '<span class="m-who">' + esc(t.status || '?') + '</span>' +
-    '<span class="m-text">' + fmtMs(t.duration_ms) + ' · ' + esc(t.session_key || '—') +
-    (t.error ? ' · ' + esc(t.error) : '') + '</span></div>').join('')
-    || '<div class="empty">还没有 DSH 任务记录</div>';
 
   return head +
     '<div class="panel"><div class="panel-header">⚙️ 运行时</div><div class="panel-body tight"><div class="kv-list">' +
@@ -1834,18 +1825,155 @@ async function dshHTML() {
     '<div class="kv"><span class="k">版本</span><span class="v">' + esc(status.version || '—') + '</span></div>' +
     '<div class="kv"><span class="k">可执行文件</span><span class="v">' + esc(status.dsh_bin || '—') + '</span></div>' +
     '<div class="kv"><span class="k">超时 / 并发</span><span class="v">' + Number(status.timeout || 0) + 's / ' + Number(status.max_concurrency || 0) + '</span></div>' +
-    '<div class="kv"><span class="k">最近任务</span><span class="v">n=' + (s.n ?? 0) +
-      ' · p50=' + fmtMs(s.p50_ms) + ' · p90=' + fmtMs(s.p90_ms) +
-      ' · 成功率=' + (s.success_rate == null ? '—' : (s.success_rate * 100).toFixed(0) + '%') +
-      ' · 恢复率=' + (s.recovery_rate == null ? '—' : (s.recovery_rate * 100).toFixed(0) + '%') +
-      ' · 拒绝率=' + (s.reject_rate == null ? '—' : (s.reject_rate * 100).toFixed(0) + '%') +
-    '</span></div>' +
+    '<div class="kv"><span class="k">最近任务</span><span class="v" id="dsh-stats">加载中…</span></div>' +
     '</div></div></div>' +
     '<div class="panel"><div class="panel-header">🧩 插件</div><div class="panel-body tight">' + bundles + '</div></div>' +
     '<div class="panel"><div class="panel-header">💬 活跃会话</div><div class="panel-body tight">' + sessions + '</div></div>' +
-    '<div class="panel"><div class="panel-header">📊 最近任务</div><div class="panel-body tight">' + taskRows + '</div></div>';
+    '<div class="panel"><div class="panel-header">📊 最近任务' +
+      '<span class="ph-right">' +
+        '<select id="dsh-f-status" onchange="onDshFilterChange()"><option value="">全部状态</option></select>' +
+        '<select id="dsh-f-session" onchange="onDshFilterChange()"><option value="">全部会话</option></select>' +
+        '<select id="dsh-f-limit" onchange="onDshFilterChange()"><option>20</option><option>50</option><option>100</option></select>' +
+      '</span></div>' +
+      '<div class="panel-body tight"><div id="dsh-task-list"><div class="empty">加载中…</div></div></div></div>';
 }
 
-function bindDSH() {
-  // 原生 WebUI 由 iframe 完全自主接管，无需额外事件绑定
+function onDshFilterChange(){
+  DshTaskFilters.status = (($('dsh-f-status') || {}).value || '');
+  DshTaskFilters.session = (($('dsh-f-session') || {}).value || '');
+  DshTaskFilters.limit = parseInt((($('dsh-f-limit') || {}).value || '20'), 10) || 20;
+  loadDshTasks();
+}
+
+function _dshFillSelect(el, values, keepStaticLabel){
+  if(!el) return;
+  const current = el.value;
+  const frag = document.createDocumentFragment();
+  const all = document.createElement('option');
+  all.value = '';
+  all.textContent = keepStaticLabel;
+  frag.appendChild(all);
+  (values || []).forEach(v => {
+    const o = document.createElement('option');
+    o.value = String(v);
+    o.textContent = String(v);
+    frag.appendChild(o);
+  });
+  el.replaceChildren(frag);
+  if(current && (values || []).map(String).includes(current)) el.value = current;
+}
+
+async function loadDshTasks(){
+  const q = new URLSearchParams();
+  if(DshTaskFilters.status) q.set('status', DshTaskFilters.status);
+  if(DshTaskFilters.session) q.set('session', DshTaskFilters.session);
+  q.set('limit', String(DshTaskFilters.limit));
+  let d = { tasks: [], stats: {}, statuses: [], sessions: [] };
+  try{ d = await fetch('/api/dsh/tasks?' + q.toString()).then(r => r.json()); }catch(_){}
+
+  const s = d.stats || {};
+  const stat = $('dsh-stats');
+  if(stat){
+    stat.textContent = '最近 ' + (s.window || 100) + ' 条内：n=' + (s.n ?? 0) +
+      ' · p50=' + dshFmtMs(s.p50_ms) + ' · p90=' + dshFmtMs(s.p90_ms) +
+      ' · 成功率=' + (s.success_rate == null ? '—' : (s.success_rate * 100).toFixed(0) + '%') +
+      ' · 恢复率=' + (s.recovery_rate == null ? '—' : (s.recovery_rate * 100).toFixed(0) + '%') +
+      ' · 拒绝率=' + (s.reject_rate == null ? '—' : (s.reject_rate * 100).toFixed(0) + '%');
+  }
+  _dshFillSelect($('dsh-f-status'), d.statuses, '全部状态');
+  _dshFillSelect($('dsh-f-session'), d.sessions, '全部会话');
+  const lim = $('dsh-f-limit');
+  if(lim) lim.value = String(DshTaskFilters.limit);
+  renderDshTasks(d.tasks || []);
+}
+
+function renderDshTasks(tasks){
+  const box = $('dsh-task-list');
+  if(!box) return;
+  const frag = document.createDocumentFragment();
+  if(!tasks.length){
+    const e = document.createElement('div');
+    e.className = 'empty';
+    e.textContent = '还没有符合条件的任务';
+    frag.appendChild(e);
+    box.replaceChildren(frag);
+    return;
+  }
+  tasks.forEach(t => {
+    const row = document.createElement('div');
+    row.className = 'dsh-task';
+    row.tabIndex = 0;
+    row.setAttribute('role', 'button');
+    row.dataset.taskId = String(t.id || '');
+
+    const head = document.createElement('div');
+    head.className = 'dsh-task-head';
+    const cell = (cls, text) => {
+      const el = document.createElement('span');
+      el.className = cls;
+      el.textContent = text;
+      return el;
+    };
+    head.appendChild(cell('dsh-task-time', String(t.timestamp || '').slice(5, 19)));
+    head.appendChild(cell('dsh-badge dsh-' + String(t.status || 'unknown'), t.status || '?'));
+    head.appendChild(cell('dsh-task-dur', dshFmtMs(t.duration_ms)));
+    head.appendChild(cell('dsh-task-ses', t.session_key || '—'));
+    row.appendChild(head);
+
+    const detail = document.createElement('div');
+    detail.className = 'dsh-task-detail';
+    detail.hidden = true;
+    const field = (label, value) => {
+      const box2 = document.createElement('div');
+      box2.className = 'dsh-task-field';
+      const k = document.createElement('span');
+      k.className = 'dsh-task-k';
+      k.textContent = label;
+      const v = document.createElement('div');
+      v.className = 'dsh-task-v';
+      v.textContent = value || '—';
+      box2.appendChild(k);
+      box2.appendChild(v);
+      detail.appendChild(box2);
+    };
+    // 用户对话内容一律走 textContent，禁止 innerHTML（防 XSS）。
+    field('输入 arguments', t.arguments);
+    field('输出 result', t.result);
+    field('状态', t.status);
+    field('时长', dshFmtMs(t.duration_ms));
+    field('会话', t.session_key);
+    field('时间', t.timestamp);
+    if(t.error) field('错误', t.error);
+    const hint = document.createElement('div');
+    hint.className = 'dsh-task-hint';
+    hint.textContent = '输入/输出各最多保存 500 字，超出已截断';
+    detail.appendChild(hint);
+    row.appendChild(detail);
+    frag.appendChild(row);
+  });
+  box.replaceChildren(frag);
+}
+
+function bindDSH(){
+  const box = $('dsh-task-list');
+  if(box && !box.dataset.bound){
+    box.dataset.bound = '1';
+    // 事件委托：行内不塞任何 inline onclick，用户内容不参与事件属性。
+    const toggle = row => {
+      const detail = row.querySelector('.dsh-task-detail');
+      if(!detail) return;
+      detail.hidden = !detail.hidden;
+      row.classList.toggle('open', !detail.hidden);
+    };
+    box.addEventListener('click', ev => {
+      const row = ev.target.closest('.dsh-task');
+      if(row) toggle(row);
+    });
+    box.addEventListener('keydown', ev => {
+      if(ev.key !== 'Enter' && ev.key !== ' ') return;
+      const row = ev.target.closest('.dsh-task');
+      if(row){ ev.preventDefault(); toggle(row); }
+    });
+  }
+  loadDshTasks();
 }

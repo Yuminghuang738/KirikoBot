@@ -1633,16 +1633,25 @@ def _percentile(sorted_values: list[int], q: float) -> int | None:
 
 @app.route("/api/dsh/tasks")
 def api_dsh_tasks():
-    """最近 DSH 任务与指标：p50/p90（只算 ok）、成功率、恢复率。"""
+    """最近 DSH 任务与指标：支持 status/session 筛选，详情带 arguments/result。"""
     limit = request.args.get("limit", 20, type=int)
+    status = (request.args.get("status") or "").strip()
+    session = (request.args.get("session") or "").strip()[:80]
+    allowed_status = ("ok", "empty", "timeout", "error", "interrupted", "rejected", "running")
+    where = "tool_name='dsh_agent' AND status IS NOT NULL AND status <> ''"
+    params: list[Any] = []
+    if status in allowed_status:
+        where += " AND status=?"
+        params.append(status)
+    if session:
+        where += " AND session_key=?"
+        params.append(session)
     try:
         rows = db.fetch_data(
             "SELECT id, timestamp, status, duration_ms, session_key, "
-            "session_recovered, queue_wait_ms, error "
-            "FROM tool_usage WHERE tool_name='dsh_agent' "
-            "AND status IS NOT NULL AND status <> '' "
-            "ORDER BY id DESC LIMIT ?",
-            (max(1, min(limit, 100)),),
+            "session_recovered, queue_wait_ms, error, arguments, result "
+            f"FROM tool_usage WHERE {where} ORDER BY id DESC LIMIT ?",
+            (*params, max(1, min(limit, 100))),
         )
     except Exception:
         rows = []
@@ -1652,18 +1661,31 @@ def api_dsh_tasks():
         "session_recovered": int(r[5] if r[5] is not None else -1),
         "queue_wait_ms": int(r[6] or 0),
         "error": r[7] or "",
+        "arguments": r[8] or "",
+        "result": r[9] or "",
     } for r in rows]
 
+    # 指标固定看「最近 100 条」，不随列表筛选/limit 跳动。
+    try:
+        stats_rows = db.fetch_data(
+            "SELECT id, timestamp, status, duration_ms, session_key, "
+            "session_recovered, queue_wait_ms, error "
+            "FROM tool_usage WHERE tool_name='dsh_agent' "
+            "AND status IS NOT NULL AND status <> '' "
+            "ORDER BY id DESC LIMIT 100",
+        )
+    except Exception:
+        stats_rows = []
     try:
         durations = sorted(
-            int(r[3] or 0) for r in rows if (r[2] or "") == "ok" and int(r[3] or 0) > 0
+            int(r[3] or 0) for r in stats_rows if (r[2] or "") == "ok" and int(r[3] or 0) > 0
         )
-        terminal = [r for r in rows if (r[2] or "") in
+        terminal = [r for r in stats_rows if (r[2] or "") in
                     ("ok", "empty", "timeout", "error", "interrupted")]
         ok_count = sum(1 for r in terminal if (r[2] or "") == "ok")
-        rejected = [r for r in rows if (r[2] or "") == "rejected"]
+        rejected = [r for r in stats_rows if (r[2] or "") == "rejected"]
         # 恢复率只看有存量 session 的任务（-1 = 本来就没有，不进分母）
-        resumed = [r for r in rows if int(r[5] if r[5] is not None else -1) in (0, 1)]
+        resumed = [r for r in stats_rows if int(r[5] if r[5] is not None else -1) in (0, 1)]
         recovered = sum(1 for r in resumed if int(r[5]) == 1)
         stats = {
             "n": len(terminal),
@@ -1672,13 +1694,33 @@ def api_dsh_tasks():
             "success_rate": round(ok_count / len(terminal), 3) if terminal else None,
             "rejected": len(rejected),
             # 没有终态任务时拒绝率没有意义（旧行 status 为空也不算），回 None。
-            "reject_rate": round(len(rejected) / len(rows), 3) if terminal and rows else None,
+            "reject_rate": round(len(rejected) / len(stats_rows), 3)
+            if terminal and stats_rows else None,
+            "window": 100,
             "session_tasks": len(resumed),
             "recovery_rate": round(recovered / len(resumed), 3) if resumed else None,
         }
     except Exception:
         stats = {}
-    return jsonify({"tasks": tasks, "stats": stats})
+
+    # 下拉选项：最近出现过的状态与会话（会话名按最近使用排序）
+    try:
+        statuses = [r[0] for r in db.fetch_data(
+            "SELECT DISTINCT status FROM tool_usage WHERE tool_name='dsh_agent' "
+            "AND status IS NOT NULL AND status <> '' ORDER BY status",
+        )]
+        sessions = [r[0] for r in db.fetch_data(
+            "SELECT session_key FROM tool_usage WHERE tool_name='dsh_agent' "
+            "AND session_key IS NOT NULL AND session_key <> '' "
+            "GROUP BY session_key ORDER BY MAX(id) DESC LIMIT 50",
+        )]
+    except Exception:
+        statuses, sessions = [], []
+    return jsonify({
+        "tasks": tasks, "stats": stats,
+        "statuses": statuses, "sessions": sessions,
+        "filters": {"status": status, "session": session, "limit": max(1, min(limit, 100))},
+    })
 
 
 @app.route("/api/dsh/plugins")
