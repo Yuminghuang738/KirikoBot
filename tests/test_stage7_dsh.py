@@ -134,6 +134,32 @@ class TestDshStatusApi:
         client.environ_base["HTTP_AUTHORIZATION"] = f"Basic {token}"
         return client
 
+    def test_rows_without_status_are_hidden_from_the_list(self, db, client, monkeypatch):
+        import main
+
+        old_id = db.start_dsh_task("u1", "g1", "group:g1")
+        db.execute_action("UPDATE tool_usage SET status='' WHERE id=?", (old_id,))
+        monkeypatch.setattr(main, "db", db)
+
+        body = client.get("/api/dsh/tasks").get_json()
+
+        assert body["tasks"] == [], "旧 45 条 status 为空的行不再显示成 ? 0ms"
+        assert body["stats"]["n"] == 0
+        assert body["stats"]["reject_rate"] is None
+
+    def test_reject_rate_is_none_when_there_is_no_terminal_task(self, db, client, monkeypatch):
+        import main
+
+        task_id = db.start_dsh_task("u1", "g1", "group:g1")
+        db.finish_dsh_task(task_id, status="rejected", duration_ms=0)
+        monkeypatch.setattr(main, "db", db)
+
+        stats = client.get("/api/dsh/tasks").get_json()["stats"]
+
+        assert stats["n"] == 0
+        assert stats["rejected"] == 1
+        assert stats["reject_rate"] is None
+
     def test_status_uses_native_page(self, client, monkeypatch):
         import main
 

@@ -1626,7 +1626,9 @@ def api_dsh_tasks():
         rows = db.fetch_data(
             "SELECT id, timestamp, status, duration_ms, session_key, "
             "session_recovered, queue_wait_ms, error "
-            "FROM tool_usage WHERE tool_name='dsh_agent' ORDER BY id DESC LIMIT ?",
+            "FROM tool_usage WHERE tool_name='dsh_agent' "
+            "AND status IS NOT NULL AND status <> '' "
+            "ORDER BY id DESC LIMIT ?",
             (max(1, min(limit, 100)),),
         )
     except Exception:
@@ -1656,7 +1658,8 @@ def api_dsh_tasks():
             "p90_ms": _percentile(durations, 0.9),
             "success_rate": round(ok_count / len(terminal), 3) if terminal else None,
             "rejected": len(rejected),
-            "reject_rate": round(len(rejected) / len(rows), 3) if rows else None,
+            # 没有终态任务时拒绝率没有意义（旧行 status 为空也不算），回 None。
+            "reject_rate": round(len(rejected) / len(rows), 3) if terminal and rows else None,
             "session_tasks": len(resumed),
             "recovery_rate": round(recovered / len(resumed), 3) if resumed else None,
         }
