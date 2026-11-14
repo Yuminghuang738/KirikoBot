@@ -835,12 +835,9 @@ class MusicTool:
             address = ipaddress.ip_address(host)
         except ValueError:
             return True  # 域名，视为公网
-        return not (
-            address.is_private
-            or address.is_loopback
-            or address.is_link_local
-            or address.is_reserved
-        )
+        # 只认全球可路由地址：is_private 不会拦 100.64.0.0/10（Tailscale /
+        # CGNAT 段），线上 PUBLIC_BASE_URL 正好是 100.x 的 Tailscale IP。
+        return address.is_global
 
 
 # ══════════════════════════════════════════════════════════
