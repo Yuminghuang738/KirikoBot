@@ -1,145 +1,213 @@
-# 🤖 KirikoBot
+<p align="center">
+  <img src="assets/icon.png" width="136" height="136" alt="KirikoBot 图标">
+</p>
 
-基于 **LLBot（OneBot）+ DeepSeek** 的 QQ 聊天机器人。一个 20 岁的可爱女生 Kiriko
-在群里陪你聊天，会傲娇、会发表情包、记得你是谁、也会因为太久不来而跟你疏远。
+<h1 align="center">KirikoBot</h1>
 
-20 个工具 · 681 条测试
+<p align="center">
+  <b>一个住在 QQ 群里的 20 岁女生</b><br>
+  会接梗，会傲娇，会弹电吉他，也会记得你上次说过什么。
+</p>
+
+<p align="center">
+  <a href="https://github.com/Yuminghuang738/KirikoBot/actions/workflows/ci.yml">
+    <img src="https://github.com/Yuminghuang738/KirikoBot/actions/workflows/ci.yml/badge.svg" alt="CI">
+  </a>
+  <img src="https://img.shields.io/badge/Python-3.11%20%7C%203.12-3776AB?logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/tests-1000%2B-4c1?logo=pytest&logoColor=white" alt="Tests">
+  <img src="https://img.shields.io/badge/license-GPL--3.0-blue" alt="License">
+  <img src="https://img.shields.io/badge/version-1.0.0-ff69b4" alt="Version">
+</p>
 
 ---
 
-## ✨ 主要功能
+## 这是什么
 
-### 💬 AI 对话与人格
+KirikoBot 是一个跑在 QQ 上的聊天机器人：**LLBot（OneBot）负责 QQ 接入，DeepSeek 负责对话，Flask + SQLite 负责记忆、工具和管理面板**。
 
-- 接入 DeepSeek（模型名 `deepseek-flash`），支持 Thinking 思维链
-- 群聊 @机器人 或私聊触发，8 轮对话记忆（16 条消息）
-- **完整人格**：20 岁大三女生，玩摇滚、打游戏、追番、养猫狗；说话短、不反问、不 AI 腔
-- **渐进式情绪**：被反复骚扰时从「正常」慢慢变成「懒得搭理」，但不会真的生气，更不会突然不回复
-- **防提示词泄露**：被追问设定、要求复述/翻译/代码块包裹时，一律挡回去
+它不是那种问一句答一句的客服机器人。Kiriko 有完整的人设、会看气氛、会记住群里谁是谁；你反复烦她，她会慢慢变敷衍，但不会真的翻脸。她还有 20 个工具：点歌、抽塔罗、发表情包、查好感度、设提醒、联网搜索，以及一个能跑代码、查资料、生成文件的「超级大脑」。
 
-### 🛠 内置工具（20 个）
+当前仓库：**20 个工具 · 1,000+ 条测试 · 3 个 Docker 容器 · Python 3.11**。
+
+---
+
+## 亮点
+
+### 🎀 人设不是一句「你是一个可爱的女生」
+
+- 6,800+ 字的完整人设：20 岁大三、计算机专业、玩摇滚、打游戏、追番、养猫狗
+- 说话短、不反问、不 AI 腔；傲娇只留给熟人，被夸才嘴硬一下
+- 被追问设定、要求复述/翻译/代码块包裹时，一律挡回去，并有泄露守卫兜底
+- 提示词按「稳定前缀 + 每轮变化内容」拆开，尽量不打断 DeepSeek 的前缀缓存
+
+### 🧠 对话记忆
+
+- 默认保留最近 **24 条**原文（可按 `MEMORY_RAW_MESSAGES` 调整）
+- 较早对话可滚动压缩成摘要，摘要默认**关闭**，在面板里按群灰度开启
+- 用户画像一人一份，取样跨群 + 私聊；私聊也会触发画像与好感度更新
+- 共同记忆单独存：具体发生过的事，比「性格开朗」这种标签有用
+
+### 💕 好感度属于「人」，群只是分量
+
+- 每个用户一个总分，群聊/私聊各算一个分量，按互动次数加权
+- 事件制加分：第一次来、当天首次、连续出现、深夜、发图、情绪分
+- 长期不来会掉分，掉分速度随离开时间加快
+- 五档关系：冷淡 → 普通 → 友好 → 亲密 → 挚友；提示词、面板、工具读同一个分
+
+### 🛠 20 个工具
 
 | 分类 | 工具 | 说明 |
 |---|---|---|
-| 重度任务 | 🧠 超级大脑 | 桥接本地 DeepSeek Harness Agent 执行复杂编程、长程调研、文件查找与深度分析 |
-| 信息查询 | 🔍 联网搜索 | 走 DeepSeek 官方 Search API，资料精简后交给模型整理，自动修正过期年份 |
-| 生活娱乐 | 🃏 塔罗牌 | 每日一抽：牌面 + 简短解释，只发一条，有历史记录 |
-| | 🎵 点歌 | 网易云搜歌 → QQ 音乐卡片 |
-| 视觉 | 😊 表情包 | 从 2000+ 张库里按情绪挑一张 |
-| 互动系统 | 💕 好感度 | 查自己 / 别人的好感度、排行榜 |
-| 群功能 | 📁 发送文件 | 发送本地文件或让超级大脑找到/生成后直接上传发送 |
-| | ⏰ 提醒 | 秒/分/时/天 精确提醒，支持每日重复 |
-| | 👥 @群友 | 帮用户 @ 群成员 |
-| | 💬 撤回 | 撤回自己刚发的消息 |
-| | 📊 发言统计 | 当天条数 / 活跃人数 / 时段分布 |
-| | 📖 语境读取 | 当前这句读不懂时，翻一下近期聊天 |
-| | 💰 余额查询 | DeepSeek API 余额 |
-| | 🎤 语音回复 | 用语音说话而不是打字 |
-| | 🔁 执行回放 | 调试用：把上一轮原始记录照录出来 |
-| 常驻 | 🕐 当前时间 | 算「30 秒后」这类相对时间 |
+| 重度任务 | 🧠 `dsh_agent` | 桥接本地 DeepSeek Harness，跑代码、长程调研、找/生成文件 |
+| 信息 | 🔍 `web_search` | DeepSeek 官方 Search API，结果精简后再交给模型 |
+| 生活 | 🃏 `tarot` / `tarot_history` | 每日抽牌 + 历史记录 |
+| | 🎵 `music_search` | 网易云搜歌 → QQ 音乐卡片 |
+| | 😊 `sticker` | 从表情包库里按情绪挑一张 |
+| 互动 | 💕 `check_affection` / `affection_leaderboard` | 查好感度 / 排行榜 |
+| 群功能 | 📁 `send_file` | 发本地文件，或让超级大脑找/生成后直接上传 |
+| | ⏰ `set_reminder` / `list_reminders` / `delete_reminder` | 秒/分/时/天，支持每日重复 |
+| | 👥 `at_member` / 💬 `recall_message` | @群友 / 撤回自己刚发的消息 |
+| | 📊 `group_stats` / 📖 `read_context` | 发言统计 / 读近期群聊补充语境 |
+| | 💰 `check_balance` | DeepSeek API 余额 |
+| | 🎤 `send_voice` | 用语音说话（走 LLBot 的 AI 语音） |
+| | 🔁 `explain_self` | 调试：回放上一轮工具链与回复原文 |
+| 常驻 | 🕐 `get_current_time` | 相对时间计算 |
 
-> 表里有的行包含多个工具：「塔罗牌」= 抽牌 + 历史，「提醒」= 设 / 查 / 删，
-> 「好感度」= 自己查询 + 排行榜，合计 **20 个**。
-> 除 `get_current_time` 外，都能在群设置里**按群独立开关**（设置页共 18 项开关）。
+> 除 `get_current_time` 外，其余功能都能在面板里**按群/按用户独立开关**（19 项）。
 
-### 🎭 好感度与用户画像
+### 🖼 图片、语音与群聊
 
-**好感度是事件制的，不是积分制** —— 奖励「来过」，不奖励「刷屏」：
+- 图片先转文字描述，再走正常聊天链路；人格、历史、群语境、好感度全都带上
+- 语音只在合适的时候发，发不出去自动回退文字
+- 支持引用回复的上下文还原：别人引用了 Kiriko 说过的话，被引用的内容会附上
+- 群聊限流可按「单用户」和「整群」两种模式组合，超额静默丢弃
 
-| 事件 | 分值 |
-|---|---|
-| 当天首次出现 | +0.3 |
-| 第一次说话 | +1.0 |
-| 连续出现 | +0.05 × 天数（封顶 0.5） |
-| 深夜出现（0–5 点） | +0.1 |
-| 发图/表情包 | +0.1 |
-| AI 判官情绪分 | 正向单条 +0.3（日净额上限 +1.0）；负向单条 −0.6（日净额上限 −2.0）|
+### 🖥 管理面板
 
-每日事件分总计上限 **+3.0**。掉分随离开时长**加速**：第 1 周 1.5 分，第 2–3 周每周 3 分，第 4 周起每周 5 分，封底 20 ——
-关系**会变差**：离开一个月从 85 大约掉到 72（亲密），三个月大约掉到 32（普通）。
-五档：冷淡 → 普通 → 友好 → 亲密 → 挚友。
-
-**用户画像是两层的**：`stable`（性格关键词、称呼偏好、雷点、口头禅、爱聊/不爱聊）
-和 `recent`（最近的情绪、在忙什么、提过的事），外加**共同记忆**（具体发生过的事）。
-
-差异化体现在三处：**称呼分层**（熟人才叫名字）、**记得对方提过的事**、
-**关系好才偶尔多说一句 / 才敢傲娇**。
-
-### 🚦 回复频率限制
-
-按群配置，两种模式可独立开关、也可组合：
-
-| 模式 | 含义 |
-|---|---|
-| **单用户** | N 分钟内对**同一个用户**最多回 Y 条（对所有用户一视同仁） |
-| **群聊** | N 分钟内在这个群最多发 Y 条 |
-
-超额**静默丢弃**（不回复「你太频繁了」，那条提示本身也会占额度）。
-用滑动窗口，计数器在内存里，重启清零。**私聊不参与**。
-
-### 🖼 图片与表情包
-
-图片不是「另一个模型单独回一句」，而是**先转成文字描述，再走正常聊天链路**：
-
-- 视觉模型只负责**看图**（画的是什么、什么风格、有没有文字）
-- 回复由平时那条链路生成 —— 人格、历史、群语境、好感度全都带上
-
-所以发图和打字说话是**同一个声音**，也接得上前面聊的内容。
-
-### 🌅 定时任务
-
-唯一会主动发消息的只剩**用户自己设的提醒**。调度器还会做每日数据维护
-（过期清理 + 数据库备份）。
-
-> 早报 / 游戏速递 / 一言 / 发言榜这类**群推送订阅**已经整体移除 ——
-> 机器人不再主动往群里推任何东西。
-
-### 🖥 Web 管理面板
-
-实时日志（SSE）· 对话记录 · 用户画像 · 好感度 · 提醒 · 塔罗 ·
-表情包库 · 群管理 · 群活跃 · 聊天回看 · AI 用量与成本 ·
-**群功能设置 + 频率限制** · LLBot 连接状态
+实时日志（SSE）· 对话记录 · 用户画像（含好感度）· 提醒 · 塔罗 · 表情包库 ·
+群管理 · 群活跃 · 聊天回看 · AI 用量与成本 · 功能开关 · 频率限制 ·
+LLBot 连接状态 · **超级大脑任务页**
 
 ---
 
-## 📋 前置要求
+## 架构
 
-- 一台能跑 Docker 的机器（Linux / Windows WSL2 / macOS），建议 **2 核 4G 起**
-- 一个可以登录的 QQ 账号
-- [DeepSeek API Key](https://platform.deepseek.com/api_keys)
+```
+QQ 客户端
+    │
+    ▼
+┌─────────┐     ┌──────────────┐     HTTP webhook      ┌──────────────────────────┐
+│  pmhq   │────▶│    llbot     │───── HMAC-SHA1 ─────▶│  my-robot (Flask/waitress)│
+│ QQ 协议 │     │ OneBot :3080 │                       │  :5000                   │
+└─────────┘     └──────────────┘                       │                          │
+                                                       │  prompt_builder / PERSONA│
+                                                       │  memory / profile        │
+                                                       │  affection / judge       │
+                                                       │  20 tools ──▶ DSH Agent  │
+                                                       │  scheduler / reminders   │
+                                                       │  dashboard (Basic auth)  │
+                                                       └────────────┬─────────────┘
+                                                                    │
+                                                       ┌────────────▼─────────────┐
+                                                       │  SQLite  robot.db        │
+                                                       │  history / profiles /    │
+                                                       │  affection / memories /  │
+                                                       │  tool_usage / ai_calls   │
+                                                       └──────────────────────────┘
+                                                                    │
+                                                       DeepSeek API（chat / search / vision）
+```
+
+三个容器：
+
+| 服务 | 镜像/构建 | 作用 | 端口 |
+|---|---|---|---|
+| `pmhq` | `linyuchen/pmhq:7.3.2` | QQ 协议端 | 内部 |
+| `llbot` | `linyuchen/llbot:7.11.0` | OneBot 框架 + WebUI | `3080` |
+| `my-robot` | `KirikoBot/Dockerfile`（python:3.11-slim） | 机器人本体 + 面板 | `5000` |
 
 ---
 
-## 🚀 快速部署
+## 依赖与工具链
 
-### 1. 克隆项目
+### 运行依赖（`KirikoBot/requirements.txt`）
+
+| 包 | 版本约束 | 用途 |
+|---|---|---|
+| `flask` | `>=3.0,<4.0` | Webhook 与面板 |
+| `requests` | `>=2.31,<3.0` | OneBot / DeepSeek / 搜索 API |
+| `python-dotenv` | `>=1.0,<2.0` | 读取 `.env` |
+| `markdown` | `>=3.5,<4.0` | 面板 Markdown 渲染 |
+| `waitress` | `>=2.1,<4.0` | 生产 WSGI 服务器 |
+| `lxml` | `>=5.0,<6.0` | XML/HTML 解析（当前代码未直接引用，保留供依赖兼容） |
+| `Pillow` | `>=10.0,<13.0` | 图片处理 / 表情包 |
+| `imagehash` | `>=4.3,<5.0` | 表情包去重 |
+
+### 开发依赖（`KirikoBot/requirements-dev.txt`）
+
+`pytest` · `pytest-cov` · `ruff`（CI 与本地测试用，运行镜像不需要）。
+
+### 容器内额外依赖（**不在 requirements.txt**）
+
+线上镜像还装了下面这些，用于语音与统计实验：
+
+| 包 | 线上版本 | 说明 |
+|---|---|---|
+| `edge-tts` | 7.3.1 | 语音合成实验 |
+| `numpy` | 2.4.6 | 数值/统计 |
+| `scipy` | 1.17.1 | 数值/统计 |
+| `tabulate` | 0.10.0 | 表格输出 |
+
+> ⚠️ 这几个包**没有写进 requirements.txt**。所以线上只能 `rsync + docker compose restart my-robot`，
+> **禁止 `docker compose up --build`**：重建镜像会把它们丢掉。
+
+### DSH 超级大脑运行时
+
+- Node.js 22 LTS
+- `@deepseek-ai/dsh@0.2.2-rc.1`（Dockerfile 内安装）
+- 默认超时 600 秒，最多 2 个任务并发；满了会立刻回「排队」而不是占住聊天线程
+
+### 工具链
+
+| 层 | 选型 |
+|---|---|
+| 模型 | `deepseek-flash`（DeepSeek V4.1 Flash，多模态；可用 `DEEPSEEK_MODEL` 覆盖） |
+| 语言 | Python 3.11（CI 同时测 3.11 / 3.12） |
+| Web | Flask 3 + waitress（16 线程） |
+| 数据 | SQLite（WAL），无外部数据库 |
+| 容器 | Docker Compose，三服务 |
+| 测试 | pytest + pytest-cov，覆盖率门槛 65% |
+| 静态检查 | ruff（E9/F63/F7/F82） |
+| CI | GitHub Actions：lint / pip check / 3.11 / 3.12 |
+
+---
+
+## 快速开始（全新部署）
+
+### 1. 克隆
 
 ```bash
-git clone git@github.com:Yuminghuang738/KirikoBot-LLBot.git
-cd KirikoBot-LLBot
+git clone https://github.com/Yuminghuang738/KirikoBot.git
+cd KirikoBot
 ```
 
-### 2. 配置 `KirikoBot/.env`
+### 2. 配置
+
+```bash
+cp KirikoBot/.env.example KirikoBot/.env
+$EDITOR KirikoBot/.env
+```
+
+最少填这四项：
 
 ```ini
-ROBOT_QQ        = "你的机器人QQ号"        # 只用于日志/面板显示
-ONEBOT_API      = "http://llbot:3000"
-ONEBOT_TOKEN    = "llbot_kiriko_token"
-DEEPSEEK_API    = "https://api.deepseek.com/chat/completions"
-DEEPSEEK_TOKEN  = "你的 DeepSeek API Key"
-DEEPSEEK_MODEL  = "deepseek-flash"
-DEEPSEEK_REASONING_EFFORT = "low"        # 思考强度 low/high/max
-
-GROUP_ROLE      = ""                     # 可选：群聊人设补充，从属于人格
-PRIVATE_ROLE    = ""                     # 可选：私聊人设补充
-TAROT_ROLE      = ""                     # 可选：解牌口吻
-
-VISION_ENABLED  = "true"                 # 图像/表情包识别
-VOICE_ENABLED   = "true"                 # AI 语音回复
-GROUP_CONTEXT_ENABLED = "false"          # 群聊背景是否默认附带
+ROBOT_QQ="机器人 QQ 号"
+ONEBOT_API="http://llbot:3000"
+ONEBOT_TOKEN="OneBot 连接令牌"
+DEEPSEEK_TOKEN="你的 DeepSeek API Key"
 ```
 
-`.env.example` 里有完整的变量清单。
+> 真实密钥只放在 `KirikoBot/.env`，这个文件已在 `.gitignore` 和部署保护名单里，不会进仓库。
 
 ### 3. 启动
 
@@ -147,129 +215,144 @@ GROUP_CONTEXT_ENABLED = "false"          # 群聊背景是否默认附带
 docker compose up -d --build
 ```
 
-三个容器：`pmhq`（QQ 客户端）、`llbot`（OneBot 框架）、`my-robot`（KirikoBot 本体）。
+首次安装需要 build；**已有线上环境不要重建**，代码更新走 `scripts/deploy.sh`。
 
-### 4. 扫码登录
+### 4. 登录 QQ
 
-浏览器打开 `http://<机器地址>:3080`，用手机 QQ 扫码。
+打开 `http://<机器地址>:3080`，手机 QQ 扫码。登录成功后 OneBot 的 3000 端口才会就绪。
 
-登录成功后 OneBot 的 3000 端口才会起来，机器人开始收消息。
-
-### 5. 打开管理面板
+### 5. 打开面板
 
 ```
 http://<机器地址>:5000
 ```
 
-用户名随意，密码在 `KirikoBot/.dashboard_password`（首次启动自动生成）。
-
-> **部署到公网前请务必看下面的「安全」一节** —— 这个面板能删群、能读全部聊天记录、
-> 能驱动 QQ 号，Basic auth 走明文 HTTP 时只和网络本身一样私密。
+用户名默认 `admin`，密码在 `KirikoBot/.dashboard_password`（首次启动自动生成），
+也可以在 `.env` 里用 `DASHBOARD_USER` / `DASHBOARD_PASSWORD` 覆盖。
 
 ---
 
-## 🔐 安全
+## 部署与回滚
 
-面板的权限比看起来大得多：能**删除一个群和它的全部数据**、能**给所有群推消息**、
-能**读所有聊天记录**、还能通过 LLBot 桥**驱动 QQ 号本身**。所以：
+生产环境用仓库里的脚本，不手搓 rsync：
 
-- **默认就有 Basic auth**（`KirikoBot/.dashboard_password`，或 `.env` 里设 `DASHBOARD_PASSWORD`）
-- **不要把 5000 直接暴露到公网**。Basic auth 走明文 HTTP 时只和网络本身一样私密，
-  要么套 HTTPS，要么根本不暴露
-- 推荐做法：**Tailscale**（云服务器加入 tailnet，本地用 `100.x.x.x:5000` 访问，
-  安全组只开 22），或者 **SSH 隧道**（`ssh -L 5000:localhost:5000`）
-- OneBot webhook 有独立的 HMAC 验签，不走面板口令
+```bash
+# 部署当前 main（只同步白名单文件，自动打快照 + 健康检查）
+scripts/deploy.sh
+
+# 只看计划，不动服务器
+scripts/deploy.sh --plan
+
+# 回滚到某个快照
+scripts/rollback.sh 20261114-002246
+scripts/rollback.sh --latest
+```
+
+部署规则（脚本里硬编码，没有关闭开关）：
+
+- **只同步** `KirikoBot/*.py`、`templates/`、`static/`、`requirements.txt`
+- **不删除**远端文件（rsync 不加 `--delete`）
+- **永不覆盖** `robot.db*`、`.env`、`.dashboard_password`、`backups/`、
+  `stickers/`、`shared_files/`、`llbot_config/`、`carside_picture/`
+- 部署前把代码打 tar 到 `/root/kirikobot/.deploy-backup/<时间戳>/code.tgz`
+- 部署后验收 `healthz`、容器状态、日志无 traceback；失败直接打印回滚命令
+- 服务器是 2 核 1.6G：**不在上面跑构建和测试**
 
 ---
 
-## 🏗 项目结构
+## 配置项
+
+完整清单见 `KirikoBot/.env.example`，这里只列分组和用途（**不写任何密钥**）：
+
+| 分组 | 变量 |
+|---|---|
+| 必填 | `ROBOT_QQ` `ONEBOT_API` `ONEBOT_TOKEN` `DEEPSEEK_TOKEN` |
+| 模型 | `DEEPSEEK_API` `DEEPSEEK_MODEL` `DEEPSEEK_REASONING_EFFORT` |
+| 人设补充 | `GROUP_ROLE` `PRIVATE_ROLE` `TAROT_ROLE`（从属于 `PERSONA`，冲突时以人设文件为准） |
+| 视觉/语音 | `VISION_ENABLED` `VISION_MODEL` `VOICE_ENABLED` `VOICE_DEFAULT_CHARACTER` |
+| 群语境/情绪 | `GROUP_CONTEXT_ENABLED` `GROUP_CONTEXT_MINUTES` `GROUP_CONTEXT_LIMIT` `PATIENCE_WINDOW_MINUTES` `MOOD_COOLDOWN_MINUTES` |
+| 面板/安全 | `DASHBOARD_AUTH` `DASHBOARD_USER` `DASHBOARD_PASSWORD` `WEBHOOK_TOKEN` |
+| 分层记忆 | `MEMORY_LAYERS_ENABLED` `MEMORY_RAW_MESSAGES` `MEMORY_RAW_MAX_CHARS` `MEMORY_SUMMARY_MAX_CHARS` `MEMORY_SUMMARY_FACTS` `MEMORY_SUMMARY_KEEP` `MEMORY_SUMMARY_RETRY_TURNS` |
+| 超级大脑 | `DSH_ENABLED` `DSH_TIMEOUT` `DSH_REASONING_EFFORT` `DSH_MAX_CONCURRENCY` `DSH_WORKSPACE_DIR` `DSH_PATCH_PATH` |
+| 运维 | `RETENTION_DAYS` `BACKUP_ENABLED` `BACKUP_KEEP` `BACKUP_DIR` |
+| AI 用量 | `AI_METRICS_ENABLED` `AI_PRICE_CACHE_HIT` `AI_PRICE_CACHE_MISS` `AI_PRICE_OUTPUT` |
+| LLBot WebUI | `LLBOT_WEBUI_URL` `LLBOT_WEBUI_TOKEN` `LLBOT_WEBUI_PUBLIC_URL` `LLBOT_TOKEN_FILE` |
+
+---
+
+## 测试
+
+```bash
+cd KirikoBot
+python3 -m pytest tests/ -q -p no:cacheprovider
+```
+
+写稿时 main：**1,049 passed**（以实际输出为准）。覆盖人格完整性、防泄露、渐进式情绪、
+好感度事件制、频率限制、搜索接口、引用感知、历史完整性、数据迁移、面板接口、安全加固，
+以及「已移除功能确实没了」。
+
+测试**不联网**：真实搜索和模型调用不在单元测试里，避免测试本身不稳定。
+
+---
+
+## 目录结构
 
 ```
-KirikoBot-LLBot/
-├── docker-compose.yml          # 三个容器的编排
-├── README.md
+KirikoBot/
+├── assets/icon.png              # 项目图标（README 顶部引用）
+├── KirikoBot/                   # 机器人本体（挂载进容器 /app）
+│   ├── main.py                  # Flask 入口、路由、服务编排
+│   ├── prompt_builder.py        # 人格 PERSONA + 系统提示词装配
+│   ├── ai_server.py             # DeepSeek 请求与工具调用
+│   ├── ai_tools.py              # 20 个工具实现
+│   ├── ai_tools_list.py         # Function Calling 工具定义
+│   ├── dsh_client.py            # DeepSeek Harness 桥接（超级大脑）
+│   ├── affection_service.py     # 好感度（人一份 + 群/私聊分量）
+│   ├── profile_service.py       # 用户画像 + 共同记忆
+│   ├── judge_service.py         # 情绪判官
+│   ├── feature_gate.py          # 按群/按用户的功能开关
+│   ├── rate_limiter.py          # 回复频率限制
+│   ├── scheduler.py             # 提醒 + 每日维护
+│   ├── database_manager.py      # SQLite 访问与迁移
+│   ├── robot_server.py          # 消息解析 + 统一发送出口
+│   ├── llbot_client.py          # OneBot HTTP API
+│   ├── dashboard_auth.py        # 面板 Basic auth
+│   ├── webhook_auth.py          # OneBot HMAC 验签
+│   ├── templates/ static/       # 面板前端
+│   ├── requirements.txt
+│   └── requirements-dev.txt
+├── scripts/
+│   ├── deploy.sh                # 白名单部署 + 快照 + 健康检查
+│   └── rollback.sh              # 按快照回滚代码
+├── tests/                       # pytest（48 个文件，1,000+ 条）
+├── eval/                        # 离线评测脚本与历史结果
+├── docs/                        # 设计/评估/backlog 文档
+├── docker-compose.yml
 ├── DEVELOPMENT_GUIDE.md
-├── recalibrate_affection.py    # 好感度重算脚本（一次性）
-├── bootstrap_affection.py      # ⚠️ 旧模型遗留，已标过时
-├── merge_db.py                 # 数据库合并工具
-├── llbot_config/               # LLBot 数据（挂载进容器）
-├── tests/                      # 621 条测试
-└── KirikoBot/                  # ← 机器人本体，整个目录挂进容器的 /app
-    ├── main.py                 # Flask 入口、路由、服务编排
-    ├── prompt_builder.py       # 人格 + 系统提示词装配
-    ├── ai_server.py            # DeepSeek 请求
-    ├── ai_tools.py             # 工具实现
-    ├── ai_tools_list.py        # Function Calling 工具定义（20 个）
-    ├── dsh_client.py           # DeepSeek Harness (DSH) 桥接客户端（超级大脑）
-    ├── affection_service.py    # 好感度（事件制）
-    ├── profile_service.py      # 用户画像（两层）+ 共同记忆
-    ├── rate_limiter.py         # 回复频率限制
-    ├── judge_service.py        # AI 判官（情绪分）
-    ├── feature_gate.py         # 按群/按用户的功能开关
-    ├── scheduler.py            # 定时任务（提醒 + 每日维护）
-    ├── web_search.py           # 联网搜索（DeepSeek Search API）
-    ├── database_manager.py     # SQLite
-    ├── dashboard_auth.py       # 面板 Basic auth
-    ├── webhook_auth.py         # OneBot webhook HMAC 验签
-    ├── llbot_client.py         # OneBot HTTP API + MessageBuilder
-    ├── llbot_webui.py          # LLBot WebUI 同源反代
-    ├── robot_server.py         # 消息解析 + 统一发送出口
-    ├── config.py               # 环境变量
-    ├── *.py                    # 各业务服务（音乐/塔罗/表情包…）
-    ├── static/                 # 面板前端（css/js）
-    ├── templates/dashboard.html
-    ├── stickers/               # 表情包库（不进镜像）
-    ├── carside_picture/        # 牌面素材
-    ├── Dockerfile
-    ├── .dockerignore           # 排除运行时数据，构建上下文 909MB → 0.7MB
-    └── requirements.txt
+└── README.md
 ```
 
 ---
 
-## 🧪 测试
+## 安全
 
-```bash
-python3 -m pytest tests/ -q
-```
+面板权限比看起来大：能删群、读全部聊天记录、通过 LLBot 驱动 QQ 号。所以：
 
-覆盖：人格完整性与防泄露、渐进式情绪、好感度事件制、频率限制、搜索接口、
-引用感知、历史完整性、数据迁移、面板接口、安全加固、
-以及「已移除功能确实没了」（推送 / 版本管理 / 自学习 / 时政与游戏新闻 / 旧工具）。
-
-测试**不联网** —— 真实搜索和模型调用不在单元测试里，那会让测试本身变得不可靠。
+- 面板默认开启 Basic auth（`.dashboard_password` 自动生成，或 `.env` 覆盖）
+- **不要把 5000 / 3080 直接暴露到公网**；推荐 Tailscale 或 SSH 隧道
+- OneBot webhook 有独立 HMAC 验签（`WEBHOOK_TOKEN`），不走面板口令
+- 密钥只放 `.env`；部署脚本和 `.gitignore` 都会保护它
+- 管理面板和 webhook 的签名实现都有独立单测
 
 ---
 
-## 🔧 开发指南
+## License
 
-### 改完代码
+GPL-3.0。见 [LICENSE](LICENSE)。
 
-```bash
-docker compose restart my-robot        # 只重启机器人（代码是 bind mount，不用重建）
-docker compose up -d --build           # 改了依赖 / Dockerfile 才需要重建
-docker compose logs -f my-robot        # 看日志
-```
+## 致谢
 
-### 改完 `.env`
-
-```bash
-docker compose up -d --force-recreate my-robot
-```
-
-> ⚠️ `env_file` 只在**容器创建**时读取 —— `restart` **不会**更新环境变量，
-> 必须 `--force-recreate`。
-
-### 数据库
-
-`KirikoBot/robot.db`（SQLite，宿主机上，靠 bind mount 进容器）。
-备份就是复制这个文件；`KirikoBot/backups/` 里还有程序按天存的。
-
-### 修改人格
-
-人格全部在 `KirikoBot/prompt_builder.py` 的 `PERSONA`。改完记得跑测试 ——
-`tests/test_persona_integrity.py` 会检查章节锚点、防泄露断言和长度上限。
-
-> 人格是系统提示词的第一段，也是 DeepSeek 前缀缓存的锚点：改它会让缓存失效一次，
-> 之后重新建立。**每条消息都在变的内容（时间、当前说话人的画像和关系）故意放在
-> user message 里**，就是为了不废掉这段缓存。
+- [LLBot（Docker Hub）](https://hub.docker.com/r/linyuchen/llbot) / [PMHQ](https://github.com/linyuchen/PMHQ)：QQ 与 OneBot 接入
+- [DeepSeek](https://www.deepseek.com/)：对话、搜索、视觉
+- [DeepSeek Harness](https://github.com/deepseek-ai)：超级大脑运行时
+- 以及群里每一位愿意跟 Kiriko 说话的人
