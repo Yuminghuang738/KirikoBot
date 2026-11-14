@@ -125,6 +125,18 @@ def test_fetch_context_excludes_target_and_future(tmp_path):
     assert all(r["id"] < 21 for r in rows)
 
 
+def test_fetch_context_resolves_scope_from_target_id(tmp_path):
+    """公开数据集不带 user_id/group_id：按 target_history_id 从 DB 反查。"""
+    db = _make_db(tmp_path)
+    conn = memory_replay.connect_ro(db)
+    case = {"target_history_id": 21}
+
+    rows = memory_replay.fetch_context_rows(conn, case)
+
+    assert len(rows) == 20
+    assert rows[-1]["id"] == 20
+
+
 def test_window_rows_sizes():
     rows = [{"id": i} for i in range(60)]
     assert len(memory_replay.window_rows(rows, 16)) == 16
