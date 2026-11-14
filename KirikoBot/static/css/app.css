@@ -749,6 +749,17 @@ tbody tr:hover td { background: var(--card-2); }
 .profile-card .pc-body { padding: 14px 18px; }
 .profile-card .row { display: flex; gap: 10px; font-size: .785rem; margin-bottom: 6px; }
 .profile-card .k { color: var(--blue); min-width: 46px; flex-shrink: 0; font-weight: 600; }
+.profile-card .pc-aff { padding: 10px 18px 0; }
+.profile-card .pc-aff-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.profile-card .pc-aff-score { font-weight: 750; color: var(--accent-deep); font-variant-numeric: tabular-nums; }
+.profile-card .pc-aff-meta { font-size: .71rem; color: var(--muted); }
+.profile-card .pc-aff details { margin-top: 7px; font-size: .75rem; color: var(--muted); }
+.profile-card .pc-aff summary { cursor: pointer; color: var(--blue); font-weight: 600; }
+.profile-card .pc-aff-list { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+.profile-card .pc-aff-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.profile-card .pc-aff-row span:first-child { overflow-wrap: anywhere; }
+.profile-card .pc-aff-row b { color: var(--accent-deep); font-variant-numeric: tabular-nums; }
+.profile-card .pc-aff-n { font-size: .68rem; color: var(--muted); }
 .profile-card .tags { display: flex; flex-wrap: wrap; gap: 5px; }
 .profile-card .t {
   font-size: .7rem; color: var(--blue); background: var(--blue-soft);
