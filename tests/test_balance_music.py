@@ -226,29 +226,76 @@ def test_extract_song_id(text, expected):
     assert MusicService()._extract_song_id(text) == expected
 
 
-def test_download_audio_rejects_html(monkeypatch):
+def test_download_audio_rejects_html(monkeypatch, tmp_path):
     resp = FakeResponse(headers={"Content-Type": "text/html"}, content=b"<!DOCTYPE html>")
     monkeypatch.setattr(music_service.requests, "get", lambda *a, **k: resp)
 
-    assert MusicService().download_audio("http://x/a.mp3", 1) is None
+    assert MusicService().download_audio("http://x/a.mp3", 1, dest_dir=str(tmp_path)) is None
+
+
+def test_download_audio_rejects_html_disguised_as_octet_stream(monkeypatch, tmp_path):
+    """反爬页面常以 application/octet-stream 下发，Content-Type 不能作为判据。"""
+    body = b"<!DOCTYPE html><html><body>404</body></html>" + b" " * 4096
+    resp = FakeResponse(headers={"Content-Type": "application/octet-stream"}, chunks=[body])
+    monkeypatch.setattr(music_service.requests, "get", lambda *a, **k: resp)
+
+    assert MusicService().download_audio("http://x/a.mp3", 11, dest_dir=str(tmp_path)) is None
+    assert list(tmp_path.iterdir()) == [], "Invalid audio must not be left on disk"
 
 
 def test_download_audio_rejects_tiny_file(monkeypatch, tmp_path):
     resp = FakeResponse(headers={"Content-Type": "audio/mpeg"}, chunks=[b"x" * 100])
     monkeypatch.setattr(music_service.requests, "get", lambda *a, **k: resp)
 
-    assert MusicService().download_audio("http://x/a.mp3", 2) is None
+    assert MusicService().download_audio("http://x/a.mp3", 2, dest_dir=str(tmp_path)) is None
 
 
-def test_download_audio_success(monkeypatch):
-    resp = FakeResponse(headers={"Content-Type": "audio/mpeg"}, chunks=[b"a" * 1024] * 20)
+def test_download_audio_success(monkeypatch, tmp_path):
+    audio = b"ID3" + b"a" * 1021
+    resp = FakeResponse(headers={"Content-Type": "audio/mpeg"}, chunks=[audio] + [b"a" * 1024] * 19)
     monkeypatch.setattr(music_service.requests, "get", lambda *a, **k: resp)
 
-    path = MusicService().download_audio("http://x/a.mp3", 3)
+    path = MusicService().download_audio("http://x/a.mp3", 3, dest_dir=str(tmp_path))
 
     assert path and os.path.isfile(path)
+    assert os.path.dirname(path) == str(tmp_path)
     assert os.path.getsize(path) >= 10 * 1024
-    os.remove(path)
+
+
+def test_download_audio_accepts_mp3_frame_sync_header(monkeypatch, tmp_path):
+    """没有 ID3 标签、直接以 0xFFFB 帧同步开头的裸 MP3 也要收。"""
+    resp = FakeResponse(headers={"Content-Type": "audio/mpeg"}, chunks=[b"\xff\xfb\x90\x64" + b"a" * 1020] + [b"a" * 1024] * 19)
+    monkeypatch.setattr(music_service.requests, "get", lambda *a, **k: resp)
+
+    path = MusicService().download_audio("http://x/a.mp3", 5, dest_dir=str(tmp_path))
+
+    assert path and os.path.isfile(path)
+
+
+def test_download_audio_defaults_to_shared_files(monkeypatch, tmp_path):
+    """默认落点必须是 llbot 也能看到的 shared_files，而不是容器私有的 /tmp。"""
+    resp = FakeResponse(headers={"Content-Type": "audio/mpeg"}, chunks=[b"ID3" + b"a" * 1021] + [b"a" * 1024] * 19)
+    monkeypatch.setattr(music_service.requests, "get", lambda *a, **k: resp)
+    monkeypatch.setattr(music_service, "_shared_files_dir", lambda: str(tmp_path))
+
+    path = MusicService().download_audio("http://x/a.mp3", 6)
+
+    assert path and os.path.dirname(path) == str(tmp_path)
+    assert os.path.basename(path).startswith("music_6_")
+
+
+def test_download_audio_rejects_oversized_file(monkeypatch, tmp_path):
+    """超过大小上限必须停写并删文件，shared_files 不能被撑爆。"""
+    monkeypatch.setattr(music_service, "_MAX_AUDIO_BYTES", 4096)
+    resp = FakeResponse(headers={"Content-Type": "audio/mpeg"}, chunks=[b"ID3" + b"a" * 4093, b"a" * 8192])
+    monkeypatch.setattr(music_service.requests, "get", lambda *a, **k: resp)
+
+    assert MusicService().download_audio("http://x/a.mp3", 8, dest_dir=str(tmp_path)) is None
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_download_audio_empty_url_returns_none():
+    assert MusicService().download_audio("", 7) is None
 
 
 def test_download_audio_error_returns_none(monkeypatch):

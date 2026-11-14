@@ -7,7 +7,9 @@ import random
 import re
 import threading
 import time
+import ipaddress
 from typing import Any
+from urllib.parse import quote, urlparse
 
 from config import Config
 from dsh_client import DshClient
@@ -16,6 +18,12 @@ logger = logging.getLogger(__name__)
 
 # One long message must not crowd out the rest of the transcript.
 _CONTEXT_LINE_LIMIT = 100
+
+# 内网/容器名：这些 base 不该出现在发给群友的直链里。
+_INTERNAL_HOSTS = frozenset({
+    "kirikobot", "my-robot", "llbot", "pmhq", "host.docker.internal",
+    "localhost", "localhost.localdomain",
+})
 
 
 # ── Helper ──────────────────────────────────────────────
@@ -724,41 +732,115 @@ class MusicTool:
             k: v for k, v in self._recent_keywords.items() if k in self._recent_songs
         }
 
-        # ── 1. Send song info text first ──
+        # ── 1. 先发歌曲信息（卡片/音频发不出去时用户也看得到这首歌是什么）──
         info_lines = [f"🎵 {name}", f"👤 {artist}"]
         if album:
             info_lines.append(f"💿 {album}")
-        info_lines.append("")
-
-        # ── 2. Send music share card (QQ native music UI) ──
-        info_lines.append(f"🎧 正在播放，点击收听")
 
         info_builder = MessageBuilder()
         info_builder.text("\n".join(info_lines))
-        robot.send(info_builder.build())
+        if not robot.send(info_builder.build()):
+            logger.warning("歌曲信息发送失败: %s - %s", name, artist)
 
-        # Send the music share card — this renders as a beautiful playable card in QQ
+        # ── 2. 音乐卡片：失败就是失败，不写成功日志，改走文字直链兜底 ──
+        song_page = f"https://music.163.com/song?id={song_id}"
         music_builder = MessageBuilder()
         music_builder.music(music_type, str(song_id))
-        robot.send(music_builder.build())
+        card_ok = robot.send(music_builder.build())
+        if card_ok:
+            logger.info(
+                "Music card shared: %s - %s (id=%s, type=%s)",
+                name, artist, song_id, music_type,
+            )
+        else:
+            logger.warning(
+                "音乐卡片发送失败（签名/风控），回退文字直链: %s - %s (%s)",
+                name, artist, song_page,
+            )
 
-        logger.info("Music shared: %s - %s (id=%s, type=%s)", name, artist, song_id, music_type)
-
-        # ── 3. Try audio download as bonus (best-effort) ──
+        # ── 3. 音频：只发文件头校验过的真 MP3，走 llbot 能拉取的地址 ──
+        audio_name = ""
+        audio_ok = False
         try:
             audio_path = self.service.download_audio(
                 song_info.get("audio_url", ""), song_id
             )
-            if audio_path:
-                record_builder = MessageBuilder()
-                record_builder.record(audio_path)
-                robot.send(record_builder.build())
-                logger.info("Audio voice message also sent for %s - %s", name, artist)
         except Exception:
-            logger.debug("ai_tools.music_search_call 忽略了异常", exc_info=True)
+            logger.warning("点歌音频下载异常 song_id=%s", song_id, exc_info=True)
+            audio_path = None
+
+        if audio_path:
+            audio_name = os.path.basename(audio_path)
+            for target in self._audio_targets(audio_name):
+                record_builder = MessageBuilder()
+                record_builder.record(target)
+                if robot.send(record_builder.build()):
+                    audio_ok = True
+                    logger.info("Audio sent for %s - %s via %s", name, artist, target)
+                    break
+                logger.warning("音频发送失败（%s），尝试下一种引用方式", target)
+
+        # ── 4. 兜底：卡片或音频任一没发出去，就把能点的链接写出来 ──
+        audio_failed = bool(audio_path) and not audio_ok
+        if not card_ok or audio_failed:
+            fallback = [f"「{name} - {artist}」"]
+            link = self._public_download_url(audio_name, robot) if audio_failed else None
+            if not card_ok:
+                fallback.append(f"卡片没发出去，点这里听：{song_page}")
+            elif not link:
+                fallback.append(f"音频没发出去，点这里听：{song_page}")
+            if link:
+                fallback.append(f"音频直链：{link}")
+            robot.send(MessageBuilder().text("\n".join(fallback)).build())
 
         _set_tool_meta(ai, tool_calls)
         ai.user_text = f"播放歌曲: {name} - {artist}"
+
+    @staticmethod
+    def _audio_targets(audio_name: str) -> list[str]:
+        """按可靠性排序的音频引用：llbot 内网 URL 优先，再退回共享目录绝对路径。"""
+        return [
+            f"{Config.MUSIC_AUDIO_BASE_URL}/download/{quote(audio_name)}",
+            f"/app/shared_files/{audio_name}",
+        ]
+
+    @staticmethod
+    def _public_download_url(audio_name: str, robot: Any = None) -> str | None:
+        """给用户点的直链：只有 base 是公网地址时才返回，否则 None。
+
+        线上 PUBLIC_BASE_URL 为空，而 `robot.public_base_url` 来自 webhook 的
+        Host —— LLBot 上报用的是内网地址 `http://kirikobot:5000`，用户点不开。
+        所以容器名 / localhost / 私网 IP 一律不输出音频链接，兜底只留能点的
+        网易云歌曲页。
+        """
+        for candidate in (
+            Config.PUBLIC_BASE_URL,
+            getattr(robot, "public_base_url", ""),
+        ):
+            base = (candidate or "").strip().rstrip("/")
+            if base and MusicTool._is_public_base(base):
+                return f"{base}/download/{quote(audio_name)}"
+        return None
+
+    @staticmethod
+    def _is_public_base(base: str) -> bool:
+        """http(s) 且 host 不是容器名 / localhost / 私网或回环 IP。"""
+        parsed = urlparse(base)
+        if parsed.scheme not in ("http", "https"):
+            return False
+        host = (parsed.hostname or "").strip().lower()
+        if not host or host in _INTERNAL_HOSTS:
+            return False
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            return True  # 域名，视为公网
+        return not (
+            address.is_private
+            or address.is_loopback
+            or address.is_link_local
+            or address.is_reserved
+        )
 
 
 # ══════════════════════════════════════════════════════════
