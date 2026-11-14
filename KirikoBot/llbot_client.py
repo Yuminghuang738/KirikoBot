@@ -286,11 +286,18 @@ class LLBotClient:
         return s
 
     def _post(self, endpoint: str, payload: dict[str, Any]) -> bool:
-        """Low-level POST. Returns True on success."""
+        """Low-level POST. Returns True only when OneBot reports success.
+
+        OneBot 失败时常常仍是 HTTP 200，只是响应体里 `status=failed` /
+        `retcode != 0`（音乐卡片签名失败就是这样）。只看 status_code 会把
+        「没发出去」当成功，点歌回退因此永远不会触发。
+        """
         url = f"{self.api_url}/{endpoint}"
         try:
             r = self._session.post(url, json=payload, timeout=self.timeout)
             r.raise_for_status()
+            if not self._response_ok(r):
+                return False
             self._remember_sent(endpoint, payload, r)
             logger.debug("LLBot %s OK", endpoint)
             return True
@@ -305,6 +312,43 @@ class LLBotClient:
         except Exception:
             logger.exception("LLBot %s unexpected error", endpoint)
         return False
+
+    @staticmethod
+    def _response_ok(response: Any) -> bool:
+        """按 OneBot 响应体判断成功；拿不到 JSON 时按旧的「HTTP 2xx 即成功」。
+
+        OneBot v11：retcode 0 = 成功，1 = 已接收（异步），其余视为失败。
+        """
+        try:
+            body = response.json()
+        except (ValueError, AttributeError):
+            return True
+        if not isinstance(body, dict):
+            return True
+        status = str(body.get("status") or "").lower()
+        if status == "failed":
+            LLBotClient._log_failed_body(body)
+            return False
+        retcode = body.get("retcode")
+        if retcode is None:
+            return True
+        try:
+            code = int(retcode)
+        except (TypeError, ValueError):
+            return True
+        if code in (0, 1):
+            return True
+        LLBotClient._log_failed_body(body)
+        return False
+
+    @staticmethod
+    def _log_failed_body(body: dict[str, Any]) -> None:
+        try:
+            wording = str(body.get("wording") or body.get("message") or "")[:120]
+        except Exception:
+            wording = ""
+        logger.warning("LLBot 调用失败: status=%s retcode=%s %s",
+                       body.get("status") or "?", body.get("retcode"), wording)
 
     def _remember_sent(self, endpoint: str, payload: dict[str, Any], response: Any) -> None:
         """Track the message_id of what we just sent.

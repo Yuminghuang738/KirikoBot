@@ -36,6 +36,12 @@ class Config:
     # 产物直链的对外基地址（如 https://bot.example.com）。留空时优先用请求的
     # Host 推导，再退回 http://localhost:5000；绝不写死内网 IP。
     PUBLIC_BASE_URL: Final[str] = (os.getenv("PUBLIC_BASE_URL") or "").strip()
+    # 点歌音频给 llbot 拉取的基地址。llbot 和机器人在同一个 compose 网络里，
+    # 用容器名直连（shared_files 同时挂到两个容器的 /app/shared_files）。
+    MUSIC_AUDIO_BASE_URL: Final[str] = (
+        os.getenv("MUSIC_AUDIO_BASE_URL") or "http://kirikobot:5000"
+    ).rstrip("/")
+
     DEEPSEEK_API: Final[str] = os.getenv("DEEPSEEK_API") or "https://api.deepseek.com/chat/completions"
     DEEPSEEK_TOKEN: Final[str | None] = os.getenv("DEEPSEEK_TOKEN")
     # ── Model ─────────────────────────────────────────

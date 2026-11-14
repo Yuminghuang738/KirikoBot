@@ -8,6 +8,7 @@ import re
 import threading
 import time
 from typing import Any
+from urllib.parse import quote
 
 from config import Config
 from dsh_client import DshClient
@@ -724,41 +725,79 @@ class MusicTool:
             k: v for k, v in self._recent_keywords.items() if k in self._recent_songs
         }
 
-        # ── 1. Send song info text first ──
+        # ── 1. 先发歌曲信息（卡片/音频发不出去时用户也看得到这首歌是什么）──
         info_lines = [f"🎵 {name}", f"👤 {artist}"]
         if album:
             info_lines.append(f"💿 {album}")
-        info_lines.append("")
-
-        # ── 2. Send music share card (QQ native music UI) ──
-        info_lines.append(f"🎧 正在播放，点击收听")
 
         info_builder = MessageBuilder()
         info_builder.text("\n".join(info_lines))
-        robot.send(info_builder.build())
+        if not robot.send(info_builder.build()):
+            logger.warning("歌曲信息发送失败: %s - %s", name, artist)
 
-        # Send the music share card — this renders as a beautiful playable card in QQ
+        # ── 2. 音乐卡片：失败就是失败，不写成功日志，改走文字直链兜底 ──
+        song_page = f"https://music.163.com/song?id={song_id}"
         music_builder = MessageBuilder()
         music_builder.music(music_type, str(song_id))
-        robot.send(music_builder.build())
+        card_ok = robot.send(music_builder.build())
+        if card_ok:
+            logger.info(
+                "Music card shared: %s - %s (id=%s, type=%s)",
+                name, artist, song_id, music_type,
+            )
+        else:
+            logger.warning(
+                "音乐卡片发送失败（签名/风控），回退文字直链: %s - %s (%s)",
+                name, artist, song_page,
+            )
 
-        logger.info("Music shared: %s - %s (id=%s, type=%s)", name, artist, song_id, music_type)
-
-        # ── 3. Try audio download as bonus (best-effort) ──
+        # ── 3. 音频：只发文件头校验过的真 MP3，走 llbot 能拉取的地址 ──
+        audio_name = ""
+        audio_ok = False
         try:
             audio_path = self.service.download_audio(
                 song_info.get("audio_url", ""), song_id
             )
-            if audio_path:
-                record_builder = MessageBuilder()
-                record_builder.record(audio_path)
-                robot.send(record_builder.build())
-                logger.info("Audio voice message also sent for %s - %s", name, artist)
         except Exception:
-            logger.debug("ai_tools.music_search_call 忽略了异常", exc_info=True)
+            logger.warning("点歌音频下载异常 song_id=%s", song_id, exc_info=True)
+            audio_path = None
+
+        if audio_path:
+            audio_name = os.path.basename(audio_path)
+            for target in self._audio_targets(audio_name):
+                record_builder = MessageBuilder()
+                record_builder.record(target)
+                if robot.send(record_builder.build()):
+                    audio_ok = True
+                    logger.info("Audio sent for %s - %s via %s", name, artist, target)
+                    break
+                logger.warning("音频发送失败（%s），尝试下一种引用方式", target)
+
+        # ── 4. 兜底：卡片或音频任一没发出去，就把能点的链接写出来 ──
+        if not card_ok or (audio_path and not audio_ok):
+            fallback = [f"「{name} - {artist}」"]
+            if not card_ok:
+                fallback.append(f"卡片没发出去，点这里听：{song_page}")
+            if audio_path and not audio_ok:
+                fallback.append(f"音频直链：{self._public_download_url(audio_name)}")
+            robot.send(MessageBuilder().text("\n".join(fallback)).build())
 
         _set_tool_meta(ai, tool_calls)
         ai.user_text = f"播放歌曲: {name} - {artist}"
+
+    @staticmethod
+    def _audio_targets(audio_name: str) -> list[str]:
+        """按可靠性排序的音频引用：llbot 内网 URL 优先，再退回共享目录绝对路径。"""
+        return [
+            f"{Config.MUSIC_AUDIO_BASE_URL}/download/{quote(audio_name)}",
+            f"/app/shared_files/{audio_name}",
+        ]
+
+    @staticmethod
+    def _public_download_url(audio_name: str) -> str:
+        """给用户点的直链（公网基地址，未配置时退回 localhost）。"""
+        base = (Config.PUBLIC_BASE_URL or "http://localhost:5000").rstrip("/")
+        return f"{base}/download/{quote(audio_name)}"
 
 
 # ══════════════════════════════════════════════════════════
