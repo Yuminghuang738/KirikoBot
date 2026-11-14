@@ -201,11 +201,16 @@ class TestPublicDownloadUrl:
         url = self._url(monkeypatch, config_base="http://47.108.183.60:5000")
         assert url == "http://47.108.183.60:5000/download/music_1_abcd.mp3"
 
+    def test_tailscale_base_yields_none(self, monkeypatch):
+        """线上 PUBLIC_BASE_URL 就是 Tailscale 的 100.x，必须不出链。"""
+        assert self._url(monkeypatch, config_base="http://100.93.52.78:5000") is None
+
     def test_explicit_domain_is_used(self, monkeypatch):
         url = self._url(monkeypatch, config_base="https://kb.example.com/")
         assert url == "https://kb.example.com/download/music_1_abcd.mp3"
 
     @pytest.mark.parametrize("base", [
+        "http://100.93.52.78:5000",   # Tailscale / CGNAT，用户点不开
         "http://kirikobot:5000",
         "http://my-robot:5000",
         "http://llbot:3001",
