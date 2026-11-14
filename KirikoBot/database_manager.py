@@ -1976,13 +1976,22 @@ class DatabaseManager:
                  (reasoning or "")[:2000], int(task_id)),
             )
 
-    def mark_stale_dsh_tasks_interrupted(self) -> int:
-        """服务重启后，上一次留下的 running 行改 interrupted（否则永远算运行中）。"""
+    def mark_stale_dsh_tasks_interrupted(self, max_age_seconds: int | None = None) -> int:
+        """把遗留 running 行改 interrupted。
+
+        `max_age_seconds=None`：启动时调用，全部遗留行都算（重启让所有在跑的都没了）；
+        传值：周期性 sweep 用，只清理运行时间超过阈值的行。
+        """
+        sql = (
+            "UPDATE tool_usage SET status='interrupted', error='stale running' "
+            "WHERE tool_name='dsh_agent' AND status='running'"
+        )
+        params: tuple[Any, ...] = ()
+        if max_age_seconds is not None:
+            sql += " AND timestamp < datetime('now','localtime', ?)"
+            params = (f"-{max(0, int(max_age_seconds))} seconds",)
         with self.get_connect() as connect:
-            cur = connect.execute(
-                "UPDATE tool_usage SET status='interrupted', error='service restarted' "
-                "WHERE tool_name='dsh_agent' AND status='running'",
-            )
+            cur = connect.execute(sql, params)
             return int(cur.rowcount or 0)
 
     def get_recent_tool_chain(self, group_id: str | None, user_id: str,
