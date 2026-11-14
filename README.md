@@ -84,9 +84,9 @@ KirikoBot 是一个跑在 QQ 上的聊天机器人：**LLBot（OneBot）负责 Q
 
 ### 🖥 管理面板
 
-实时日志（SSE）· 对话记录 · 用户画像 · 好感度 · 提醒 · 塔罗 · 表情包库 ·
+实时日志（SSE）· 对话记录 · 用户画像（含好感度）· 提醒 · 塔罗 · 表情包库 ·
 群管理 · 群活跃 · 聊天回看 · AI 用量与成本 · 功能开关 · 频率限制 ·
-LLBot 连接状态 · **超级大脑（DSH）任务页**
+LLBot 连接状态 · **超级大脑任务页**
 
 ---
 
@@ -139,7 +139,7 @@ QQ 客户端
 | `python-dotenv` | `>=1.0,<2.0` | 读取 `.env` |
 | `markdown` | `>=3.5,<4.0` | 面板 Markdown 渲染 |
 | `waitress` | `>=2.1,<4.0` | 生产 WSGI 服务器 |
-| `lxml` | `>=5.0,<6.0` | 网页解析 |
+| `lxml` | `>=5.0,<6.0` | XML/HTML 解析（当前代码未直接引用，保留供依赖兼容） |
 | `Pillow` | `>=10.0,<13.0` | 图片处理 / 表情包 |
 | `imagehash` | `>=4.3,<5.0` | 表情包去重 |
 
@@ -283,7 +283,7 @@ scripts/rollback.sh --latest
 ## 测试
 
 ```bash
-cd /home/bosak/Documents/Projects/KirikoBot-LLBot
+cd KirikoBot
 python3 -m pytest tests/ -q -p no:cacheprovider
 ```
 
@@ -352,7 +352,7 @@ GPL-3.0。见 [LICENSE](LICENSE)。
 
 ## 致谢
 
-- [LLBot](https://github.com/linyuchen/llbot) / [PMHQ](https://github.com/linyuchen/pmhq)：QQ 与 OneBot 接入
+- [LLBot（Docker Hub）](https://hub.docker.com/r/linyuchen/llbot) / [PMHQ](https://github.com/linyuchen/PMHQ)：QQ 与 OneBot 接入
 - [DeepSeek](https://www.deepseek.com/)：对话、搜索、视觉
 - [DeepSeek Harness](https://github.com/deepseek-ai)：超级大脑运行时
 - 以及群里每一位愿意跟 Kiriko 说话的人
