@@ -220,3 +220,87 @@ class TestPercentileHelper:
         assert main._percentile([1000], 0.9) == 1000
         assert main._percentile([], 0.5) is None
         assert main._percentile([100, 200, 300, 400], 0.5) == 250
+
+
+class TestFinishMustLand:
+    """7 条真实任务停在 running 的根因：AiServer 没有 handled_summary 属性。"""
+
+    class _Robot:
+        msg_type = "private"
+        group_id = None
+        user_id = "u1"
+        user_name = "小明"
+        msg = "hi"
+
+        def reply(self, text):
+            pass
+
+        def reply_chunked(self, text):
+            pass
+
+        def send_file(self, path):
+            pass
+
+    class _AIWithoutHandledSummary:
+        ai_message = {"tool_calls": [{"id": "1", "function": {
+            "name": "dsh_agent", "arguments": '{"task": "hi"}'}}]}
+        user_text = ""
+        reasoning_content = ""
+
+    def test_ai_without_handled_summary_still_finishes(self, db, monkeypatch):
+        from ai_tools import DshAgentTool
+
+        tool = DshAgentTool(db)
+
+        def fake_run(task, session_key="", timeout=None, meta=None):
+            meta["status"] = "ok"
+            meta["session_recovered"] = -1
+            return "done"
+
+        monkeypatch.setattr(tool.client, "run_task", fake_run)
+        tool.dsh_agent_call(self._Robot(), self._AIWithoutHandledSummary())
+
+        row = db.fetch_data(
+            "SELECT status, result FROM tool_usage WHERE tool_name='dsh_agent'",
+        )[0]
+        assert row[0] == "ok", "finish 不能因为 ai.handled_summary 不存在而跳过"
+        assert row[1] == "done"
+
+    def test_finish_failure_is_logged_as_warning(self, db, monkeypatch, caplog):
+        import logging
+
+        from ai_tools import DshAgentTool
+
+        tool = DshAgentTool(db)
+
+        def fake_run(task, session_key="", timeout=None, meta=None):
+            meta["status"] = "ok"
+            return "done"
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("db locked")
+
+        monkeypatch.setattr(tool.client, "run_task", fake_run)
+        monkeypatch.setattr(db, "finish_dsh_task", boom)
+        with caplog.at_level(logging.WARNING):
+            tool.dsh_agent_call(self._Robot(), self._AIWithoutHandledSummary())
+
+        assert "dsh task row update failed" in caplog.text
+        assert "db locked" in caplog.text
+
+
+class TestStaleSweepMaxAge:
+    def test_sweep_marks_only_tasks_older_than_threshold(self, db):
+        old_id = db.start_dsh_task("u1", "g1", "group:g1")
+        fresh_id = db.start_dsh_task("u1", "g1", "group:g1")
+        db.execute_action(
+            "UPDATE tool_usage SET timestamp=datetime('now','localtime','-700 seconds') "
+            "WHERE id=?", (old_id,),
+        )
+
+        changed = db.mark_stale_dsh_tasks_interrupted(600)
+
+        assert changed == 1
+        rows = dict(db.fetch_data("SELECT id, status FROM tool_usage"))
+        assert rows[old_id] == "interrupted"
+        assert rows[fresh_id] == "running"

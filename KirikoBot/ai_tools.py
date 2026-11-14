@@ -1419,6 +1419,11 @@ class DshAgentTool:
             # 结果没送到用户手里 = 这条任务没完成到「可发送」，按 error 记。
             meta["error"] = f"delivery_failed: {delivery_error}"
             status = "error"
+        if not task_id:
+            logger.warning(
+                "dsh task row insert returned id=0；本次任务的指标不会落库（session=%s）",
+                session_key,
+            )
         if self.db and task_id:
             try:
                 self.db.finish_dsh_task(
@@ -1429,11 +1434,16 @@ class DshAgentTool:
                     queue_wait_ms=0,
                     error=str(meta.get("error") or ""),
                     arguments=task,
-                    result=str(ai.handled_summary or result or "")[:500],
-                    reasoning=ai.reasoning_content or "",
+                    # AiServer 没有 handled_summary 属性（其他工具都是先赋值再用）；
+                    # 这里直接访问会抛 AttributeError，导致 finish 永不落库。
+                    result=str(getattr(ai, "handled_summary", "") or result or "")[:500],
+                    reasoning=getattr(ai, "reasoning_content", "") or "",
                 )
             except Exception:
-                logger.debug("dsh task row update failed", exc_info=True)
+                logger.warning(
+                    "dsh task row update failed (id=%s, status=%s)", task_id, status,
+                    exc_info=True,
+                )
 
         ai.handled_summary = f"[超级大脑] 任务完成：{task[:50]}"
         ai.user_text = f"超级大脑执行：{task}\n结果：{result[:300]}"

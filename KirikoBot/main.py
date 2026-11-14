@@ -108,6 +108,19 @@ try:
 except Exception:
     logger.debug("标记遗留 DSH 任务失败", exc_info=True)
 
+
+def _sweep_stale_dsh_tasks() -> None:
+    """周期清理运行超过 DSH_TIMEOUT+60 的 running 行（进程可能被外部杀掉）。"""
+    while True:
+        time.sleep(60)
+        try:
+            db.mark_stale_dsh_tasks_interrupted(Config.DSH_TIMEOUT + 60)
+        except Exception:
+            logger.debug("DSH running sweep failed", exc_info=True)
+
+
+threading.Thread(target=_sweep_stale_dsh_tasks, name="dsh-stale-sweeper", daemon=True).start()
+
 # 回复频率限制：按群 / 按用户两个维度，配置存在 group_rate_limits 表里，
 # 在群设置面板里改。装进 robot_server 之后，所有出站回复都会过它一道。
 rate_limiter = RateLimiter(db)
