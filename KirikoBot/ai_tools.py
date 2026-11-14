@@ -779,7 +779,9 @@ class MusicTool:
             if not card_ok:
                 fallback.append(f"卡片没发出去，点这里听：{song_page}")
             if audio_path and not audio_ok:
-                fallback.append(f"音频直链：{self._public_download_url(audio_name)}")
+                fallback.append(
+                    f"音频直链：{self._public_download_url(audio_name, robot)}"
+                )
             robot.send(MessageBuilder().text("\n".join(fallback)).build())
 
         _set_tool_meta(ai, tool_calls)
@@ -794,9 +796,18 @@ class MusicTool:
         ]
 
     @staticmethod
-    def _public_download_url(audio_name: str) -> str:
-        """给用户点的直链（公网基地址，未配置时退回 localhost）。"""
-        base = (Config.PUBLIC_BASE_URL or "http://localhost:5000").rstrip("/")
+    def _public_download_url(audio_name: str, robot: Any = None) -> str:
+        """给用户点的直链。
+
+        线上 PUBLIC_BASE_URL 为空，此时必须用 webhook 请求上下文缓存的
+        `robot.public_base_url`（用户实际访问面板的 Host），否则兜底链接会
+        指向 localhost，用户点不开。取值顺序与 robot_server.send_file 一致。
+        """
+        base = (
+            Config.PUBLIC_BASE_URL
+            or getattr(robot, "public_base_url", "")
+            or "http://localhost:5000"
+        ).rstrip("/")
         return f"{base}/download/{quote(audio_name)}"
 
 

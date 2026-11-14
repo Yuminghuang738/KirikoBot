@@ -284,6 +284,16 @@ def test_download_audio_defaults_to_shared_files(monkeypatch, tmp_path):
     assert os.path.basename(path).startswith("music_6_")
 
 
+def test_download_audio_rejects_oversized_file(monkeypatch, tmp_path):
+    """超过大小上限必须停写并删文件，shared_files 不能被撑爆。"""
+    monkeypatch.setattr(music_service, "_MAX_AUDIO_BYTES", 4096)
+    resp = FakeResponse(headers={"Content-Type": "audio/mpeg"}, chunks=[b"ID3" + b"a" * 4093, b"a" * 8192])
+    monkeypatch.setattr(music_service.requests, "get", lambda *a, **k: resp)
+
+    assert MusicService().download_audio("http://x/a.mp3", 8, dest_dir=str(tmp_path)) is None
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_download_audio_empty_url_returns_none():
     assert MusicService().download_audio("", 7) is None
 

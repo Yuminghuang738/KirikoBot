@@ -25,12 +25,13 @@ SONG = {
 
 
 class FakeRobot:
-    def __init__(self, send_results=None):
+    def __init__(self, send_results=None, public_base_url=""):
         self.sent: list[list[dict]] = []
         self.msg_type = "group"
         self.group_id = "100"
         self.user_id = "200"
         self.msg = "点首歌"
+        self.public_base_url = public_base_url
         self._results = list(send_results or [])
 
     def send(self, message):
@@ -118,7 +119,7 @@ def test_card_failure_falls_back_to_text_link(caplog):
     assert any("音乐卡片发送失败" in r.message for r in caplog.records)
 
 
-def test_audio_send_failure_falls_back_to_download_link(monkeypatch):
+def test_audio_send_failure_uses_public_base_url(monkeypatch):
     """URL 和共享目录路径都发不出去时，至少把直链写出来，并记 warning。"""
     monkeypatch.setattr(Config, "PUBLIC_BASE_URL", "https://kb.example.com")
     # ① 信息 ② 卡片 ③ 音频 URL ④ 音频路径 ⑤ 兜底文字
@@ -132,6 +133,22 @@ def test_audio_send_failure_falls_back_to_download_link(monkeypatch):
         for t in robot.texts()
     )
     assert ai.user_text == "播放歌曲: 测试歌 - 测试歌手"
+
+
+def test_audio_fallback_uses_robot_host_when_public_base_url_empty(monkeypatch):
+    """线上 PUBLIC_BASE_URL 为空：兜底链接必须用请求上下文的 Host，不能是 localhost。"""
+    monkeypatch.setattr(Config, "PUBLIC_BASE_URL", "")
+    robot = FakeRobot(
+        send_results=[True, True, False, False, True],
+        public_base_url="https://kb.example.com",
+    )
+    service = FakeMusicService(SONG, "/app/shared_files/music_123456_abcd1234.mp3")
+    _run(robot, service)
+
+    link_texts = [t for t in robot.texts() if "音频直链" in t]
+    assert link_texts, "音频发不出去应有直链兜底"
+    assert "https://kb.example.com/download/music_123456_abcd1234.mp3" in link_texts[0]
+    assert "localhost" not in link_texts[0]
 
 
 def test_no_audio_leaves_no_record_and_no_link():

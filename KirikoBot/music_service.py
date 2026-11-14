@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 # 以 application/octet-stream 下发，存成 .mp3 后 LLBot 只会报「未知文件类型」。
 _AUDIO_SNIFF_BYTES = 16
 
+# 反爬有时会返回一个巨大的页面/视频；shared_files 在 1.6G 的机器上不能随便撑。
+_MAX_AUDIO_BYTES = 30 * 1024 * 1024
+
 
 def _is_mp3_header(head: bytes) -> bool:
     """文件头是不是真 MP3：ID3 标签或帧同步 0xFFFB/0xFFF3 等。"""
@@ -196,13 +199,27 @@ class MusicService:
             )
             r.raise_for_status()
 
+            written = 0
+            too_big = False
             with open(fpath, "wb") as f:
                 for chunk in r.iter_content(chunk_size=8192):
                     if not chunk:
                         continue
+                    written += len(chunk)
+                    if written > _MAX_AUDIO_BYTES:
+                        too_big = True
+                        break
                     if len(head) < _AUDIO_SNIFF_BYTES:
                         head += chunk[:_AUDIO_SNIFF_BYTES]
                     f.write(chunk)
+
+            if too_big:
+                self._discard(fpath)
+                logger.warning(
+                    "音频超过 %.0f MB 上限，已丢弃 song_id=%s",
+                    _MAX_AUDIO_BYTES / 1024 / 1024, song_id,
+                )
+                return None
 
             # 文件头不是 MP3 就一律丢弃（HTML 错误页、空响应、其它格式）。
             if not _is_mp3_header(head):
