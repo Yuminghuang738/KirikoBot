@@ -1,4 +1,4 @@
-"""主链路记忆开关：关闭时 16 条原文、开启时 24 条+摘要、落库后异步摘要。"""
+"""主链路记忆开关：关闭时 24 条原文、开启时 24 条+摘要、落库后异步摘要。"""
 from __future__ import annotations
 
 import memory_service

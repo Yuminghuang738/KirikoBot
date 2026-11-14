@@ -100,6 +100,27 @@ BATTLE_TIMEOUT = 60  # seconds before battle auto-ends
 llbot = LLBotClient(Config.ONEBOT_API or "http://llbot:3000", Config.ONEBOT_TOKEN or "")
 db = DatabaseManager()
 
+# 上个进程留下的 running DSH 行改 interrupted，否则成功率/耗时永远缺这些任务。
+try:
+    _stale_dsh = db.mark_stale_dsh_tasks_interrupted()
+    if _stale_dsh:
+        logger.info("启动时将 %d 条遗留 DSH running 任务标记为 interrupted", _stale_dsh)
+except Exception:
+    logger.debug("标记遗留 DSH 任务失败", exc_info=True)
+
+
+def _sweep_stale_dsh_tasks() -> None:
+    """周期清理运行超过 DSH_TIMEOUT+60 的 running 行（进程可能被外部杀掉）。"""
+    while True:
+        time.sleep(60)
+        try:
+            db.mark_stale_dsh_tasks_interrupted(Config.DSH_TIMEOUT + 60)
+        except Exception:
+            logger.debug("DSH running sweep failed", exc_info=True)
+
+
+threading.Thread(target=_sweep_stale_dsh_tasks, name="dsh-stale-sweeper", daemon=True).start()
+
 # 回复频率限制：按群 / 按用户两个维度，配置存在 group_rate_limits 表里，
 # 在群设置面板里改。装进 robot_server 之后，所有出站回复都会过它一道。
 rate_limiter = RateLimiter(db)
@@ -238,7 +259,7 @@ def _memory_context(robot: Any) -> tuple[list[dict[str, Any]], str, bool]:
         )
         return history, summary, True
     except Exception:
-        logger.exception("memory_service.load_context 失败，本回合退回 16 条原文")
+        logger.exception("memory_service.load_context 失败，本回合退回 24 条原文")
         return _load_history(robot.user_id, robot.group_id), "", False
 
 
@@ -392,24 +413,15 @@ def _speaker_context(robot: RobotServer, disabled: set[str]) -> str:
     放进 user message 而不是 system prompt —— 它随「谁在说话」变化，
     放系统提示词里等于每换个人就废掉整段前缀缓存。
     """
-    if robot.msg_type != "group" or not robot.group_id:
-        return ""
-
+    group_id = robot.group_id or ""
     affection = None
+    parts: list[str] = []
     if "affection" not in disabled:
         try:
-            affection = affection_service.get_or_create(
-                db, robot.user_id, robot.group_id, robot.user_name,
-            )
-        except Exception:
-            logger.debug("affection record failed", exc_info=True)
-
-    parts: list[str] = []
-    if affection is not None:
-        try:
-            block = affection_service.relationship_block(
-                db, robot.user_id, robot.group_id,
-            )
+            # 读 global（群/私聊加权），不在读路径创建任何行。
+            global_score = affection_service.get_global(db, robot.user_id)
+            affection = {"affection_score": global_score["score"]}
+            block = affection_service.relationship_block(db, robot.user_id, group_id)
             if block:
                 parts.append(block)
         except Exception:
@@ -418,7 +430,7 @@ def _speaker_context(robot: RobotServer, disabled: set[str]) -> str:
     if "profiles" not in disabled:
         try:
             block = profile_service.build_speaker_context(
-                db, robot.user_id, robot.group_id, robot.user_name,
+                db, robot.user_id, group_id, robot.user_name,
                 affection=affection,
             )
             if block:
@@ -541,12 +553,12 @@ def _trigger_profile_update(robot: RobotServer, disabled: set[str] | None = None
                 profile_service.extract_memories,
                 db, robot.user_id, robot.user_name,
             )
-        if robot.msg_type == "group" and robot.group_id:
-            if profile_service.should_analyze(db, robot.user_id):
-                executor.submit(
-                    profile_service.analyze_user,
-                    db, robot.user_id, robot.user_name, robot.group_id,
-                )
+        # 画像是「这个人」唯一的一份，私聊也要触发（跨群+私聊计数）。
+        if profile_service.should_analyze(db, robot.user_id):
+            executor.submit(
+                profile_service.analyze_user,
+                db, robot.user_id, robot.user_name, robot.group_id or "",
+            )
     except Exception:
         logger.debug("main._trigger_profile_update 忽略了异常", exc_info=True)
 
@@ -633,14 +645,15 @@ def main_logic(robot: RobotServer) -> None:
             return
 
         # ── Affection: record valid interaction (base points only, sync) ──
-        if robot.msg_type == "group" and robot.group_id and "affection" not in disabled:
+        if "affection" not in disabled:
             try:
-                # 先更新连续出现天数，再算事件分 —— streak 本身就是一个事件
+                # 群/私聊用同一套事件分；私聊写 group_id='' 的 private 分量。
+                group_id = robot.group_id or ""
                 affection_service.touch_streak(
-                    db, robot.user_id, robot.group_id, robot.user_name,
+                    db, robot.user_id, group_id, robot.user_name,
                 )
                 affection_service.record_interaction(
-                    db, robot.user_id, robot.group_id, robot.user_name,
+                    db, robot.user_id, group_id, robot.user_name,
                     has_images=bool(getattr(robot.incoming, "has_images", False)),
                 )
             except Exception:
@@ -648,7 +661,7 @@ def main_logic(robot: RobotServer) -> None:
 
         # ── AI judge (async): sentiment of THIS message → affection score ──
         has_text = bool(robot.msg.strip())
-        affection_on = bool(robot.group_id) and "affection" not in disabled and has_text
+        affection_on = "affection" not in disabled and has_text
         if affection_on:
             executor.submit(_run_ai_judge, robot)
 
@@ -714,15 +727,17 @@ def main_logic(robot: RobotServer) -> None:
 
                 # Recorded after the handler so the chain also carries the
                 # outcome — this is what explain_self replays back to the user.
-                try:
-                    db.record_tool_usage(
-                        fn, robot.user_id, robot.group_id,
-                        arguments=tc.get("function", {}).get("arguments", ""),
-                        result=getattr(ai, "tool_result_text", "") or "",
-                        reasoning=ai.reasoning_content or "",
-                    )
-                except Exception:
-                    logger.debug("tool chain record failed", exc_info=True)
+                # dsh_agent 自己写 running→终态一行，通用记录跳过避免双行。
+                if fn != "dsh_agent":
+                    try:
+                        db.record_tool_usage(
+                            fn, robot.user_id, robot.group_id,
+                            arguments=tc.get("function", {}).get("arguments", ""),
+                            result=getattr(ai, "tool_result_text", "") or "",
+                            reasoning=ai.reasoning_content or "",
+                        )
+                    except Exception:
+                        logger.debug("tool chain record failed", exc_info=True)
 
             if follow_up_tcs:
                 ai.follow_up_request(follow_up_tcs)
@@ -864,27 +879,54 @@ def api_profiles():
 
 @app.route("/api/affection")
 def api_affection():
-    """Get all affection records, optionally filtered by group."""
+    """一人一个总分（global）；带 group_id 时返回该群分量并附 global_score。"""
     group_id = request.args.get("group_id", "")
-    rows = db.fetch_data(
-        "SELECT user_id, group_id, user_name, affection_score, interaction_count, "
-        "positive_count, negative_count, last_interaction, relationship, notes "
-        "FROM user_affection ORDER BY affection_score DESC LIMIT 200"
-    )
+    if group_id:
+        rows = db.fetch_data(
+            "SELECT user_id, group_id, user_name, affection_score, interaction_count, "
+            "positive_count, negative_count, last_interaction, relationship, notes "
+            "FROM user_affection WHERE group_id=? ORDER BY affection_score DESC LIMIT 200",
+            (group_id,),
+        )
+        records = []
+        for r in rows:
+            label, emoji = AffectionService.get_relationship(float(r[3]))
+            records.append({
+                "user_id": r[0], "group_id": r[1], "user_name": r[2],
+                "affection_score": round(float(r[3]), 1),
+                "interaction_count": int(r[4]),
+                "positive_count": int(r[5]), "negative_count": int(r[6]),
+                "last_interaction": r[7], "relationship": r[8] or label,
+                "emoji": emoji, "notes": r[9] or "",
+                "global_score": AffectionService.get_global(db, r[0])["score"],
+            })
+        return jsonify({"affection_records": records, "total": len(records),
+                        "group_id": group_id})
+
+    user_ids = [r[0] for r in db.fetch_data(
+        "SELECT DISTINCT user_id FROM user_affection",
+    )]
     records = []
-    for r in rows:
-        if group_id and r[1] != group_id:
-            continue
-        label, emoji = AffectionService.get_relationship(float(r[3]))
+    for user_id in user_ids:
+        global_score = AffectionService.get_global(db, user_id)
+        name_rows = db.fetch_data(
+            "SELECT user_name FROM user_affection WHERE user_id=? "
+            "ORDER BY updated_at DESC LIMIT 1",
+            (user_id,),
+        )
         records.append({
-            "user_id": r[0], "group_id": r[1], "user_name": r[2],
-            "affection_score": round(float(r[3]), 1),
-            "interaction_count": int(r[4]),
-            "positive_count": int(r[5]), "negative_count": int(r[6]),
-            "last_interaction": r[7], "relationship": r[8] or label,
-            "emoji": emoji, "notes": r[9] or "",
+            "user_id": user_id,
+            "user_name": name_rows[0][0] if name_rows else user_id,
+            "affection_score": global_score["score"],
+            "interaction_count": global_score["interaction_count"],
+            "positive_count": global_score["positive_count"],
+            "negative_count": global_score["negative_count"],
+            "relationship": global_score["relationship"],
+            "emoji": global_score["emoji"],
+            "components": global_score["components"],
         })
-    return jsonify({"affection_records": records, "total": len(records)})
+    records.sort(key=lambda row: row["affection_score"], reverse=True)
+    return jsonify({"affection_records": records[:200], "total": len(records)})
 
 
 @app.route("/api/affection/leaderboard")
@@ -898,23 +940,27 @@ def api_affection_leaderboard():
 
 @app.route("/api/affection/<user_id>")
 def api_affection_user(user_id: str):
-    """Get affection details for a specific user."""
+    """用户详情：默认返回 global + 各分量；带 group_id 时返回该分量并附 global_score。"""
     group_id = request.args.get("group_id", "")
-    if not group_id:
-        return jsonify({"ok": False, "error": "group_id query parameter is required"}), 400
-    record = AffectionService.get_or_create(db, user_id, group_id, user_id)
-    label, emoji = AffectionService.get_relationship(record["affection_score"])
+    global_score = AffectionService.get_global(db, user_id)
+    component = None
+    if group_id:
+        component = next(
+            (c for c in global_score["components"] if c["group_id"] == group_id), None,
+        )
+    score = component["affection_score"] if component else global_score["score"]
+    label, emoji = AffectionService.get_relationship(score)
     return jsonify({
         "user_id": user_id,
-        "group_id": group_id,
-        "affection_score": round(record["affection_score"], 1),
-        "interaction_count": record["interaction_count"],
-        "positive_count": record["positive_count"],
-        "negative_count": record["negative_count"],
-        "last_interaction": record["last_interaction"],
+        "group_id": group_id or None,
+        "affection_score": round(score, 1),
+        "interaction_count": component["interaction_count"] if component else global_score["interaction_count"],
+        "positive_count": global_score["positive_count"],
+        "negative_count": global_score["negative_count"],
         "relationship": label,
         "emoji": emoji,
-        "notes": record.get("notes", ""),
+        "global_score": global_score["score"],
+        "components": global_score["components"],
     })
 
 
@@ -924,10 +970,13 @@ def api_affection_adjust():
     data = request.get_json(silent=True) or {}
     user_id = (data.get("user_id") or "").strip()
     group_id = (data.get("group_id") or "").strip()
+    scope = (data.get("scope") or "").strip()
+    if scope not in ("group", "private"):
+        scope = AffectionService.scope_for(group_id)
     delta = float(data.get("delta", 0))
     note = (data.get("note") or "").strip()
-    if not user_id or not group_id:
-        return jsonify({"ok": False, "error": "user_id and group_id are required"}), 400
+    if not user_id:
+        return jsonify({"ok": False, "error": "user_id is required"}), 400
     if delta == 0:
         return jsonify({"ok": False, "error": "delta must be non-zero"}), 400
     try:
@@ -1561,7 +1610,116 @@ def api_dsh_status():
         "workspace": workspace,
         "patch_file": patch_file,
         "timeout": Config.DSH_TIMEOUT,
+        "max_concurrency": Config.DSH_MAX_CONCURRENCY,
         "sessions": sessions,
+        # 3085 的官方 WebUI 需要浏览器侧 token 交换 + 287MB RSS，1.6G 机器上不划算；
+        # 面板改用同源的原生状态页，这里显式说明，不再让前端拼 iframe。
+        "web_ui": "native",
+    })
+
+
+def _percentile(sorted_values: list[int], q: float) -> int | None:
+    """线性插值百分位（和 Hina 的离线口径一致，部署后才可比）。"""
+    if not sorted_values:
+        return None
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    pos = (len(sorted_values) - 1) * q
+    lower = int(pos)
+    upper = min(lower + 1, len(sorted_values) - 1)
+    frac = pos - lower
+    return int(round(sorted_values[lower] * (1 - frac) + sorted_values[upper] * frac))
+
+
+@app.route("/api/dsh/tasks")
+def api_dsh_tasks():
+    """最近 DSH 任务与指标：支持 status/session 筛选，详情带 arguments/result。"""
+    limit = request.args.get("limit", 20, type=int)
+    status = (request.args.get("status") or "").strip()
+    session = (request.args.get("session") or "").strip()[:80]
+    allowed_status = ("ok", "empty", "timeout", "error", "interrupted", "rejected", "running")
+    where = "tool_name='dsh_agent' AND status IS NOT NULL AND status <> ''"
+    params: list[Any] = []
+    if status in allowed_status:
+        where += " AND status=?"
+        params.append(status)
+    if session:
+        where += " AND session_key=?"
+        params.append(session)
+    try:
+        rows = db.fetch_data(
+            "SELECT id, timestamp, status, duration_ms, session_key, "
+            "session_recovered, queue_wait_ms, error, arguments, result "
+            f"FROM tool_usage WHERE {where} ORDER BY id DESC LIMIT ?",
+            (*params, max(1, min(limit, 100))),
+        )
+    except Exception:
+        rows = []
+    tasks = [{
+        "id": r[0], "timestamp": r[1], "status": r[2] or "",
+        "duration_ms": int(r[3] or 0), "session_key": r[4] or "",
+        "session_recovered": int(r[5] if r[5] is not None else -1),
+        "queue_wait_ms": int(r[6] or 0),
+        "error": r[7] or "",
+        "arguments": r[8] or "",
+        "result": r[9] or "",
+    } for r in rows]
+
+    # 指标固定看「最近 100 条」，不随列表筛选/limit 跳动。
+    try:
+        stats_rows = db.fetch_data(
+            "SELECT id, timestamp, status, duration_ms, session_key, "
+            "session_recovered, queue_wait_ms, error "
+            "FROM tool_usage WHERE tool_name='dsh_agent' "
+            "AND status IS NOT NULL AND status <> '' "
+            "ORDER BY id DESC LIMIT 100",
+        )
+    except Exception:
+        stats_rows = []
+    try:
+        durations = sorted(
+            int(r[3] or 0) for r in stats_rows if (r[2] or "") == "ok" and int(r[3] or 0) > 0
+        )
+        terminal = [r for r in stats_rows if (r[2] or "") in
+                    ("ok", "empty", "timeout", "error", "interrupted")]
+        ok_count = sum(1 for r in terminal if (r[2] or "") == "ok")
+        rejected = [r for r in stats_rows if (r[2] or "") == "rejected"]
+        # 恢复率只看有存量 session 的任务（-1 = 本来就没有，不进分母）
+        resumed = [r for r in stats_rows if int(r[5] if r[5] is not None else -1) in (0, 1)]
+        recovered = sum(1 for r in resumed if int(r[5]) == 1)
+        stats = {
+            "n": len(terminal),
+            "p50_ms": _percentile(durations, 0.5),
+            "p90_ms": _percentile(durations, 0.9),
+            "success_rate": round(ok_count / len(terminal), 3) if terminal else None,
+            "rejected": len(rejected),
+            # 没有终态任务时拒绝率没有意义（旧行 status 为空也不算），回 None。
+            "reject_rate": round(len(rejected) / len(stats_rows), 3)
+            if terminal and stats_rows else None,
+            "window": 100,
+            "session_tasks": len(resumed),
+            "recovery_rate": round(recovered / len(resumed), 3) if resumed else None,
+        }
+    except Exception:
+        stats = {}
+
+    # 下拉选项：最近出现过的状态与会话（会话名按最近使用排序）
+    try:
+        statuses = [r[0] for r in db.fetch_data(
+            "SELECT DISTINCT status FROM tool_usage WHERE tool_name='dsh_agent' "
+            "AND status IS NOT NULL AND status <> '' ORDER BY status",
+        )]
+        sessions = [r[0] for r in db.fetch_data(
+            "SELECT session_key FROM tool_usage WHERE tool_name='dsh_agent' "
+            "AND session_key IS NOT NULL AND session_key <> '' "
+            "GROUP BY session_key ORDER BY MAX(id) DESC LIMIT 50",
+        )]
+    except Exception:
+        statuses, sessions = [], []
+    return jsonify({
+        "tasks": tasks, "stats": stats,
+        "statuses": statuses, "sessions": sessions,
+        "filters": {"status": status, "session": session, "limit": max(1, min(limit, 100))},
     })
 
 
@@ -1604,22 +1762,59 @@ def api_dsh_execute():
     data = request.get_json(silent=True) or {}
     task = str(data.get("task") or "").strip()
     session_key = str(data.get("session_key") or "web_console").strip()
-    timeout = int(data.get("timeout") or 120)
+    if not re.fullmatch(r"[A-Za-z0-9_:.\-]{1,80}", session_key):
+        session_key = "web_console"
+    # 前端传来的 timeout 不能超过服务端配置，避免一个请求占住线程远超预算。
+    try:
+        timeout = int(data.get("timeout") or 120)
+    except (TypeError, ValueError):
+        timeout = 120
+    timeout = max(1, min(timeout, int(Config.DSH_TIMEOUT or 600)))
 
     if not task:
         return jsonify({"ok": False, "error": "任务内容不能为空"}), 400
 
+    task_id = 0
+    t0 = time.monotonic()
     try:
-        result = dsh_agent_tool.client.run_task(task, session_key=session_key, timeout=timeout)
-        return jsonify({
-            "ok": True,
-            "task": task,
-            "session_key": session_key,
-            "result": result,
-        })
+        task_id = db.start_dsh_task("web_console", None, session_key)
+    except Exception:
+        logger.debug("web console dsh row insert failed", exc_info=True)
+
+    meta: dict[str, Any] = {}
+    try:
+        result = dsh_agent_tool.client.run_task(
+            task, session_key=session_key, timeout=timeout, meta=meta,
+        )
     except Exception as e:
         logger.exception("Web 控制台触发 DSH 任务失败")
-        return jsonify({"ok": False, "error": str(e)}), 500
+        meta.setdefault("status", "error")
+        meta.setdefault("error", f"{type(e).__name__}: {e}")
+        result = f"执行失败：{e}"
+
+    status = str(meta.get("status") or "error")
+    if status == "unavailable":
+        status = "error"
+    if task_id:
+        try:
+            db.finish_dsh_task(
+                task_id, status=status,
+                duration_ms=int((time.monotonic() - t0) * 1000),
+                session_recovered=int(meta.get("session_recovered", -1)),
+                error=str(meta.get("error") or ""),
+                arguments=task, result=str(result or "")[:500],
+            )
+        except Exception:
+            logger.debug("web console dsh row update failed", exc_info=True)
+
+    return jsonify({
+        "ok": status in ("ok", "empty"),
+        "task": task,
+        "session_key": session_key,
+        "timeout": timeout,
+        "status": status,
+        "result": result,
+    })
 
 
 def _webhook_signature_ok(raw_body: bytes) -> bool:

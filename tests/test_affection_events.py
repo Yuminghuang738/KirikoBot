@@ -79,9 +79,14 @@ class TestEventsNotVolume:
         gained = AffectionService.get_or_create(db, "u1", "g1", "小明")["affection_score"] - SCORE_DEFAULT
         assert gained <= DAILY_EVENT_CAP + 0.001
 
-    def test_private_chats_are_not_scored(self, db):
-        """好感度是群内关系，私聊不计。"""
-        assert AffectionService.record_interaction(db, "u1", None, "小明") is None
+    def test_private_chats_get_their_own_component(self, db):
+        """阶段 6：私聊不再被跳过，写 group_id='' 的私聊分量。"""
+        score = AffectionService.record_interaction(db, "u1", None, "小明")
+        assert score is not None and score > SCORE_DEFAULT
+        rows = db.fetch_data(
+            "SELECT group_id, scope FROM user_affection WHERE user_id='u1'",
+        )
+        assert rows == [("", "private")]
 
 
 class TestStreak:
@@ -201,8 +206,11 @@ class TestRelationshipBlock:
         assert "印象不好" in block
         assert "别多说" in block and "不接梗" in block
 
-    def test_private_has_no_relationship_block(self, db):
-        assert AffectionService.relationship_block(db, "u1", None) == ""
+    def test_private_still_gets_a_relationship_block(self, db):
+        """阶段 6：私聊也读 global，不再返回空。"""
+        AffectionService.record_interaction(db, "u1", None, "小明")
+        block = AffectionService.relationship_block(db, "u1", None)
+        assert "【你和他的关系】" in block
 
 
 class TestRecalibration:
@@ -315,3 +323,50 @@ class TestLeaderboardUsesCurrentScores:
         board = AffectionService.get_leaderboard(db, "g1", limit=3)
         assert "老挚友" not in [b["user_name"] for b in board]
         assert len(board) == 3
+
+
+class TestGlobalScore:
+    """阶段 6：一人一个总分，群/私聊分量按互动次数加权。"""
+
+    def test_no_components_defaults_to_neutral(self, db):
+        global_score = AffectionService.get_global(db, "nobody")
+        assert global_score["score"] == SCORE_DEFAULT
+        assert global_score["components"] == []
+
+    def test_single_group_equals_the_group_score(self, db):
+        AffectionService.manual_adjust(db, "u1", "g1", 40.0)   # 50 → 90
+        assert AffectionService.get_global(db, "u1")["score"] == 90.0
+
+    def test_multi_group_weighted_by_interaction_count(self, db):
+        db.execute_action(
+            "INSERT INTO user_affection (user_id, group_id, scope, user_name, "
+            "affection_score, interaction_count) VALUES (?,?,?,?,?,?)",
+            ("u1", "g1", "group", "小明", 80.0, 10),
+        )
+        db.execute_action(
+            "INSERT INTO user_affection (user_id, group_id, scope, user_name, "
+            "affection_score, interaction_count) VALUES (?,?,?,?,?,?)",
+            ("u1", "g2", "group", "小明", 40.0, 30),
+        )
+        # (80*10 + 40*30) / 40 = 50.0
+        assert AffectionService.get_global(db, "u1")["score"] == 50.0
+
+    def test_weight_is_capped_at_200(self, db):
+        db.execute_action(
+            "INSERT INTO user_affection (user_id, group_id, scope, user_name, "
+            "affection_score, interaction_count) VALUES (?,?,?,?,?,?)",
+            ("u1", "g1", "group", "小明", 90.0, 1000),
+        )
+        db.execute_action(
+            "INSERT INTO user_affection (user_id, group_id, scope, user_name, "
+            "affection_score, interaction_count) VALUES (?,?,?,?,?,?)",
+            ("u1", "g2", "group", "小明", 10.0, 1),
+        )
+        # 封顶 200: (90*200 + 10*1) / 201 = 89.6
+        assert AffectionService.get_global(db, "u1")["score"] == pytest.approx(89.6, abs=0.1)
+
+    def test_private_component_counts_in_global(self, db):
+        AffectionService.record_interaction(db, "u1", None, "小明")
+        global_score = AffectionService.get_global(db, "u1")
+        assert global_score["components"][0]["scope"] == "private"
+        assert global_score["score"] > SCORE_DEFAULT

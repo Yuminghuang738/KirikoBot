@@ -160,23 +160,35 @@ class AffectionService:
     # ── CRUD helpers ──────────────────────────────────────
 
     @staticmethod
-    def get_or_create(db: Any, user_id: str, group_id: str, user_name: str) -> dict[str, Any]:
-        """Fetch affection record, creating with defaults if not present."""
+    def scope_for(group_id: str | None) -> str:
+        """分量类型：群号 → group；空群号 → private（私聊分量）。"""
+        return "group" if group_id else "private"
+
+    @staticmethod
+    def get_or_create(db: Any, user_id: str, group_id: str | None, user_name: str) -> dict[str, Any]:
+        """Fetch affection record, creating with defaults if not present.
+
+        `group_id` 为空串/None 表示私聊分量（scope='private'）。
+        """
+        group_id = group_id or ""
+        scope = AffectionService.scope_for(group_id)
         rows = db.fetch_data(
             "SELECT affection_score, interaction_count, positive_count, negative_count, "
-            "last_interaction, relationship, notes, streak_days, last_seen_date "
+            "last_interaction, relationship, notes, streak_days, last_seen_date, scope "
             "FROM user_affection WHERE user_id=? AND group_id=?",
             (user_id, group_id),
         )
         if not rows:
             db.execute_action(
-                "INSERT INTO user_affection (user_id, group_id, user_name, affection_score, "
+                "INSERT INTO user_affection (user_id, group_id, scope, user_name, affection_score, "
                 "interaction_count, positive_count, negative_count, relationship, notes, "
                 "streak_days, last_seen_date) "
-                "VALUES (?, ?, ?, ?, 0, 0, 0, 'neutral', '', 0, '')",
-                (user_id, group_id, user_name, SCORE_DEFAULT),
+                "VALUES (?, ?, ?, ?, ?, 0, 0, 0, 'neutral', '', 0, '')",
+                (user_id, group_id, scope, user_name, SCORE_DEFAULT),
             )
             return {
+                "scope": scope,
+                "group_id": group_id,
                 "affection_score": SCORE_DEFAULT,
                 "interaction_count": 0,
                 "positive_count": 0,
@@ -191,6 +203,8 @@ class AffectionService:
         r = rows[0]
         score = AffectionService.apply_decay(float(r[0]), r[4])
         return {
+            "scope": r[9] or scope,
+            "group_id": group_id,
             "affection_score": score,
             "interaction_count": int(r[1]),
             "positive_count": int(r[2]),
@@ -248,9 +262,10 @@ class AffectionService:
     def _log(db: Any, user_id: str, group_id: str, delta: float, event: str) -> None:
         try:
             db.execute_action(
-                "INSERT INTO user_affection_log (user_id, group_id, date, delta, event) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (user_id, group_id, AffectionService._today(), round(delta, 3), event),
+                "INSERT INTO user_affection_log (user_id, group_id, scope, date, delta, event) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (user_id, group_id, AffectionService.scope_for(group_id),
+                 AffectionService._today(), round(delta, 3), event),
             )
         except Exception:
             # 日志表可能还不存在；限额会因此偏宽松，但不影响主流程
@@ -278,11 +293,9 @@ class AffectionService:
     ) -> float | None:
         """一条消息触发的**事件**计分（不是"发言条数计分"）。
 
-        返回新的分数；私聊不计（好感度是群内关系）。
+        `group_id` 为空表示私聊分量（scope='private'）；群和私聊用同一套事件分。
         """
-        if not group_id:
-            return None
-
+        group_id = group_id or ""
         record = AffectionService.get_or_create(db, user_id, group_id, user_name)
         logs = AffectionService._today_logs(db, user_id, group_id)
         counts: dict[str, int] = {}
@@ -352,8 +365,7 @@ class AffectionService:
     @staticmethod
     def touch_streak(db: Any, user_id: str, group_id: str | None, user_name: str) -> int:
         """更新连续出现天数（每天第一次调用时才真正变化）。返回新的 streak。"""
-        if not group_id:
-            return 0
+        group_id = group_id or ""
         record = AffectionService.get_or_create(db, user_id, group_id, user_name)
         today = AffectionService._today()
         if record.get("last_seen_date") == today:
@@ -400,8 +412,7 @@ class AffectionService:
           （原来 ±2.0 且不限总量，25 条消息就能刷满）
         - 正、负各有每日净额上限（正 +1.0，负 -2.0）
         """
-        if not group_id:
-            return None
+        group_id = group_id or ""
         if sentiment > 0:
             sentiment = min(sentiment, SENTIMENT_MAX)
         else:
@@ -424,25 +435,89 @@ class AffectionService:
 
     # ── System prompt context ─────────────────────────────
 
+    # ── 统一总分（global） ────────────────────────────────
+
     @staticmethod
-    def relationship_block(db: Any, user_id: str, group_id: str | None) -> str:
+    def get_global(db: Any, user_id: str) -> dict[str, Any]:
+        """一人一个总分：群/私聊分量按互动次数加权，读时计算、不存表。
+
+        单群用户的结果等于该群衰减后的分数；没有分量时回 SCORE_DEFAULT。
+        只读，不在读路径创建任何行。
+        """
+        try:
+            rows = db.fetch_data(
+                "SELECT group_id, scope, affection_score, interaction_count, "
+                "positive_count, negative_count, last_interaction "
+                "FROM user_affection WHERE user_id=?",
+                (user_id,),
+            )
+        except Exception:
+            logger.debug("get_global failed", exc_info=True)
+            rows = []
+
+        components: list[dict[str, Any]] = []
+        weighted = 0.0
+        total_weight = 0.0
+        interactions = 0
+        positive = 0
+        negative = 0
+        for r in rows:
+            group_id = r[0] or ""
+            scope = r[1] or AffectionService.scope_for(group_id)
+            current = AffectionService.apply_decay(float(r[2]), r[6])
+            count = int(r[3] or 0)
+            weight = min(max(count, 1), 200)
+            weighted += current * weight
+            total_weight += weight
+            interactions += count
+            positive += int(r[4] or 0)
+            negative += int(r[5] or 0)
+            components.append({
+                "group_id": group_id,
+                "scope": scope,
+                "affection_score": round(current, 1),
+                "interaction_count": count,
+            })
+
+        score = round(weighted / total_weight, 1) if total_weight else SCORE_DEFAULT
+        label, emoji = AffectionService.get_relationship(score)
+        return {
+            "score": score,
+            "relationship": label,
+            "emoji": emoji,
+            "interaction_count": interactions,
+            "positive_count": positive,
+            "negative_count": negative,
+            "components": components,
+        }
+
+    @staticmethod
+    def relationship_block(db: Any, user_id: str, group_id: str | None = None) -> str:
         """关系那一块 —— **放进 user message**，不进系统提示词。
 
         它随"谁在说话"变化，放 system prompt 里等于每换个人就废掉整段前缀缓存。
+        统一读 global；私聊也返回（不再要求群号）。
         """
-        if not group_id:
-            return ""
-        record = AffectionService.get_or_create(db, user_id, group_id, "")
-        score = record["affection_score"]
-        label, emoji = AffectionService.get_relationship(score)
+        global_score = AffectionService.get_global(db, user_id)
+        score = global_score["score"]
+        label = global_score["relationship"]
 
         # 只给「档位 + 一句可执行的行为」。不放统计数字：实测「聊过 542 次 / 怼过 21」这类
         # 数字会被模型直接拿来说事，去掉后才有可测的正向贡献（见 eval/chat_replay.py）。
         lines = [f"【你和他的关系】{label}"]
         lines.append(AffectionService.behavior_for(score))
 
-        if record.get("notes"):
-            lines.append(f"备注：{record['notes']}")
+        # 备注是操作者手写的补充设定；global 不存汇总备注，取最近一条非空。
+        try:
+            note_rows = db.fetch_data(
+                "SELECT notes FROM user_affection WHERE user_id=? AND notes<>'' "
+                "ORDER BY updated_at DESC LIMIT 1",
+                (user_id,),
+            )
+        except Exception:
+            note_rows = []
+        if note_rows and note_rows[0][0]:
+            lines.append(f"备注：{note_rows[0][0]}")
         return "\n".join(lines)
 
     @staticmethod
@@ -480,35 +555,52 @@ class AffectionService:
                 "FROM user_affection WHERE group_id=?",
                 (group_id,),
             )
-        else:
-            rows = db.fetch_data(
-                "SELECT user_id, user_name, affection_score, interaction_count, "
-                "positive_count, negative_count, last_interaction, group_id "
-                "FROM user_affection",
-            )
+            scored = [(AffectionService.apply_decay(float(r[2]), r[6]), r) for r in rows]
+            scored.sort(key=lambda item: item[0], reverse=True)
 
-        scored = []
-        for r in rows:
-            current = AffectionService.apply_decay(float(r[2]), r[6])
-            scored.append((current, r))
-        scored.sort(key=lambda item: item[0], reverse=True)
+            out: list[dict[str, Any]] = []
+            for current, r in scored[:limit]:
+                label, emoji = AffectionService.get_relationship(current)
+                out.append({
+                    "user_id": r[0],
+                    "user_name": r[1],
+                    "affection_score": round(current, 1),
+                    "interaction_count": int(r[3]),
+                    "positive_count": int(r[4]),
+                    "negative_count": int(r[5]),
+                    "relationship": label,
+                    "emoji": emoji,
+                    "group_id": group_id,
+                })
+            return out
 
-        out: list[dict[str, Any]] = []
-        for current, r in scored[:limit]:
-            label, emoji = AffectionService.get_relationship(current)
-            entry = {
-                "user_id": r[0],
-                "user_name": r[1],
-                "affection_score": round(current, 1),
-                "interaction_count": int(r[3]),
-                "positive_count": int(r[4]),
-                "negative_count": int(r[5]),
-                "relationship": label,
-                "emoji": emoji,
-            }
-            if not group_id and len(r) > 7:
-                entry["group_id"] = r[7]
-            out.append(entry)
+        # 无群号：按 global（一人一个总分）排。
+        users = db.fetch_data(
+            "SELECT user_id, user_name FROM user_affection ORDER BY updated_at DESC",
+        )
+        names: dict[str, str] = {}
+        for user_id, user_name in users:
+            names.setdefault(user_id, user_name or user_id)
+        scored_global = [
+            (AffectionService.get_global(db, user_id)["score"], user_id)
+            for user_id in names
+        ]
+        scored_global.sort(key=lambda item: item[0], reverse=True)
+
+        out = []
+        for score, user_id in scored_global[:limit]:
+            global_score = AffectionService.get_global(db, user_id)
+            out.append({
+                "user_id": user_id,
+                "user_name": names[user_id],
+                "affection_score": global_score["score"],
+                "interaction_count": global_score["interaction_count"],
+                "positive_count": global_score["positive_count"],
+                "negative_count": global_score["negative_count"],
+                "relationship": global_score["relationship"],
+                "emoji": global_score["emoji"],
+                "components": global_score["components"],
+            })
         return out
 
     # ── Manual adjustment (for dashboard) ─────────────────

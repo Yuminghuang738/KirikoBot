@@ -46,7 +46,7 @@ def test_load_history_default_and_custom_limit(monkeypatch):
             return [("user", f"m{i}", "", "") for i in range(limit or 0)]
 
     load_history(FakeDB(), "u1", "g1")
-    assert calls[-1] == MAX_HISTORY  # 3a 默认仍是 16，行为不变
+    assert calls[-1] == MAX_HISTORY  # 默认窗口统一走 MAX_HISTORY（24 条）
 
     load_history(FakeDB(), "u1", "g1", raw_messages=24)
     assert calls[-1] == 24

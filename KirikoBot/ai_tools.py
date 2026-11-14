@@ -799,12 +799,11 @@ class AffectionTool:
                 robot.reply(f"找不到群友「{target_name}」哦～可能ta还没说过话？")
                 return
 
-        # Fetch affection data
-        record = AffectionService.get_or_create(
-            self.db, target_uid or "", robot.group_id or "", target_display or target_name,
-        )
-        score = record["affection_score"]
-        label, emoji = AffectionService.get_relationship(score)
+        # 读 global（一人一个总分，群/私聊是分量）；不在读路径建行。
+        global_score = AffectionService.get_global(self.db, target_uid or "")
+        score = global_score["score"]
+        label = global_score["relationship"]
+        emoji = global_score["emoji"]
 
         is_self = (target_uid == robot.user_id) or (not target_name)
 
@@ -812,11 +811,17 @@ class AffectionTool:
         lines = [
             f"💕 {target_display} 的好感度",
             f"{score:.0f}/100 {emoji}{label}",
-            f"互动 {record['interaction_count']} 次"
-            f"（好评 {record['positive_count']} / 差评 {record['negative_count']}）",
+            f"互动 {global_score['interaction_count']} 次"
+            f"（好评 {global_score['positive_count']} / 差评 {global_score['negative_count']}）",
         ]
-        if is_self and record.get("notes"):
-            lines.append(f"备注：{record['notes']}")
+        if is_self:
+            notes = self.db.fetch_data(
+                "SELECT notes FROM user_affection WHERE user_id=? AND notes<>'' "
+                "ORDER BY updated_at DESC LIMIT 1",
+                (target_uid or "",),
+            )
+            if notes and notes[0][0]:
+                lines.append(f"备注：{notes[0][0]}")
         robot.reply("\n".join(lines))
 
 
@@ -1345,7 +1350,24 @@ class DshAgentTool:
 
         session_key = f"{robot.msg_type}:{robot.group_id or robot.user_id}"
         t_start = time.time()
-        result = self.client.run_task(task, session_key=session_key)
+        t0 = time.monotonic()
+        task_id = 0
+        if self.db:
+            try:
+                task_id = self.db.start_dsh_task(
+                    getattr(robot, "user_id", ""), getattr(robot, "group_id", None),
+                    session_key,
+                )
+            except Exception:
+                logger.debug("dsh task row insert failed", exc_info=True)
+
+        meta: dict[str, Any] = {}
+        try:
+            result = self.client.run_task(task, session_key=session_key, meta=meta)
+        except Exception as exc:
+            meta.setdefault("status", "error")
+            meta.setdefault("error", f"{type(exc).__name__}: {exc}")
+            result = "执行超级大脑任务失败。"
 
         # 检查 DSH 是否已经在执行过程中通过 /app/dsh_deliver.py 自主完成了交付
         already_delivered = False
@@ -1357,33 +1379,71 @@ class DshAgentTool:
             except Exception:
                 pass
 
+        delivery_error = ""
         if not already_delivered:
-            # 兜底链路：DSH 未调用 deliver 命令时，解析其文本输出与文件标记并自动发出
-            found_files = re.findall(r"\[FILE:\s*([^\]]+)\]", result)
-            clean_result = re.sub(r"\[FILE:\s*[^\]]+\]", "", result).strip()
-            # QQ 气泡不渲染 Markdown，这里必须压成纯文本，否则会露出 ** 和 [] 之类的符号
-            from dsh_deliver import clean_markdown
+            try:
+                # 兜底链路：DSH 未调用 deliver 命令时，解析其文本输出与文件标记并自动发出
+                found_files = re.findall(r"\[FILE:\s*([^\]]+)\]", result)
+                clean_result = re.sub(r"\[FILE:\s*[^\]]+\]", "", result).strip()
+                # QQ 气泡不渲染 Markdown，这里必须压成纯文本，否则会露出 ** 和 [] 之类的符号
+                from dsh_deliver import clean_markdown
 
-            clean_result = clean_markdown(clean_result)
+                clean_result = clean_markdown(clean_result)
 
-            robot.reply_chunked(clean_result or "搞定啦，结果如上～")
+                robot.reply_chunked(clean_result or "搞定啦，结果如上～")
 
-            last_file = None
-            for fpath in found_files:
-                fpath = fpath.strip().strip("\"'")
-                if os.path.isfile(fpath):
-                    logger.info("DshAgent 兜底发送文件: %s 到 %s", fpath, session_key)
-                    robot.send_file(fpath)
-                    last_file = fpath
+                last_file = None
+                for fpath in found_files:
+                    fpath = fpath.strip().strip("\"'")
+                    if os.path.isfile(fpath):
+                        logger.info("DshAgent 兜底发送文件: %s 到 %s", fpath, session_key)
+                        robot.send_file(fpath)
+                        last_file = fpath
 
-            if last_file and self.db:
-                try:
-                    self.db.set_state(f"last_artifact:{session_key}", last_file)
-                    uid = getattr(robot, "user_id", "")
-                    if uid:
-                        self.db.set_state(f"last_artifact:user:{uid}", last_file)
-                except Exception:
-                    pass
+                if last_file and self.db:
+                    try:
+                        self.db.set_state(f"last_artifact:{session_key}", last_file)
+                        uid = getattr(robot, "user_id", "")
+                        if uid:
+                            self.db.set_state(f"last_artifact:user:{uid}", last_file)
+                    except Exception:
+                        pass
+            except Exception as exc:
+                delivery_error = f"{type(exc).__name__}: {exc}"
+                logger.exception("DshAgent 兜底发送失败")
+
+        status = str(meta.get("status") or "error")
+        if status == "unavailable":
+            status = "error"
+        if delivery_error:
+            # 结果没送到用户手里 = 这条任务没完成到「可发送」，按 error 记。
+            meta["error"] = f"delivery_failed: {delivery_error}"
+            status = "error"
+        if not task_id:
+            logger.warning(
+                "dsh task row insert returned id=0；本次任务的指标不会落库（session=%s）",
+                session_key,
+            )
+        if self.db and task_id:
+            try:
+                self.db.finish_dsh_task(
+                    task_id,
+                    status=status,
+                    duration_ms=int((time.monotonic() - t0) * 1000),
+                    session_recovered=int(meta.get("session_recovered", -1)),
+                    queue_wait_ms=0,
+                    error=str(meta.get("error") or ""),
+                    arguments=task,
+                    # AiServer 没有 handled_summary 属性（其他工具都是先赋值再用）；
+                    # 这里直接访问会抛 AttributeError，导致 finish 永不落库。
+                    result=str(getattr(ai, "handled_summary", "") or result or "")[:500],
+                    reasoning=getattr(ai, "reasoning_content", "") or "",
+                )
+            except Exception:
+                logger.warning(
+                    "dsh task row update failed (id=%s, status=%s)", task_id, status,
+                    exc_info=True,
+                )
 
         ai.handled_summary = f"[超级大脑] 任务完成：{task[:50]}"
         ai.user_text = f"超级大脑执行：{task}\n结果：{result[:300]}"

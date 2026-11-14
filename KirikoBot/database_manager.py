@@ -336,6 +336,13 @@ class DatabaseManager:
                     ("arguments", "TEXT DEFAULT ''"),
                     ("result", "TEXT DEFAULT ''"),
                     ("reasoning", "TEXT DEFAULT ''"),
+                    # 阶段 7：DSH 任务的可观测字段（只加列）
+                    ("duration_ms", "INTEGER DEFAULT 0"),
+                    ("status", "TEXT DEFAULT ''"),
+                    ("session_key", "TEXT DEFAULT ''"),
+                    ("session_recovered", "INTEGER DEFAULT -1"),
+                    ("queue_wait_ms", "INTEGER DEFAULT 0"),
+                    ("error", "TEXT DEFAULT ''"),
                 ]:
                     try:
                         connect.execute(f"ALTER TABLE tool_usage ADD COLUMN {col} {col_type}")
@@ -367,6 +374,7 @@ class DatabaseManager:
                         id                INTEGER PRIMARY KEY AUTOINCREMENT,
                         user_id           TEXT NOT NULL,
                         group_id          TEXT NOT NULL,
+                        scope             TEXT DEFAULT 'group',
                         user_name         TEXT NOT NULL,
                         affection_score   REAL DEFAULT 50.0,
                         interaction_count INTEGER DEFAULT 0,
@@ -387,6 +395,7 @@ class DatabaseManager:
                         id         INTEGER PRIMARY KEY AUTOINCREMENT,
                         user_id    TEXT NOT NULL,
                         group_id   TEXT NOT NULL,
+                        scope      TEXT DEFAULT 'group',
                         date       TEXT NOT NULL,
                         delta      REAL DEFAULT 0,
                         event      TEXT DEFAULT 'misc',
@@ -398,6 +407,10 @@ class DatabaseManager:
                     "ALTER TABLE user_affection ADD COLUMN streak_days INTEGER DEFAULT 0",
                     "ALTER TABLE user_affection ADD COLUMN last_seen_date TEXT DEFAULT ''",
                     "ALTER TABLE user_affection_log ADD COLUMN event TEXT DEFAULT 'misc'",
+                    # 阶段 6：群/私聊分量。旧行默认 group，私聊分量用 group_id=''，
+                    # 重复执行安全；不 backfill、不建汇总表。
+                    "ALTER TABLE user_affection ADD COLUMN scope TEXT DEFAULT 'group'",
+                    "ALTER TABLE user_affection_log ADD COLUMN scope TEXT DEFAULT 'group'",
                 ):
                     try:
                         connect.execute(stmt)
@@ -562,7 +575,7 @@ class DatabaseManager:
         self.deposit("tarot_history", "(user_id, card_name)", "(?, ?)", (user_id, card_name))
 
     # 上下文取数上限（原始行）。通用 takeout() 写死了 LIMIT 12，而 tool 行也占名额，
-    # 实际只能拿到 4 轮。这里专用一条 SQL：只取 user/assistant，取 40 行，足够装满 16 条消息。
+    # 实际只能拿到 4 轮。这里专用一条 SQL：只取 user/assistant，取 40 行，足够装满 24 条消息。
     CHAT_HISTORY_RAW_LIMIT = 40
 
     def takeout_chat_history(self, user_id: str, group_id: str | None,
@@ -1933,6 +1946,53 @@ class DatabaseManager:
             (tool_name, user_id, group_id, arguments[:500], result[:500],
              reasoning[:2000]),
         )
+
+    def start_dsh_task(self, user_id: str, group_id: str | None,
+                       session_key: str = "") -> int:
+        """插入一条 running 行，返回 id；结束时用 finish_dsh_task 更新。"""
+        with self.get_connect() as connect:
+            cur = connect.execute(
+                "INSERT INTO tool_usage (tool_name, user_id, group_id, status, "
+                "session_key, timestamp) VALUES ('dsh_agent', ?, ?, 'running', ?, "
+                "datetime('now','localtime'))",
+                (user_id, group_id, session_key or ""),
+            )
+            return int(cur.lastrowid or 0)
+
+    def finish_dsh_task(self, task_id: int, *, status: str, duration_ms: int,
+                        session_recovered: int = -1, queue_wait_ms: int = 0,
+                        error: str = "", arguments: str = "", result: str = "",
+                        reasoning: str = "") -> None:
+        if not task_id:
+            return
+        with self.get_connect() as connect:
+            connect.execute(
+                "UPDATE tool_usage SET status=?, duration_ms=?, session_recovered=?, "
+                "queue_wait_ms=?, error=?, arguments=?, result=?, reasoning=? WHERE id=?",
+                (status, max(0, int(duration_ms)),
+                 max(-1, min(1, int(session_recovered))),
+                 max(0, int(queue_wait_ms)), (error or "")[:300],
+                 (arguments or "")[:500], (result or "")[:500],
+                 (reasoning or "")[:2000], int(task_id)),
+            )
+
+    def mark_stale_dsh_tasks_interrupted(self, max_age_seconds: int | None = None) -> int:
+        """把遗留 running 行改 interrupted。
+
+        `max_age_seconds=None`：启动时调用，全部遗留行都算（重启让所有在跑的都没了）；
+        传值：周期性 sweep 用，只清理运行时间超过阈值的行。
+        """
+        sql = (
+            "UPDATE tool_usage SET status='interrupted', error='stale running' "
+            "WHERE tool_name='dsh_agent' AND status='running'"
+        )
+        params: tuple[Any, ...] = ()
+        if max_age_seconds is not None:
+            sql += " AND timestamp < datetime('now','localtime', ?)"
+            params = (f"-{max(0, int(max_age_seconds))} seconds",)
+        with self.get_connect() as connect:
+            cur = connect.execute(sql, params)
+            return int(cur.rowcount or 0)
 
     def get_recent_tool_chain(self, group_id: str | None, user_id: str,
                               limit: int = 5) -> list[dict[str, Any]]:
