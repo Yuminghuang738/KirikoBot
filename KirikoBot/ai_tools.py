@@ -7,8 +7,9 @@ import random
 import re
 import threading
 import time
+import ipaddress
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from config import Config
 from dsh_client import DshClient
@@ -17,6 +18,12 @@ logger = logging.getLogger(__name__)
 
 # One long message must not crowd out the rest of the transcript.
 _CONTEXT_LINE_LIMIT = 100
+
+# 内网/容器名：这些 base 不该出现在发给群友的直链里。
+_INTERNAL_HOSTS = frozenset({
+    "kirikobot", "my-robot", "llbot", "pmhq", "host.docker.internal",
+    "localhost", "localhost.localdomain",
+})
 
 
 # ── Helper ──────────────────────────────────────────────
@@ -774,14 +781,16 @@ class MusicTool:
                 logger.warning("音频发送失败（%s），尝试下一种引用方式", target)
 
         # ── 4. 兜底：卡片或音频任一没发出去，就把能点的链接写出来 ──
-        if not card_ok or (audio_path and not audio_ok):
+        audio_failed = bool(audio_path) and not audio_ok
+        if not card_ok or audio_failed:
             fallback = [f"「{name} - {artist}」"]
+            link = self._public_download_url(audio_name, robot) if audio_failed else None
             if not card_ok:
                 fallback.append(f"卡片没发出去，点这里听：{song_page}")
-            if audio_path and not audio_ok:
-                fallback.append(
-                    f"音频直链：{self._public_download_url(audio_name, robot)}"
-                )
+            elif not link:
+                fallback.append(f"音频没发出去，点这里听：{song_page}")
+            if link:
+                fallback.append(f"音频直链：{link}")
             robot.send(MessageBuilder().text("\n".join(fallback)).build())
 
         _set_tool_meta(ai, tool_calls)
@@ -796,19 +805,42 @@ class MusicTool:
         ]
 
     @staticmethod
-    def _public_download_url(audio_name: str, robot: Any = None) -> str:
-        """给用户点的直链。
+    def _public_download_url(audio_name: str, robot: Any = None) -> str | None:
+        """给用户点的直链：只有 base 是公网地址时才返回，否则 None。
 
-        线上 PUBLIC_BASE_URL 为空，此时必须用 webhook 请求上下文缓存的
-        `robot.public_base_url`（用户实际访问面板的 Host），否则兜底链接会
-        指向 localhost，用户点不开。取值顺序与 robot_server.send_file 一致。
+        线上 PUBLIC_BASE_URL 为空，而 `robot.public_base_url` 来自 webhook 的
+        Host —— LLBot 上报用的是内网地址 `http://kirikobot:5000`，用户点不开。
+        所以容器名 / localhost / 私网 IP 一律不输出音频链接，兜底只留能点的
+        网易云歌曲页。
         """
-        base = (
-            Config.PUBLIC_BASE_URL
-            or getattr(robot, "public_base_url", "")
-            or "http://localhost:5000"
-        ).rstrip("/")
-        return f"{base}/download/{quote(audio_name)}"
+        for candidate in (
+            Config.PUBLIC_BASE_URL,
+            getattr(robot, "public_base_url", ""),
+        ):
+            base = (candidate or "").strip().rstrip("/")
+            if base and MusicTool._is_public_base(base):
+                return f"{base}/download/{quote(audio_name)}"
+        return None
+
+    @staticmethod
+    def _is_public_base(base: str) -> bool:
+        """http(s) 且 host 不是容器名 / localhost / 私网或回环 IP。"""
+        parsed = urlparse(base)
+        if parsed.scheme not in ("http", "https"):
+            return False
+        host = (parsed.hostname or "").strip().lower()
+        if not host or host in _INTERNAL_HOSTS:
+            return False
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            return True  # 域名，视为公网
+        return not (
+            address.is_private
+            or address.is_loopback
+            or address.is_link_local
+            or address.is_reserved
+        )
 
 
 # ══════════════════════════════════════════════════════════

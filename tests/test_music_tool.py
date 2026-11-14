@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 import logging
 
+import pytest
+
 from ai_tools import MusicTool
 from config import Config
 
@@ -167,3 +169,51 @@ def test_info_send_failure_is_warned(caplog):
         _run(robot, service)
 
     assert any("歌曲信息发送失败" in r.message for r in caplog.records)
+
+
+def test_audio_fallback_skips_internal_host(monkeypatch):
+    """线上 PUBLIC_BASE_URL 空、webhook Host 是 http://kirikobot:5000：
+    这种链接用户点不开，宁可不输出音频直链，只留能点的 163 歌曲页。"""
+    monkeypatch.setattr(Config, "PUBLIC_BASE_URL", "")
+    robot = FakeRobot(
+        send_results=[True, True, False, False, True],
+        public_base_url="http://kirikobot:5000",
+    )
+    _run(robot, FakeMusicService(SONG, "/app/shared_files/music_123456_abcd1234.mp3"))
+
+    texts = robot.texts()
+    assert texts, "兜底文案应该发出"
+    assert all("kirikobot" not in t and "localhost" not in t for t in texts)
+    assert any("https://music.163.com/song?id=123456" in t for t in texts), "至少留能点的 163 页"
+
+
+class TestPublicDownloadUrl:
+    @staticmethod
+    def _url(monkeypatch, *, config_base, robot_base=""):
+        monkeypatch.setattr(Config, "PUBLIC_BASE_URL", config_base)
+
+        class R:
+            public_base_url = robot_base
+
+        return MusicTool._public_download_url("music_1_abcd.mp3", R())
+
+    def test_explicit_public_ip_is_used(self, monkeypatch):
+        url = self._url(monkeypatch, config_base="http://47.108.183.60:5000")
+        assert url == "http://47.108.183.60:5000/download/music_1_abcd.mp3"
+
+    def test_explicit_domain_is_used(self, monkeypatch):
+        url = self._url(monkeypatch, config_base="https://kb.example.com/")
+        assert url == "https://kb.example.com/download/music_1_abcd.mp3"
+
+    @pytest.mark.parametrize("base", [
+        "http://kirikobot:5000",
+        "http://my-robot:5000",
+        "http://llbot:3001",
+        "http://localhost:5000",
+        "http://127.0.0.1:5000",
+        "http://172.17.0.2:5000",
+        "http://192.168.1.10:5000",
+        "",
+    ])
+    def test_internal_bases_yield_none(self, monkeypatch, base):
+        assert self._url(monkeypatch, config_base="", robot_base=base) is None
