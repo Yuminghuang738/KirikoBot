@@ -20,7 +20,6 @@ const PAGE_META={
   chat:['对话记录','机器人与群友的对话历史'],
   messages:['群消息','群里采集到的原始消息'],
   profiles:['用户画像','AI 分析出的群友特征'],
-  affection:['好感度','互动评分与排行榜'],
   reminders:['提醒','定时提醒管理'],
   tarot:['塔罗','塔罗抽牌记录'],
   stickers:['表情包','表情包库与整理'],
@@ -32,7 +31,7 @@ const PAGE_META={
   ai:['AI 用量','调用量、延迟、token 与成本'],
   push:['群推送','按群订阅定时推送'],
   settings:['群设置','按群 / 用户精细开关功能'],
-  dsh:['超级大脑 (DSH)','DeepSeek Harness 智能体与重度任务控制台'],
+  dsh:['超级大脑','DeepSeek Harness 智能体与重度任务控制台'],
   llbot:['LLBot 连接','登录状态、运行指标与配置'],
   webqq:['WebQQ','LLBot 完整 WebUI（内嵌）'],
 };
@@ -87,7 +86,6 @@ async function loadPage(name){
     case 'ai': mc.innerHTML=aiUsageHTML(); bindAiUsage(); break;
     case 'settings': mc.innerHTML=await settingsHTML(); bindSettings(); break;
     case 'dsh': mc.innerHTML=await dshHTML(); bindDSH(); break;
-    case 'affection': mc.innerHTML=await affectionHTML(); bindAffection(); break;
     case 'messages': mc.innerHTML=await messagesHTML(); break;
     case 'llbot': mc.innerHTML=await llbotHTML(); bindLLBot(); break;
     case 'webqq': mc.innerHTML=webqqHTML(); break;
@@ -504,10 +502,19 @@ async function chatHTML(){
 
 // ── Profiles ──
 async function profilesHTML(){
-  let d={profiles:[]};try{d=await fetch('/api/profiles').then(r=>r.json())}catch(_){}
+  let d={profiles:[]}, aff={affection_records:[]}, groups={groups:[]};
+  try{
+    [d, aff, groups] = await Promise.all([
+      fetch('/api/profiles').then(r=>r.json()),
+      fetch('/api/affection').then(r=>r.json()).catch(()=>({affection_records:[]})),
+      fetch('/api/groups').then(r=>r.json()).catch(()=>({groups:[]})),
+    ]);
+  }catch(_){}
+  const affMap={}; (aff.affection_records||[]).forEach(a=>{affMap[String(a.user_id)]=a});
+  const groupName={}; (groups.groups||[]).forEach(g=>{groupName[String(g.group_id)]=g.group_name||g.group_id});
   let h=`<div class="page-head">
     <div><div class="ph-title">用户 <span class="em">画像</span></div>
-      <div class="ph-sub">AI 根据聊天记录分析出的群友特征</div></div>
+      <div class="ph-sub">AI 分析出的群友特征与好感度（展开看群 / 私聊分量）</div></div>
     <div class="ph-right"><span class="tag u">${d.profiles.length} 位</span>
       <button class="btn primary" onclick="loadPage('profiles')">🔄 刷新</button></div>
   </div>`;
@@ -542,6 +549,30 @@ async function profilesHTML(){
     body+=row('备注', s.notes);
     if(!body)body=`<div class="row"><span class="k">画像</span><span>还没分析出内容</span></div>`;
 
+    const a=affMap[String(x.user_id)];
+    const comps=(a&&a.components)||[];
+    let affBlock='';
+    if(a){
+      affBlock=`<div class="pc-aff">
+        <div class="pc-aff-head">
+          <span class="pc-aff-score">💕 ${Number(a.affection_score)||0} 分</span>
+          <span class="tag t">${esc(a.relationship||'')}</span>
+          <span class="pc-aff-meta">互动 ${a.interaction_count||0} 次</span>
+        </div>
+        <details><summary>分量（${comps.length}）</summary>
+          <div class="pc-aff-list">${comps.map(c=>{
+            const gid=String(c.group_id||'');
+            const label=gid?(groupName[gid]||('群 '+gid)):'私聊';
+            return `<div class="pc-aff-row"><span>${esc(label)}</span><b>${Number(c.affection_score)||0}</b><span class="pc-aff-n">${c.interaction_count||0} 次</span></div>`;
+          }).join('')||'<div class="pc-aff-row">暂无分量</div>'}</div>
+        </details>
+      </div>`;
+    }else{
+      affBlock=`<div class="pc-aff"><div class="pc-aff-head">
+        <span class="pc-aff-score">💕 50 分</span><span class="tag">中立</span>
+        <span class="pc-aff-meta">暂无好感度记录</span></div></div>`;
+    }
+
     h+=`<div class="profile-card reveal" style="--i:${Math.min(i,12)}">
       <div class="pc-top">
         <div class="pc-ava">${esc((x.user_name||'?').slice(0,1))}</div>
@@ -550,6 +581,7 @@ async function profilesHTML(){
           <div class="meta">${x.msg_count||0} 条消息 · ${esc(x.updated||'')}</div>
         </div>
       </div>
+      ${affBlock}
       <div class="pc-body">${body}</div>
     </div>`;
   });
@@ -918,140 +950,6 @@ async function messagesHTML(){
     </div>`);
   }
   return h+`</div></div></div>`;
-}
-
-// ── Affection page ──────────────────────────────────
-
-async function affectionHTML(){
-  // Fetch leaderboard data
-  let board=[], groups=[];
-  try{
-    board=(await fetch('/api/affection/leaderboard').then(r=>r.json())).leaderboard||[];
-    groups=(await fetch('/api/groups').then(r=>r.json())).groups||[];
-  }catch(_){}
-  const top=board[0];
-  const groupOpts=groups.map(g=>`<option value="${esc(g.group_id)}">${esc(g.group_name||g.group_id)}</option>`).join('');
-
-  let h=`<div class="page-head">
-    <div><div class="ph-title">好感度 <span class="em">排行</span></div>
-      <div class="ph-sub">基于互动频率与正面反馈自动计算</div></div>
-    <div class="ph-right"><button class="btn primary" onclick="loadPage('affection')">🔄 刷新</button></div>
-  </div>
-  <div class="bento">
-    <div class="tile c3 b-4 reveal" style="--i:0"><div class="tico">💕</div><div class="tbody"><div class="num">${board.length}</div><div class="lbl">记录总数</div></div></div>
-    <div class="tile c4 b-4 reveal" style="--i:1"><div class="tico">🥇</div><div class="tbody"><div class="num" style="font-size:1.1rem">${esc(top?(top.user_name||'—'):'—')}</div><div class="lbl">当前榜首</div></div></div>
-    <div class="tile c5 b-4 reveal" style="--i:2"><div class="tico">⭐</div><div class="tbody"><div class="num">${top?top.affection_score:0}</div><div class="lbl">最高好感度</div></div></div>
-  </div>
-
-  <div class="panel reveal" style="--i:3;margin-top:16px">
-    <div class="panel-header"><span class="hicon">🏆</span>排行榜
-      <span class="ph-right">
-        <select id="aff-group-filter" onchange="loadAffectionBoard()"><option value="">全部群</option>${groupOpts}</select>
-        <span class="tag u">共 <b id="aff-total">0</b> 条</span>
-      </span>
-    </div>
-    <table id="aff-board">
-      <thead><tr><th>排名</th><th>用户</th><th>好感度</th><th>关系</th><th>互动</th><th>评价</th><th>最后互动</th></tr></thead>
-      <tbody><tr><td colspan="7" style="text-align:center;padding:26px;color:var(--muted)">加载中…</td></tr></tbody>
-    </table>
-  </div>
-
-  <div class="panel reveal" style="--i:4">
-    <div class="panel-header"><span class="hicon">🔧</span>手动调整好感度</div>
-    <div class="panel-body">
-      <div class="toolbar" style="margin:0">
-        <select id="aff-adj-group"><option value="">选择群</option>${groupOpts}</select>
-        <input id="aff-adj-user" placeholder="用户 QQ号" style="width:140px">
-        <input id="aff-adj-delta" type="number" placeholder="调整值 (±)" style="width:120px" step="0.5">
-        <input id="aff-adj-note" placeholder="备注（可选）" style="width:170px">
-        <button class="green" onclick="adjustAffection()">✅ 应用</button>
-      </div>
-      <div id="aff-adj-msg" style="font-size:.74rem;margin-top:8px"></div>
-    </div>
-  </div>`;
-
-  return h;
-}
-
-async function loadAffectionBoard(){
-  const sel=$('aff-group-filter');
-  const gid=sel?sel.value:'';
-  try{
-    const url=gid?`/api/affection/leaderboard?group_id=${encodeURIComponent(gid)}`:'/api/affection/leaderboard';
-    const data=await fetch(url).then(r=>r.json());
-    const board=data.leaderboard||[];
-    if($('aff-total'))$('aff-total').textContent=board.length;
-    renderAffectionBoard(board);
-  }catch(_){
-    const tbody=document.querySelector('#aff-board tbody');
-    if(tbody)tbody.innerHTML='<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--red)">加载失败</td></tr>';
-  }
-}
-
-function renderAffectionBoard(board){
-  const tbody=document.querySelector('#aff-board tbody');
-  if(!tbody)return;
-  if(!board.length){
-    tbody.innerHTML='<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--muted)">还没有好感度数据哦～多和 Kiriko 聊天互动吧！(◕‿◕✿)</td></tr>';
-    return;
-  }
-  let rows='';
-  board.forEach((x,i)=>{
-    const medal={0:'🥇',1:'🥈',2:'🥉'}[i]||`<span style="color:var(--muted);font-weight:700">${i+1}</span>`;
-    const score=Number(x.affection_score)||0;
-    const barW=Math.max(3,Math.min(100,Math.round(score)));
-    const barColor=score>=80?'var(--accent)':score>=60?'var(--purple)':score>=40?'var(--blue)':score>=20?'var(--yellow)':'var(--muted)';
-    rows+=`<tr>
-      <td style="font-weight:700;font-size:1rem">${medal}</td>
-      <td>
-        <div style="display:flex;align-items:center;gap:9px">
-          <span class="iava" style="width:30px;height:30px;border-radius:9px;font-size:.82rem">${esc((x.user_name||'?').slice(0,1))}</span>
-          <span>${x.emoji||''} ${esc(x.user_name||'')}</span>
-        </div>
-      </td>
-      <td style="min-width:170px">
-        <div style="display:flex;align-items:center;gap:9px">
-          <span style="font-weight:750;min-width:46px;font-variant-numeric:tabular-nums">${score}分</span>
-          <div style="flex:1;height:10px;background:var(--card-2);border-radius:6px;overflow:hidden">
-            <div class="aff-fill" style="height:100%;width:${barW}%;background:${barColor};border-radius:6px"></div>
-          </div>
-        </div>
-      </td>
-      <td><span class="tag t">${esc(x.relationship||'?')}</span></td>
-      <td style="font-variant-numeric:tabular-nums">${x.interaction_count||0} 次</td>
-      <td style="font-size:.76rem"><span style="color:var(--green)">👍 ${x.positive_count||0}</span> <span style="color:var(--muted)">/</span> <span style="color:var(--red)">👎 ${x.negative_count||0}</span></td>
-      <td style="font-size:.71rem;color:var(--muted)">${esc(x.last_interaction||'从未')}</td>
-    </tr>`;
-  });
-  tbody.innerHTML=rows;
-}
-
-async function adjustAffection(){
-  const gid=($('aff-adj-group')||{}).value||'';
-  const uid=($('aff-adj-user')||{}).value||'';
-  const delta=parseFloat(($('aff-adj-delta')||{}).value||'0');
-  const note=($('aff-adj-note')||{}).value||'';
-  const msg=$('aff-adj-msg');
-  if(!gid||!uid){if(msg)msg.innerHTML='<span style="color:var(--red)">请填写群和用户QQ号</span>';return;}
-  if(!delta){if(msg)msg.innerHTML='<span style="color:var(--red)">请输入调整值</span>';return;}
-  try{
-    const r=await fetch('/api/affection/adjust',{
-      method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({user_id:uid,group_id:gid,delta,note}),
-    }).then(r=>r.json());
-    if(r.ok){
-      if(msg)msg.innerHTML=`<span style="color:var(--green)">✅ 已调整：${esc(r.adjusted.affection_score)}分 ${esc(r.adjusted.emoji)}${esc(r.adjusted.relationship)}</span>`;
-      loadAffectionBoard();
-    }else{
-      if(msg)msg.innerHTML=`<span style="color:var(--red)">❌ ${esc(r.error)}</span>`;
-    }
-  }catch(e){
-    if(msg)msg.innerHTML=`<span style="color:var(--red)">请求失败: ${e.message}</span>`;
-  }
-}
-
-function bindAffection(){
-  loadAffectionBoard();
 }
 
 // ── Feature settings (per-group / per-user toggles) ──
@@ -1872,7 +1770,14 @@ async function loadThreads(gid, date, box){
 
 // ── Init ──
 startLogSSE();
-loadPage('overview');
+// 旧书签 #affection 已并入画像页，重定向过去，不留白屏。
+if(location.hash==='#affection'){
+  history.replaceState(null,'','#profiles');
+  $$('#sidenav a').forEach(x=>x.classList.toggle('active',x.dataset.page==='profiles'));
+  loadPage('profiles');
+}else{
+  loadPage('overview');
+}
 setInterval(refreshLLBotPill,30000);
 
 // ── DSH Official WebUI (官方原生控制台完整内嵌) ──
@@ -1893,7 +1798,7 @@ async function dshHTML() {
   }
 
   const head = '<div class="page-head"><div>' +
-    '<div class="ph-title">🧠 <span class="em">超级大脑 (DSH)</span></div>' +
+    '<div class="ph-title">🧠 <span class="em">超级大脑</span></div>' +
     '<div class="ph-sub">同源状态页：运行时、会话、插件与最近任务（不再依赖 3085 端口）</div>' +
     '</div><div class="ph-right">' +
     '<button class="btn" onclick="loadPage(\'dsh\')">🔄 刷新</button>' +
