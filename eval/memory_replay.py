@@ -127,11 +127,25 @@ def connect_ro(db_path: str) -> sqlite3.Connection:
     return sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
 
 
+def _case_scope(conn: sqlite3.Connection, case: dict[str, Any]) -> tuple[str, str | None]:
+    """公开数据集不存 QQ/群号：缺 user_id 时按 target_history_id 从 DB 反查。"""
+    if case.get("user_id"):
+        gid = case.get("group_id")
+        return str(case["user_id"]), None if gid is None else str(gid)
+    row = conn.execute(
+        "SELECT user_id, group_id FROM history WHERE id = ?",
+        (int(case["target_history_id"]),),
+    ).fetchone()
+    if not row:
+        raise ValueError(f"target_history_id 不存在: {case.get('target_history_id')}")
+    return str(row[0]), None if row[1] is None else str(row[1])
+
+
 def fetch_context_rows(conn: sqlite3.Connection, case: dict[str, Any]) -> list[dict[str, Any]]:
     """目标回合之前、该 user+scope 的所有消息（不含 target 本身）。"""
-    scope = "group_id IS NULL" if case.get("group_id") is None else "group_id = ?"
-    params: tuple[Any, ...] = (case["user_id"],) if case.get("group_id") is None \
-        else (case["user_id"], str(case["group_id"]))
+    uid, gid = _case_scope(conn, case)
+    scope = "group_id IS NULL" if gid is None else "group_id = ?"
+    params: tuple[Any, ...] = (uid,) if gid is None else (uid, gid)
     rows = conn.execute(
         "SELECT id, role, content, tool_calls FROM history "
         f"WHERE user_id = ? AND {scope} AND id < ? AND role IN ('user','assistant') "

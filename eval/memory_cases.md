@@ -8,6 +8,7 @@
 |---|---|
 | 版本 | v4（`dataset_version=4`） |
 | 来源 | 线上 `robot.db` 只读副本（2026-11-13 23:15 拉取，history 16,788 行） |
+| 隐私 | JSON 不含 QQ 号/群号；`target_history_id` 唯一定位，harness 反查 scope |
 | 规模 | 120 主 probe（60 群 / 60 私聊）+ 20 needle（群 / 私聊各 10） |
 | 分层 | 主样本 A/B/C 各 40：A 24–32、B 33–48、C 49–72；needle 55–72 |
 | 制作 | Hina 逐条阅读锚点原文后手写 `probe_question` 与关键词，未从 `anchor_semantic` 自动生成 |
@@ -24,7 +25,7 @@
 
 ### 字段
 
-v3 索引字段（`case_id` / `user_id` / `group_id` / `target_history_id` / `anchor_history_id` / `anchor_semantic` / `anchor_fact` / `target_topic` / `category` / `kind` / `anchor_fact_short`）保留，新增：
+索引字段保留 `case_id` / `target_history_id` / `anchor_history_id` / `anchor_semantic` / `anchor_fact` / `target_topic` / `category` / `kind` / `anchor_fact_short`；**公开 JSON 不存 `user_id` / `group_id`**，harness 按 `target_history_id` 从只读 DB 反查 scope。新增：
 
 | 字段 | 说明 |
 |---|---|

@@ -5,12 +5,10 @@
   "source": "线上 robot.db 只读副本",
   "curator": "Hina",
   "seed": 41,
-  "notes": "v4 probe 数据集：120 主样本（60 群/60 私聊，A/B/C 各 40，A=24–32 条、B=33–48 条、C=49–72 条）+20 needle（群/私聊各 10，锚点距离 55–72 条）。C 与 needle 上限压到 72：layered 只把 24 条原文之外的最近 48 条压成摘要，超过 72 条任何变体都看不到。每条 probe_question 与关键词均为人工阅读锚点原文后手写，未从 anchor_semantic 自动生成。",
+  "notes": "v4 probe 数据集：120 主样本（60 群/60 私聊，A/B/C 各 40，A=24–32 条、B=33–48 条、C=49–72 条）+20 needle（群/私聊各 10，锚点距离 55–72 条）。公开 JSON 不存 user_id/group_id；harness 用 target_history_id 从 DB 反查 scope。C 与 needle 上限 72：layered 只把 24 条原文之外的最近 48 条压成摘要，超过 72 条任何变体都看不到。每条 probe_question 与关键词均为人工阅读锚点原文后手写，未从 anchor_semantic 自动生成。",
   "cases": [
     {
       "case_id": "G001",
-      "user_id": "1006625397",
-      "group_id": "1140457037",
       "target_history_id": 1288,
       "anchor_history_id": 1186,
       "anchor_semantic": "用户点过 Sum41 的 The Hell Song",
@@ -31,8 +29,6 @@
     },
     {
       "case_id": "G002",
-      "user_id": "1006625397",
-      "group_id": "1140457037",
       "target_history_id": 1256,
       "anchor_history_id": 1026,
       "anchor_semantic": "用户点 U2 时明确排除 With Or Without You",
@@ -53,8 +49,6 @@
     },
     {
       "case_id": "G003",
-      "user_id": "1006625397",
-      "group_id": "1140457037",
       "target_history_id": 1348,
       "anchor_history_id": 1205,
       "anchor_semantic": "恋与深空第六位男主叫敖尹，7 月 9 日上线",
@@ -75,8 +69,6 @@
     },
     {
       "case_id": "G004",
-      "user_id": "3234979817",
-      "group_id": "734954188",
       "target_history_id": 2853,
       "anchor_history_id": 2754,
       "anchor_semantic": "雅马哈声学部门给丰田雷克萨斯 LFA 的 4.8L V10 调过声浪",
@@ -97,8 +89,6 @@
     },
     {
       "case_id": "G005",
-      "user_id": "1099859280",
-      "group_id": "734954188",
       "target_history_id": 15637,
       "anchor_history_id": 11331,
       "anchor_semantic": "用户说自己像一张空白画布，渴望被染上色彩",
@@ -119,8 +109,6 @@
     },
     {
       "case_id": "G006",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 6495,
       "anchor_history_id": 6446,
       "anchor_semantic": "波奇有两把琴：1968 黑卡和雅马哈 PAC611VFM 纯黑定制版",
@@ -142,8 +130,6 @@
     },
     {
       "case_id": "G007",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 5125,
       "anchor_history_id": 5056,
       "anchor_semantic": "群友说的常凯申是蒋介石的音译梗",
@@ -164,8 +150,6 @@
     },
     {
       "case_id": "G008",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 7718,
       "anchor_history_id": 7659,
       "anchor_semantic": "ユーミン 长期用黑夜模式网页，担心伤眼",
@@ -186,8 +170,6 @@
     },
     {
       "case_id": "G009",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 6028,
       "anchor_history_id": 5675,
       "anchor_semantic": "tone 旋钮直接开满，音色交给效果器和箱头",
@@ -208,8 +190,6 @@
     },
     {
       "case_id": "G010",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 8190,
       "anchor_history_id": 8147,
       "anchor_semantic": "蜜雪冰城甜筒的皮上加了芝麻",
@@ -230,8 +210,6 @@
     },
     {
       "case_id": "G011",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 13756,
       "anchor_history_id": 13263,
       "anchor_semantic": "用户买 Gibson 也不买芬达，喝汽水也不买芬达",
@@ -252,8 +230,6 @@
     },
     {
       "case_id": "G012",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 6841,
       "anchor_history_id": 6784,
       "anchor_semantic": "用户爬格子正逆可到 140bpm",
@@ -274,8 +250,6 @@
     },
     {
       "case_id": "G013",
-      "user_id": "2793003941",
-      "group_id": "734954188",
       "target_history_id": 10849,
       "anchor_history_id": 10541,
       "anchor_semantic": "用户捡的是一书包纸壳，废品站只收塑料瓶和易拉罐",
@@ -296,8 +270,6 @@
     },
     {
       "case_id": "G014",
-      "user_id": "3234979817",
-      "group_id": "1140457037",
       "target_history_id": 2155,
       "anchor_history_id": 2113,
       "anchor_semantic": "写的欧亨利式短篇叫《最后一件快递》",
@@ -318,8 +290,6 @@
     },
     {
       "case_id": "G015",
-      "user_id": "3234979817",
-      "group_id": "1140457037",
       "target_history_id": 1990,
       "anchor_history_id": 1947,
       "anchor_semantic": "极乐迪斯科第一个推荐的思维技能是内陆帝国",
@@ -340,8 +310,6 @@
     },
     {
       "case_id": "G016",
-      "user_id": "3234979817",
-      "group_id": "1140457037",
       "target_history_id": 1063,
       "anchor_history_id": 1032,
       "anchor_semantic": "用户要求点其他歌时不要发上一首歌，并写进学习笔记",
@@ -362,8 +330,6 @@
     },
     {
       "case_id": "G017",
-      "user_id": "3234979817",
-      "group_id": "1140457037",
       "target_history_id": 870,
       "anchor_history_id": 797,
       "anchor_semantic": "用户发了 chmod 777 kiriko_robot 和 kill -9 的玩笑命令",
@@ -384,8 +350,6 @@
     },
     {
       "case_id": "G018",
-      "user_id": "3234979817",
-      "group_id": "1140457037",
       "target_history_id": 2149,
       "anchor_history_id": 2117,
       "anchor_semantic": "闻起来像年轻的雪碧被猜成周杰伦的 Mojito",
@@ -406,8 +370,6 @@
     },
     {
       "case_id": "G019",
-      "user_id": "3234979817",
-      "group_id": "734954188",
       "target_history_id": 16011,
       "anchor_history_id": 14894,
       "anchor_semantic": "C++23 和 C++11 是同一门语言，后者是在前者基础上加料",
@@ -428,8 +390,6 @@
     },
     {
       "case_id": "G020",
-      "user_id": "3234979817",
-      "group_id": "734954188",
       "target_history_id": 14915,
       "anchor_history_id": 12965,
       "anchor_semantic": "商店版 OBS 是 MSIX 沙盒，Fedora 仓库版是 RPM",
@@ -450,8 +410,6 @@
     },
     {
       "case_id": "P001",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 13366,
       "anchor_history_id": 13095,
       "anchor_semantic": "用户说听 kkr 唱《朋友的酒》整个人通透了",
@@ -472,8 +430,6 @@
     },
     {
       "case_id": "P002",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 7732,
       "anchor_history_id": 7621,
       "anchor_semantic": "用户十几年没插过真实的吉他箱头，觉得压抑",
@@ -494,8 +450,6 @@
     },
     {
       "case_id": "P003",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 10113,
       "anchor_history_id": 10088,
       "anchor_semantic": "喜欢曲子不简单，要先拉机能再练速度",
@@ -516,8 +470,6 @@
     },
     {
       "case_id": "P004",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 16847,
       "anchor_history_id": 16556,
       "anchor_semantic": "用户逛小吃街没钱，最想喝冷饮或吃冰的",
@@ -538,8 +490,6 @@
     },
     {
       "case_id": "P005",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 8663,
       "anchor_history_id": 8630,
       "anchor_semantic": "水课时建议戴耳机听歌发呆或偷偷看番",
@@ -560,8 +510,6 @@
     },
     {
       "case_id": "P006",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 14785,
       "anchor_history_id": 14698,
       "anchor_semantic": "把很多事变成习惯才是真正的快速",
@@ -582,8 +530,6 @@
     },
     {
       "case_id": "P007",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 9943,
       "anchor_history_id": 9842,
       "anchor_semantic": "用户被闹钟叫醒要上早八，觉得早晨无趣",
@@ -604,8 +550,6 @@
     },
     {
       "case_id": "P008",
-      "user_id": "2951704635",
-      "group_id": null,
       "target_history_id": 11790,
       "anchor_history_id": 11757,
       "anchor_semantic": "用户打游戏时被队长几个人凶",
@@ -626,8 +570,6 @@
     },
     {
       "case_id": "P009",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 14449,
       "anchor_history_id": 14424,
       "anchor_semantic": "1500 目划痕要逐级 3000、5000 往下带，跳 10000 目抛不干净",
@@ -648,8 +590,6 @@
     },
     {
       "case_id": "P010",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 13762,
       "anchor_history_id": 13735,
       "anchor_semantic": "数组名会退化但数组本身仍是独立类型",
@@ -670,8 +610,6 @@
     },
     {
       "case_id": "P011",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 12958,
       "anchor_history_id": 12931,
       "anchor_semantic": "ST7735R 是 Sitronix 出的主控",
@@ -692,8 +630,6 @@
     },
     {
       "case_id": "P012",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 14411,
       "anchor_history_id": 14384,
       "anchor_semantic": "每天先爬格子五分钟、击勾五分钟、揉弦十分钟、推弦十分钟",
@@ -714,8 +650,6 @@
     },
     {
       "case_id": "P013",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 5898,
       "anchor_history_id": 5789,
       "anchor_semantic": "用户有法丽达 F2020 和 Epiphone LP Junior，早上用 F2020",
@@ -736,8 +670,6 @@
     },
     {
       "case_id": "P014",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 12458,
       "anchor_history_id": 12429,
       "anchor_semantic": "L1/L2 每核独享，L3 一般整颗 CPU 共享",
@@ -758,8 +690,6 @@
     },
     {
       "case_id": "P015",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 13210,
       "anchor_history_id": 13175,
       "anchor_semantic": "PS2 的 6 针 mini-DIN 接头没做地线先接，插歪可能烧 Super I/O",
@@ -780,8 +710,6 @@
     },
     {
       "case_id": "P016",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 16801,
       "anchor_history_id": 16774,
       "anchor_semantic": "用户要过孤独摇滚官方设定图的四人合照",
@@ -802,8 +730,6 @@
     },
     {
       "case_id": "P017",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 13104,
       "anchor_history_id": 12961,
       "anchor_semantic": "ST7735R 走 DRM 框架，设备号由 drm_dev_register 统一建",
@@ -824,8 +750,6 @@
     },
     {
       "case_id": "P018",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 10360,
       "anchor_history_id": 10158,
       "anchor_semantic": "继承的典型毛病是脆弱基类问题，父类一改子类全塌",
@@ -846,8 +770,6 @@
     },
     {
       "case_id": "P019",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 11962,
       "anchor_history_id": 11060,
       "anchor_semantic": "高手坐后排也得留半只耳朵，别睡实",
@@ -868,8 +790,6 @@
     },
     {
       "case_id": "P020",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 8324,
       "anchor_history_id": 8293,
       "anchor_semantic": "AICWFDBG 是 AIC 系列 WiFi 驱动的调试日志，不是报错",
@@ -890,8 +810,6 @@
     },
     {
       "case_id": "G021",
-      "user_id": "1099859280",
-      "group_id": "734954188",
       "target_history_id": 9329,
       "anchor_history_id": 5342,
       "anchor_semantic": "调性管的是主音和稳定音，不只是音高集合",
@@ -912,8 +830,6 @@
     },
     {
       "case_id": "G022",
-      "user_id": "1099859280",
-      "group_id": "734954188",
       "target_history_id": 14885,
       "anchor_history_id": 9276,
       "anchor_semantic": "双缺角+小提琴拱面+枫木贴面+飞鸟品记是 PRS 的签名特征",
@@ -934,8 +850,6 @@
     },
     {
       "case_id": "G023",
-      "user_id": "1793240684",
-      "group_id": "734954188",
       "target_history_id": 10071,
       "anchor_history_id": 9738,
       "anchor_semantic": "Hello Happy World：弦卷心主唱、濑田薰吉他、北泽育美贝斯、松原花音打鼓、奥泽美咲 DJ",
@@ -956,8 +870,6 @@
     },
     {
       "case_id": "G024",
-      "user_id": "2025592880",
-      "group_id": "734954188",
       "target_history_id": 5678,
       "anchor_history_id": 4205,
       "anchor_semantic": "用户每次吃 3 个汉堡才觉得饱",
@@ -978,8 +890,6 @@
     },
     {
       "case_id": "G025",
-      "user_id": "2025592880",
-      "group_id": "734954188",
       "target_history_id": 3940,
       "anchor_history_id": 2964,
       "anchor_semantic": "用户没赶上高铁，说六号车厢飞得太快",
@@ -1000,8 +910,6 @@
     },
     {
       "case_id": "G026",
-      "user_id": "2025592880",
-      "group_id": "734954188",
       "target_history_id": 4089,
       "anchor_history_id": 3171,
       "anchor_semantic": "管箱不吵邻居最正经的办法是接衰减器",
@@ -1022,8 +930,6 @@
     },
     {
       "case_id": "G027",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 7338,
       "anchor_history_id": 7074,
       "anchor_semantic": "定制 ESP 最好去日本本土，直接约 Craft House",
@@ -1044,8 +950,6 @@
     },
     {
       "case_id": "G028",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 6509,
       "anchor_history_id": 6450,
       "anchor_semantic": "三个月练《绝对不会忘记》还是《若能化作星座》，选了星座",
@@ -1066,8 +970,6 @@
     },
     {
       "case_id": "G029",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 6837,
       "anchor_history_id": 6766,
       "anchor_semantic": "Kiriko 家里只有一把 ST 和一把 LP",
@@ -1089,8 +991,6 @@
     },
     {
       "case_id": "G030",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 6174,
       "anchor_history_id": 6041,
       "anchor_semantic": "山东潍坊鄌郚镇是有名的吉他小镇，代工琴多",
@@ -1111,8 +1011,6 @@
     },
     {
       "case_id": "G031",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 10592,
       "anchor_history_id": 10521,
       "anchor_semantic": "双线圈是两个单线圈串联、反极性反绕向，噪音抵消",
@@ -1133,8 +1031,6 @@
     },
     {
       "case_id": "G032",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 5554,
       "anchor_history_id": 5340,
       "anchor_semantic": "61 键弹二次元大多够用，钢琴改编版 73 键更舒服",
@@ -1155,8 +1051,6 @@
     },
     {
       "case_id": "G033",
-      "user_id": "3234979817",
-      "group_id": "1140457037",
       "target_history_id": 614,
       "anchor_history_id": 540,
       "anchor_semantic": "Fleetwood Mac 是软摇滚/流行摇滚，不是 punk 也不是 rock and roll",
@@ -1177,8 +1071,6 @@
     },
     {
       "case_id": "G034",
-      "user_id": "3234979817",
-      "group_id": "1140457037",
       "target_history_id": 2330,
       "anchor_history_id": 2221,
       "anchor_semantic": "底线测试第一个问题：世界末日会不会把银行卡密码告诉 Kiriko",
@@ -1199,8 +1091,6 @@
     },
     {
       "case_id": "G035",
-      "user_id": "3234979817",
-      "group_id": "1140457037",
       "target_history_id": 1765,
       "anchor_history_id": 1704,
       "anchor_semantic": "Sunday Bloody Sunday 写的是 1972 年北爱尔兰血腥星期日",
@@ -1221,8 +1111,6 @@
     },
     {
       "case_id": "G036",
-      "user_id": "3234979817",
-      "group_id": "734954188",
       "target_history_id": 7292,
       "anchor_history_id": 7044,
       "anchor_semantic": "Attention Is All You Need 提出 Transformer，2017 年 Google 发布",
@@ -1243,8 +1131,6 @@
     },
     {
       "case_id": "G037",
-      "user_id": "3234979817",
-      "group_id": "734954188",
       "target_history_id": 7223,
       "anchor_history_id": 6690,
       "anchor_semantic": "用户一个月听 2500 分钟歌，耳朵不舒服",
@@ -1265,8 +1151,6 @@
     },
     {
       "case_id": "G038",
-      "user_id": "3234979817",
-      "group_id": "734954188",
       "target_history_id": 3505,
       "anchor_history_id": 3067,
       "anchor_semantic": "TuxGuitar 靠 MIDI 音源，GP8 有 RSE 引擎",
@@ -1287,8 +1171,6 @@
     },
     {
       "case_id": "G039",
-      "user_id": "3234979817",
-      "group_id": "734954188",
       "target_history_id": 11352,
       "anchor_history_id": 8427,
       "anchor_semantic": "Kiriko 选写完就翻篇，不喜欢一直维护",
@@ -1309,8 +1191,6 @@
     },
     {
       "case_id": "G040",
-      "user_id": "3234979817",
-      "group_id": "734954188",
       "target_history_id": 2822,
       "anchor_history_id": 2696,
       "anchor_semantic": "2000 预算新手电吉他首推 Squier Affinity",
@@ -1331,8 +1211,6 @@
     },
     {
       "case_id": "P021",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 13058,
       "anchor_history_id": 13015,
       "anchor_semantic": "用户觉得一点点绝望累积起来只会导致糟糕结果",
@@ -1353,8 +1231,6 @@
     },
     {
       "case_id": "P022",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 16167,
       "anchor_history_id": 16102,
       "anchor_semantic": "用户吃了面包和奶粉咖啡粉混冲饮品",
@@ -1375,8 +1251,6 @@
     },
     {
       "case_id": "P023",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 10137,
       "anchor_history_id": 10090,
       "anchor_semantic": "用户想在简单曲子里加帅气的即兴尾奏",
@@ -1397,8 +1271,6 @@
     },
     {
       "case_id": "P024",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 7464,
       "anchor_history_id": 7415,
       "anchor_semantic": "用户自称来自群聊「阿佐的乐器店」",
@@ -1419,8 +1291,6 @@
     },
     {
       "case_id": "P025",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 13364,
       "anchor_history_id": 13081,
       "anchor_semantic": "面对全力以赴/平衡/躺下，Kiriko 建议躺下",
@@ -1441,8 +1311,6 @@
     },
     {
       "case_id": "P026",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 7612,
       "anchor_history_id": 7455,
       "anchor_semantic": "魔理沙的迷你八卦炉来自香霖堂，她自己攒钱买的",
@@ -1463,8 +1331,6 @@
     },
     {
       "case_id": "P027",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 9775,
       "anchor_history_id": 9590,
       "anchor_semantic": "用户觉得那些课是形式大于内容的面子工作",
@@ -1485,8 +1351,6 @@
     },
     {
       "case_id": "P028",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 14255,
       "anchor_history_id": 14160,
       "anchor_semantic": "用户说 100 多个可爱女孩子向 Kiriko 表白",
@@ -1508,8 +1372,6 @@
     },
     {
       "case_id": "P029",
-      "user_id": "2951704635",
-      "group_id": null,
       "target_history_id": 11720,
       "anchor_history_id": 11687,
       "anchor_semantic": "在街头霸王角色里 Kiriko 选了杰米",
@@ -1530,8 +1392,6 @@
     },
     {
       "case_id": "P030",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 3450,
       "anchor_history_id": 3349,
       "anchor_semantic": "替 goto 说话的那封邮件是 Linus 自己发的",
@@ -1552,8 +1412,6 @@
     },
     {
       "case_id": "P031",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 6593,
       "anchor_history_id": 6478,
       "anchor_semantic": "Windows 更新经常搞坏 Linux 引导，把 GRUB 路径挤掉",
@@ -1575,8 +1433,6 @@
     },
     {
       "case_id": "P032",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 14365,
       "anchor_history_id": 14326,
       "anchor_semantic": "建议先写 GPIO 或 I2C 小驱动，走一遍 probe/匹配/注册",
@@ -1597,8 +1453,6 @@
     },
     {
       "case_id": "P033",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 12022,
       "anchor_history_id": 11877,
       "anchor_semantic": "Hurd 设计太理想化，Mach 上跑 server 性能和调试都难",
@@ -1619,8 +1473,6 @@
     },
     {
       "case_id": "P034",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 10831,
       "anchor_history_id": 10777,
       "anchor_semantic": "dtb 被打包进 zboot.img 的 FIT 里，uboot 每次从镜像解",
@@ -1642,8 +1494,6 @@
     },
     {
       "case_id": "P035",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 4494,
       "anchor_history_id": 4377,
       "anchor_semantic": "搏击俱乐部第三条规则：有人喊停、瘫了、认输，这场就打完了",
@@ -1664,8 +1514,6 @@
     },
     {
       "case_id": "P036",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 15551,
       "anchor_history_id": 15514,
       "anchor_semantic": "git rm --cached 后要写进 .gitignore，否则 git add . 会加回来",
@@ -1686,8 +1534,6 @@
     },
     {
       "case_id": "P037",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 12670,
       "anchor_history_id": 12613,
       "anchor_semantic": "Come As You Are 的 solo 是柯本弹的，不是传闻中的别人",
@@ -1708,8 +1554,6 @@
     },
     {
       "case_id": "P038",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 11542,
       "anchor_history_id": 11507,
       "anchor_semantic": "自定义原子锁约定 0=空闲、1=占用，释放就置 0",
@@ -1730,8 +1574,6 @@
     },
     {
       "case_id": "P039",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 10520,
       "anchor_history_id": 10447,
       "anchor_semantic": "file_operations 只是入口，真正干活的是自定义 static 函数",
@@ -1752,8 +1594,6 @@
     },
     {
       "case_id": "P040",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 9551,
       "anchor_history_id": 9458,
       "anchor_semantic": "音色不对先把 gain 拧小、中频提一提",
@@ -1774,8 +1614,6 @@
     },
     {
       "case_id": "G041",
-      "user_id": "1006625397",
-      "group_id": "1140457037",
       "target_history_id": 2315,
       "anchor_history_id": 1876,
       "anchor_semantic": "用户点过 sakamiya 的 anticipate",
@@ -1796,8 +1634,6 @@
     },
     {
       "case_id": "G042",
-      "user_id": "1793240684",
-      "group_id": "734954188",
       "target_history_id": 10049,
       "anchor_history_id": 9052,
       "anchor_semantic": "《局外人》是加缪写的，卡夫卡那本是《审判》",
@@ -1818,8 +1654,6 @@
     },
     {
       "case_id": "G043",
-      "user_id": "2322998936",
-      "group_id": "734954188",
       "target_history_id": 6178,
       "anchor_history_id": 3578,
       "anchor_semantic": "调式听感由主音决定，音集一样但中心变了",
@@ -1840,8 +1674,6 @@
     },
     {
       "case_id": "G044",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 10588,
       "anchor_history_id": 10190,
       "anchor_semantic": "镀膜弦选达达里奥 XS，音色更像没镀膜的",
@@ -1862,8 +1694,6 @@
     },
     {
       "case_id": "G045",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 6933,
       "anchor_history_id": 6776,
       "anchor_semantic": "ESP 定制想要 Snapper，超薄琴体 24 品蓝紫渐变",
@@ -1884,8 +1714,6 @@
     },
     {
       "case_id": "G046",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 6945,
       "anchor_history_id": 6800,
       "anchor_semantic": "黑卡用达达 EXL120，日芬用伊利克斯",
@@ -1906,8 +1734,6 @@
     },
     {
       "case_id": "G047",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 9211,
       "anchor_history_id": 8870,
       "anchor_semantic": "黑卡本身没金边，只能找师傅重新包边，工费风险都高",
@@ -1928,8 +1754,6 @@
     },
     {
       "case_id": "G048",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 6857,
       "anchor_history_id": 6744,
       "anchor_semantic": "前卫金属速弹选 Jazz III XL 或 Dunlop Flow，厚尖有倒角",
@@ -1950,8 +1774,6 @@
     },
     {
       "case_id": "G049",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 8923,
       "anchor_history_id": 8431,
       "anchor_semantic": "Sonic Youth 的 Thurston 和 Lee、Wilco 的 Nels Cline 爱用节奏电路",
@@ -1972,8 +1794,6 @@
     },
     {
       "case_id": "G050",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 8905,
       "anchor_history_id": 8361,
       "anchor_semantic": "用户 8 月 15 号正式开始学电吉他",
@@ -1995,8 +1815,6 @@
     },
     {
       "case_id": "G051",
-      "user_id": "3234979817",
-      "group_id": "1140457037",
       "target_history_id": 1695,
       "anchor_history_id": 1569,
       "anchor_semantic": "Led Zeppelin IV 里 Stairway to Heaven 是摇滚圣经级",
@@ -2017,8 +1835,6 @@
     },
     {
       "case_id": "G052",
-      "user_id": "3234979817",
-      "group_id": "1140457037",
       "target_history_id": 1250,
       "anchor_history_id": 1075,
       "anchor_semantic": "《Father of All...》全名是 Father of All Motherfuckers",
@@ -2039,8 +1855,6 @@
     },
     {
       "case_id": "G053",
-      "user_id": "3234979817",
-      "group_id": "1140457037",
       "target_history_id": 1423,
       "anchor_history_id": 1273,
       "anchor_semantic": "知识库截止到 2025 年 7 月",
@@ -2061,8 +1875,6 @@
     },
     {
       "case_id": "G054",
-      "user_id": "3234979817",
-      "group_id": "1140457037",
       "target_history_id": 1784,
       "anchor_history_id": 1700,
       "anchor_semantic": "Holiday 出自 Green Day 的 American Idiot 概念专辑",
@@ -2083,8 +1895,6 @@
     },
     {
       "case_id": "G055",
-      "user_id": "3234979817",
-      "group_id": "734954188",
       "target_history_id": 5872,
       "anchor_history_id": 5398,
       "anchor_semantic": "主动拾音器输出大、阻抗低，被动更原生",
@@ -2105,8 +1915,6 @@
     },
     {
       "case_id": "G056",
-      "user_id": "3234979817",
-      "group_id": "734954188",
       "target_history_id": 5536,
       "anchor_history_id": 5226,
       "anchor_semantic": "Comfortably Numb 尾奏 solo 难在推弦音准、时值呼吸感和情感",
@@ -2127,8 +1935,6 @@
     },
     {
       "case_id": "G057",
-      "user_id": "3234979817",
-      "group_id": "734954188",
       "target_history_id": 4983,
       "anchor_history_id": 4509,
       "anchor_semantic": "强力和弦是根音加五度，没有三度",
@@ -2149,8 +1955,6 @@
     },
     {
       "case_id": "G058",
-      "user_id": "3234979817",
-      "group_id": "734954188",
       "target_history_id": 6471,
       "anchor_history_id": 5637,
       "anchor_semantic": "节奏不好听主要是重音没把握到位",
@@ -2171,8 +1975,6 @@
     },
     {
       "case_id": "G059",
-      "user_id": "3234979817",
-      "group_id": "734954188",
       "target_history_id": 5830,
       "anchor_history_id": 5346,
       "anchor_semantic": "内核模块是加载方式，设备驱动模型是组织设备的框架",
@@ -2193,8 +1995,6 @@
     },
     {
       "case_id": "G060",
-      "user_id": "3234979817",
-      "group_id": "734954188",
       "target_history_id": 6691,
       "anchor_history_id": 5957,
       "anchor_semantic": "把 CC 改成 CC ?= $(CROSS_COMPILE)gcc，再 export",
@@ -2215,8 +2015,6 @@
     },
     {
       "case_id": "P041",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 16989,
       "anchor_history_id": 16318,
       "anchor_semantic": "Oh captain my captain 出自《死亡诗社》",
@@ -2237,8 +2035,6 @@
     },
     {
       "case_id": "P042",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 16531,
       "anchor_history_id": 16124,
       "anchor_semantic": "日本咖啡店的伯爵红茶基本是川宁茶包",
@@ -2259,8 +2055,6 @@
     },
     {
       "case_id": "P043",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 10127,
       "anchor_history_id": 9902,
       "anchor_semantic": "用户说想有个美少女一起生活、能毫无顾虑喊她妈妈",
@@ -2281,8 +2075,6 @@
     },
     {
       "case_id": "P044",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 8817,
       "anchor_history_id": 8758,
       "anchor_semantic": "用户戴四十块的 Type-C 半入耳耳机，小音量觉得有感觉",
@@ -2303,8 +2095,6 @@
     },
     {
       "case_id": "P045",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 8486,
       "anchor_history_id": 7731,
       "anchor_semantic": "用户说下两滴雨又憋回去，怀疑老天爷不节制",
@@ -2325,8 +2115,6 @@
     },
     {
       "case_id": "P046",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 16077,
       "anchor_history_id": 15744,
       "anchor_semantic": "烤枫木指板不上油，拿干布擦灰就行",
@@ -2347,8 +2135,6 @@
     },
     {
       "case_id": "P047",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 11522,
       "anchor_history_id": 11441,
       "anchor_semantic": "搜一字螺丝刀宽头 6mm，加电吉他琴桥调节",
@@ -2369,8 +2155,6 @@
     },
     {
       "case_id": "P048",
-      "user_id": "2951704635",
-      "group_id": null,
       "target_history_id": 11808,
       "anchor_history_id": 11729,
       "anchor_semantic": "用户和哥们用 Oopz 开黑",
@@ -2391,8 +2175,6 @@
     },
     {
       "case_id": "P049",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 14933,
       "anchor_history_id": 14856,
       "anchor_semantic": "加注释的 commit 写 docs: 给 xxx 补注释，或用 Conventional Commits",
@@ -2413,8 +2195,6 @@
     },
     {
       "case_id": "P050",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 13454,
       "anchor_history_id": 13311,
       "anchor_semantic": "char *r, *malloc(); 是 K&R 时代的老写法",
@@ -2435,8 +2215,6 @@
     },
     {
       "case_id": "P051",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 15301,
       "anchor_history_id": 15066,
       "anchor_semantic": "Go 保存自动格式化是 gofmt 干的",
@@ -2457,8 +2235,6 @@
     },
     {
       "case_id": "P052",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 12202,
       "anchor_history_id": 12035,
       "anchor_semantic": "调 LP Junior 琴桥高度要先松弦，否则拧不动",
@@ -2479,8 +2255,6 @@
     },
     {
       "case_id": "P053",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 14943,
       "anchor_history_id": 14842,
       "anchor_semantic": "Println 加换行，Print 不加",
@@ -2501,8 +2275,6 @@
     },
     {
       "case_id": "P054",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 16407,
       "anchor_history_id": 16344,
       "anchor_semantic": "《The Elements of Programming Style》由 Kernighan 和 Plauger 写的",
@@ -2523,8 +2295,6 @@
     },
     {
       "case_id": "P055",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 13630,
       "anchor_history_id": 13550,
       "anchor_semantic": "章尾练习曲最好别跳，是整章内容的综合",
@@ -2545,8 +2315,6 @@
     },
     {
       "case_id": "P056",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 13312,
       "anchor_history_id": 13237,
       "anchor_semantic": "Linux 嵌入式难点不在 API，而是调试",
@@ -2567,8 +2335,6 @@
     },
     {
       "case_id": "P057",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 15319,
       "anchor_history_id": 15084,
       "anchor_semantic": "匿名函数塞变量后引用不到自己，写不了递归",
@@ -2589,8 +2355,6 @@
     },
     {
       "case_id": "P058",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 11534,
       "anchor_history_id": 11457,
       "anchor_semantic": "Strat 七八斤，站着弹选宽背带就行",
@@ -2611,8 +2375,6 @@
     },
     {
       "case_id": "P059",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 2274,
       "anchor_history_id": 1330,
       "anchor_semantic": "用户要求 Kiriko 直接发 50 个表情包，不要文字",
@@ -2633,8 +2395,6 @@
     },
     {
       "case_id": "P060",
-      "user_id": "3234979817",
-      "group_id": null,
       "target_history_id": 10885,
       "anchor_history_id": 10789,
       "anchor_semantic": "dtc -@ 多生成 symbols 节点，供 overlay 用 &xxx 找节点",
@@ -2657,8 +2417,6 @@
   "needles": [
     {
       "case_id": "N001",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 6927,
       "anchor_history_id": 6768,
       "anchor_semantic": "Kiriko 的 LP 是标准款黑卡，ST 是日芬老款",
@@ -2679,8 +2437,6 @@
     },
     {
       "case_id": "N002",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 6819,
       "anchor_history_id": 6752,
       "anchor_semantic": "中等厚度 0.88 到 1.2 的拨片最全能",
@@ -2701,8 +2457,6 @@
     },
     {
       "case_id": "N003",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 9315,
       "anchor_history_id": 8954,
       "anchor_semantic": "青木阳菜在 2025 年 7 月 1 日 mygo zepp tour 弹呲",
@@ -2723,8 +2477,6 @@
     },
     {
       "case_id": "N004",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 8028,
       "anchor_history_id": 7701,
       "anchor_semantic": "下北泽虹夏带领的结束乐队是黑马",
@@ -2745,8 +2497,6 @@
     },
     {
       "case_id": "N005",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 9741,
       "anchor_history_id": 9426,
       "anchor_semantic": "用户砸了一把 200 块的鲁芬 ST",
@@ -2767,8 +2517,6 @@
     },
     {
       "case_id": "N006",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 6078,
       "anchor_history_id": 5553,
       "anchor_semantic": "不想看的番就别看完，弃番不犯法",
@@ -2789,8 +2537,6 @@
     },
     {
       "case_id": "N007",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 8432,
       "anchor_history_id": 8153,
       "anchor_semantic": "发动 2026 甜筒皮去芝麻大革命，Kiriko 当总司令",
@@ -2811,8 +2557,6 @@
     },
     {
       "case_id": "N008",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 6707,
       "anchor_history_id": 6520,
       "anchor_semantic": "跨洋商业交通基本没有，在推进的是超音速客机复出",
@@ -2833,8 +2577,6 @@
     },
     {
       "case_id": "N009",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 5327,
       "anchor_history_id": 5102,
       "anchor_semantic": "1968 黑卡和雅马哈 PAC611VFM 比帅，Kiriko 站黑卡",
@@ -2855,8 +2597,6 @@
     },
     {
       "case_id": "N010",
-      "user_id": "2734854896",
-      "group_id": "734954188",
       "target_history_id": 6883,
       "anchor_history_id": 6774,
       "anchor_semantic": "一辈子负利率就冲美产 Jazzmaster，再攒个黑星小管箱",
@@ -2877,8 +2617,6 @@
     },
     {
       "case_id": "N011",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 15561,
       "anchor_history_id": 15288,
       "anchor_semantic": "社会不太在乎你是什么人，但在乎你能不能把事做成",
@@ -2899,8 +2637,6 @@
     },
     {
       "case_id": "N012",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 14961,
       "anchor_history_id": 14504,
       "anchor_semantic": "用户说音乐永远可以强制带来救赎",
@@ -2921,8 +2657,6 @@
     },
     {
       "case_id": "N013",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 15431,
       "anchor_history_id": 15230,
       "anchor_semantic": "用户躺着用英文自言自语一个小时",
@@ -2943,8 +2677,6 @@
     },
     {
       "case_id": "N014",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 11061,
       "anchor_history_id": 10775,
       "anchor_semantic": "用户习惯戴耳机在几百首歌里随机",
@@ -2965,8 +2697,6 @@
     },
     {
       "case_id": "N015",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 16607,
       "anchor_history_id": 16176,
       "anchor_semantic": "孤独摇滚里喜多练到指尖有红印还接着练",
@@ -2987,8 +2717,6 @@
     },
     {
       "case_id": "N016",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 14789,
       "anchor_history_id": 14496,
       "anchor_semantic": "用户认为身体和大脑互为充要条件，不相信灵魂",
@@ -3009,8 +2737,6 @@
     },
     {
       "case_id": "N017",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 16105,
       "anchor_history_id": 15756,
       "anchor_semantic": "butterscotch blonde 最像的是 CV50 奶油黄那把",
@@ -3031,8 +2757,6 @@
     },
     {
       "case_id": "N018",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 15595,
       "anchor_history_id": 15282,
       "anchor_semantic": "理想生活：赚钱、找喜欢的城市、身边有几个好朋友",
@@ -3053,8 +2777,6 @@
     },
     {
       "case_id": "N019",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 15183,
       "anchor_history_id": 15016,
       "anchor_semantic": "用户说对一成不变妥协与死亡无异",
@@ -3075,8 +2797,6 @@
     },
     {
       "case_id": "N020",
-      "user_id": "2734854896",
-      "group_id": null,
       "target_history_id": 15215,
       "anchor_history_id": 15094,
       "anchor_semantic": "用户在三点五十的午觉时间听重金属",

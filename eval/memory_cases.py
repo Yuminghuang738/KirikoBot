@@ -1,6 +1,6 @@
 """从只读 DB 副本抽取分层记忆 eval 候选样本（v3/v4 共用）。
 
-仓库里只存样本索引（case_id / user_id / group_id / target_history_id /
+仓库里只存样本索引（本地生成时可带 user_id / group_id；公开 JSON 已去掉，
 anchor_history_id / category / anchor_fact），**不存聊天原文**；运行时再从
 DB 副本按 id 取。anchor_fact 与 v4 的 probe_question / 关键词由 Hina 人工
 标注，不由本脚本生成；v4 的 tier 分配也以 eval/memory_cases.json 为准。
