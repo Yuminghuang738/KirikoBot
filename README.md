@@ -171,6 +171,7 @@ QQ 客户端
 
 | 层 | 选型 |
 |---|---|
+| 模型 | `deepseek-flash`（DeepSeek V4.1 Flash，多模态；可用 `DEEPSEEK_MODEL` 覆盖） |
 | 语言 | Python 3.11（CI 同时测 3.11 / 3.12） |
 | Web | Flask 3 + waitress（16 线程） |
 | 数据 | SQLite（WAL），无外部数据库 |
