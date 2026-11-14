@@ -346,6 +346,13 @@ KirikoBot/
 
 ---
 
+## 素材说明
+
+- 项目图标为 **AI 生成**（Sana via Pollinations），仅用于本项目；无版权角色、无游戏截图。
+- 表情包来自群聊自动收集，仅用于本机器人回复。
+
+---
+
 ## License
 
 GPL-3.0。见 [LICENSE](LICENSE)。
