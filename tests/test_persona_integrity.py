@@ -115,6 +115,22 @@ class TestPersonaIsPresentAndWhole:
         for word in ("五到二十个字", "挑最后一条", "不刷屏", "不硬装"):
             assert word in section, f"聊天节奏缺少 {word}"
 
+    def test_the_chunking_section(self):
+        """分句规则写进人设，让模型先按语义断行，splitter 只做兜底。
+
+        规则要和 robot_server.split_into_pacing_chunks 的保守边界对齐：
+        一行一个意思、行别太碎、行尾别停在「没说完」的标点上。
+        """
+        section = _persona_section("【怎么断句】", "【表情包】")
+        for word in (
+            "一行放一个完整的意思",
+            "半句话的长度",
+            "转折、补充、举例",
+            "先把结论放第一行",
+            "行尾不用加句号",
+        ):
+            assert word in section, f"断句规则缺少 {word}"
+
 
 class TestLeakDetection:
     def test_the_actual_leak_is_caught(self):
