@@ -674,6 +674,7 @@ def main_logic(robot: RobotServer) -> None:
                              _ambient_group_context(robot, disabled),
                              mood=_mood_signal(robot),
                              speaker=_speaker_context(robot, disabled),
+                             history=history,
                              summary=memory_summary)
         system_prompt = _build_system_prompt(
             robot, db, profile_service, affection_service, disabled,

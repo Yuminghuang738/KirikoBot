@@ -101,3 +101,59 @@ class TestGroupLengthHint:
         from prompt_builder import build_user_message
         text = build_user_message(self._Robot("private"))
         assert "十几个字" not in text
+
+
+class TestContinuousFollowUpAnchor:
+    """短追问要锚定上一轮讨论：`main.py` 必须把 history 传进 build_user_message。
+
+    这个参数曾经漏传：`history, memory_summary, memory_on = _memory_context(robot)`
+    已经算出来了，但调 `_context(...)` 时没传 history，于是 prompt_builder 里
+    `is_continuous` 永远是 False、`context_focus` 永远是空串 —— 一段没人覆盖的
+    死分支。这里同时钉住 builder 的行为和 main.py 的接线。
+    """
+
+    _Robot = TestGroupLengthHint._Robot
+
+    @staticmethod
+    def _robot(msg_type: str, msg: str = "那在C里呢"):
+        robot = TestContinuousFollowUpAnchor._Robot(msg_type)
+        robot.msg = msg
+        return robot
+
+    def test_group_short_follow_up_is_anchored(self):
+        from prompt_builder import build_user_message
+        text = build_user_message(
+            self._robot("group"), history=[{"role": "user", "content": "指针是啥"}]
+        )
+        assert "这是对刚才同一话题的连续短追问" in text
+
+    def test_private_short_follow_up_is_anchored(self):
+        from prompt_builder import build_user_message
+        text = build_user_message(
+            self._robot("private"), history=[{"role": "user", "content": "指针是啥"}]
+        )
+        assert "这是对刚才同一话题的连续短追问" in text
+
+    def test_short_message_without_history_is_not_anchored(self):
+        from prompt_builder import build_user_message
+        assert "连续短追问" not in build_user_message(self._robot("group"), history=[])
+        assert "连续短追问" not in build_user_message(self._robot("private"), history=None)
+
+    def test_long_message_with_history_is_not_anchored(self):
+        from prompt_builder import build_user_message
+        robot = self._robot("group", "帮我看看这个报错到底是怎么回事")
+        text = build_user_message(robot, history=[{"role": "user", "content": "指针是啥"}])
+        assert "连续短追问" not in text
+
+
+def test_main_logic_passes_history_to_user_message():
+    """接线回归：漏传 history 时上面的锚定就是死代码，而单测照样全绿。"""
+    import pathlib
+
+    source = pathlib.Path(__file__).resolve().parents[1] / "KirikoBot" / "main.py"
+    text = source.read_text(encoding="utf-8")
+    head = text.index("user_text = _context(")
+    tail = text.index("system_prompt = _build_system_prompt", head)
+    assert "history=history" in text[head:tail], (
+        "main.py 调 _context 时必须传 history，否则连续短追问锚定是死分支"
+    )
