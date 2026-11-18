@@ -106,7 +106,6 @@ Thumbs.db
 # ====================
 # Personal / Dev Files
 # ====================
-DEVELOPMENT_GUIDE.md
 llbot-docker.sh
 # docker-compose.yml is tracked on purpose: without it a fresh clone cannot
 # start, and the LLBot bridge depends on the llbot_config mount it declares.
@@ -120,3 +119,8 @@ eval/out/
 # Coverage / test artifacts
 .coverage
 .coverage.*
+
+# 临时文件
+.temp_ip
+temp_*.py
+docker-compose-new.yml
