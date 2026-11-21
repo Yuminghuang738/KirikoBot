@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 
 import pytest
 
@@ -104,15 +105,15 @@ class TestGroupLengthHint:
 
 
 class TestContinuousFollowUpAnchor:
-    """短追问要锚定上一轮讨论：`main.py` 必须把 history 传进 build_user_message。
+    """短追问锚定必须看**真实时间**：history 非空不等于「刚才」。
 
-    这个参数曾经漏传：`history, memory_summary, memory_on = _memory_context(robot)`
-    已经算出来了，但调 `_context(...)` 时没传 history，于是 prompt_builder 里
-    `is_continuous` 永远是 False、`context_focus` 永远是空串 —— 一段没人覆盖的
-    死分支。这里同时钉住 builder 的行为和 main.py 的接线。
+    线上事故：用户隔 7 天发「我去你怎么这么高级」，上一轮是「硬水」的话题；
+    `len(history) > 0` 让提示谎称「刚才同一话题」，模型顺着硬水答，思维链也
+    跟着跑偏。这里钉住时间判断、隔了多久的事实说明，以及 main.py 的接线。
     """
 
     _Robot = TestGroupLengthHint._Robot
+    NOW = datetime(2026, 11, 21, 16, 15)
 
     @staticmethod
     def _robot(msg_type: str, msg: str = "那在C里呢"):
@@ -120,30 +121,82 @@ class TestContinuousFollowUpAnchor:
         robot.msg = msg
         return robot
 
-    def test_group_short_follow_up_is_anchored(self):
+    @staticmethod
+    def _history(label: str):
+        # 时间戳由 chat_history.to_messages 加在 user 行上，assistant 行没有
+        return [
+            {"role": "user", "content": f"[{label}] 指针是啥"},
+            {"role": "assistant", "content": "指针是地址"},
+        ]
+
+    def _text(self, msg_type="group", msg="那在C里呢", label="11-21 16:13", now=None):
         from prompt_builder import build_user_message
-        text = build_user_message(
-            self._robot("group"), history=[{"role": "user", "content": "指针是啥"}]
+        return build_user_message(
+            self._robot(msg_type, msg), history=self._history(label),
+            now=now or self.NOW,
         )
+
+    def test_recent_group_follow_up_is_anchored(self):
+        text = self._text()
+        assert "这是对刚才同一话题的连续短追问" in text
+        assert "隔了" not in text
+
+    def test_recent_private_follow_up_is_anchored(self):
+        text = self._text("private")
         assert "这是对刚才同一话题的连续短追问" in text
 
-    def test_private_short_follow_up_is_anchored(self):
+    def test_seven_day_old_history_is_not_anchored_but_says_how_old(self):
+        text = self._text(label="11-14 20:04")
+        assert "连续短追问" not in text, "7 天前不可能是「刚才」"
+        assert "上一轮对话是 11-14 20:04" in text
+        assert "隔了 7 天" in text
+        assert "别把那时候的事当成刚才发生的" in text
+
+    def test_private_old_history_still_gets_the_gap_note(self):
+        text = self._text("private", label="11-14 20:04")
+        assert "连续短追问" not in text
+        assert "上一轮对话是 11-14 20:04" in text
+
+    def test_history_without_timestamps_is_not_anchored(self):
+        """4 元组路径（eval 回放）没有时间戳：宁可少锚定，也不能瞎说刚才。"""
         from prompt_builder import build_user_message
-        text = build_user_message(
-            self._robot("private"), history=[{"role": "user", "content": "指针是啥"}]
-        )
-        assert "这是对刚才同一话题的连续短追问" in text
+        history = [{"role": "user", "content": "指针是啥"},
+                   {"role": "assistant", "content": "指针是地址"}]
+        text = build_user_message(self._robot("group"), history=history, now=self.NOW)
+        assert "连续短追问" not in text
+        assert "隔了" not in text
 
     def test_short_message_without_history_is_not_anchored(self):
         from prompt_builder import build_user_message
-        assert "连续短追问" not in build_user_message(self._robot("group"), history=[])
-        assert "连续短追问" not in build_user_message(self._robot("private"), history=None)
+        assert "连续短追问" not in build_user_message(
+            self._robot("group"), history=[], now=self.NOW)
+        assert "连续短追问" not in build_user_message(
+            self._robot("private"), history=None, now=self.NOW)
 
-    def test_long_message_with_history_is_not_anchored(self):
-        from prompt_builder import build_user_message
-        robot = self._robot("group", "帮我看看这个报错到底是怎么回事")
-        text = build_user_message(robot, history=[{"role": "user", "content": "指针是啥"}])
+    def test_long_message_with_recent_history_is_not_anchored(self):
+        text = self._text(msg="帮我看看这个报错到底是怎么回事")
         assert "连续短追问" not in text
+
+    def test_the_hour_boundary(self):
+        # 59 分钟前还算刚才；61 分钟前既不算刚才，也还不到 6 小时的隔天说明
+        assert "连续短追问" in self._text(label="11-21 15:16")
+        stale = self._text(label="11-21 15:14")
+        assert "连续短追问" not in stale
+        assert "隔了" not in stale
+
+    def test_six_hours_gets_the_gap_note(self):
+        text = self._text(label="11-21 10:15")
+        assert "连续短追问" not in text
+        assert "隔了 6 小时" in text
+
+    def test_cross_year_history_is_not_treated_as_future(self):
+        """12-31 的记录在 1 月要算上一年，不能被当成「未来」而锚定。"""
+        from datetime import datetime as dt
+        now = dt(2027, 1, 1, 10, 0)
+        text = self._text(label="12-31 22:00", now=now)
+        assert "连续短追问" not in text
+        assert "上一轮对话是 12-31 22:00" in text
+        assert "隔了 12 小时" in text
 
 
 def test_main_logic_passes_history_to_user_message():

@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from config import Config
@@ -462,12 +462,76 @@ def format_group_context(rows: list[dict[str, Any]], minutes: int = 15) -> str:
     )
 
 
+# 只有「刚才」才配叫连续追问：上一轮超过这个间隔就不能再锚定话题。
+_ANCHOR_WINDOW = timedelta(minutes=60)
+# 隔这么久还提「上一轮」，必须明说是哪天的，否则模型会把旧话题当成刚发生。
+_STALE_AFTER = timedelta(hours=6)
+_HISTORY_STAMP_RE = re.compile(r"^\[(\d{2})-(\d{2}) (\d{2}):(\d{2})\] ")
+
+
+def _last_history_turn(history: list[Any] | None,
+                       now: datetime) -> tuple[datetime, str] | None:
+    """最后一条带 ``[MM-DD HH:MM]`` 的 user 行 → (发生时间, ``11-14 20:04``)。
+
+    时间戳只有月-日：默认按今年算；算出来比 now 还晚一天以上就退到上一年
+    （12 月的记录在 1 月要算去年）。解析不了返回 None —— 宁可少锚定，
+    也不能对模型谎报「刚才」。
+    """
+    for message in reversed(history or []):
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        match = _HISTORY_STAMP_RE.match(str(message.get("content") or ""))
+        if not match:
+            continue
+        month, day, hour, minute = (int(part) for part in match.groups())
+        try:
+            moment = now.replace(month=month, day=day, hour=hour, minute=minute,
+                                 second=0, microsecond=0)
+        except ValueError:
+            return None
+        if moment - now > timedelta(days=1):
+            try:
+                moment = moment.replace(year=now.year - 1)
+            except ValueError:
+                return None
+        label = f"{month:02d}-{day:02d} {hour:02d}:{minute:02d}"
+        return moment, label
+    return None
+
+
+def _history_gap(history: list[Any] | None,
+                 now: datetime) -> tuple[timedelta, str] | None:
+    """上一轮距今多久；拿不到时间返回 None（当成不连续）。"""
+    found = _last_history_turn(history, now)
+    if not found:
+        return None
+    moment, label = found
+    delta = now - moment
+    if delta < timedelta(0):
+        delta = timedelta(0)   # 时钟偏差：未来时间按「刚才」处理，别出负间隔
+    return delta, label
+
+
+def _human_gap(delta: timedelta) -> str:
+    if delta >= timedelta(days=1):
+        days = delta.days
+        # 6 天 20 小时说成「7 天」更接近人的直觉
+        if delta - timedelta(days=days) >= timedelta(hours=12):
+            days += 1
+        return f"{days} 天"
+    hours = delta.seconds // 3600
+    if hours >= 1:
+        return f"{hours} 小时"
+    return f"{max(1, delta.seconds // 60)} 分钟"
+
+
 def build_user_message(robot: Any, reply_note: str = "",
                        group_context: str = "", now: Any = None,
                        mood: str = "", speaker: str = "",
                        history: list[Any] | None = None,
                        summary: str = "") -> str:
     """Build the user-role message — the ambient context plus this interaction."""
+    now = now or datetime.now()
     msg = robot.msg.strip()
     if not msg:
         # Fallback so image-only / empty messages never reach the AI as blank text
@@ -486,19 +550,29 @@ def build_user_message(robot: Any, reply_note: str = "",
         rendered = render_summary_block(summary)
         if rendered:
             summary_block = f"{rendered}\n"
-    # 动态增强：针对连续对话的短追问，强制锚定上下文，防止模型因单字输入而导致语境漂移
+    # 连续短追问才锚定话题 —— 判断依据是上一轮的**真实时间**，不是「history 非空」。
+    # 线上事故：7 天前的「硬水」被一句「你怎么这么高级」当成刚才的话题，思维链跟着跑偏。
+    gap = _history_gap(history, now)
     is_short = len(msg.strip()) <= 10
-    is_continuous = len(history or []) > 0
-    context_focus = "\n（注意：这是对刚才同一话题的连续短追问，请务必紧扣上一轮讨论的主题与条件限定来回答，逻辑自然连贯。）" if is_short and is_continuous else ""
+    is_continuous = is_short and gap is not None and gap[0] <= _ANCHOR_WINDOW
+    if is_continuous:
+        hints = ("注意：这是对刚才同一话题的连续短追问，请务必紧扣上一轮讨论的主题与条件限定"
+                 "来回答，逻辑自然连贯。")
+    elif gap is not None and gap[0] >= _STALE_AFTER:
+        hints = (f"上一轮对话是 {gap[1]}，隔了 {_human_gap(gap[0])}，"
+                 "别把那时候的事当成刚才发生的。")
+    else:
+        hints = ""
 
     if robot.msg_type == "group":
         # 长度与风格指引：闲聊短接，正事/追问认真讲清，句末不加句号
-        tail = f"\n（就像群里随口接一句：日常闲聊十几个字一两句就停；探讨正事或追问细节就认真讲清，多句话可以分行发，句末不加句号。{context_focus}）"
+        tail = (f"\n（就像群里随口接一句：日常闲聊十几个字一两句就停；"
+                f"探讨正事或追问细节就认真讲清，多句话可以分行发，句末不加句号。{hints}）")
         return (f"{stamp}{feeling}{who}{context}{summary_block}{prefix}群「{robot.group_name or ''}」中 "
                 f"用户 {robot.user_name} 说：{msg}{tail}")
-    
-    # 私聊不加针对群的指引，但如果触发了近因增强，依然保留该上下文锚定提示
-    tail = f"\n（{context_focus.strip()}）" if context_focus else ""
+
+    # 私聊不加针对群的指引，但时间相关的提示（锚定 / 上一轮隔了多久）照样保留
+    tail = f"\n（{hints}）" if hints else ""
     return f"{stamp}{feeling}{who}{summary_block}{prefix}用户 {robot.user_name} 说：{msg}{tail}"
 
 
