@@ -17,6 +17,7 @@ turn in ten used to be stored this way.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -26,23 +27,42 @@ logger = logging.getLogger(__name__)
 MAX_HISTORY = 24  # 12 轮
 
 
+def format_stamp(timestamp: Any) -> str:
+    """DB 里的本地时间戳 → ``MM-DD HH:MM``；解析不了就返回空串。
+
+    模型分不清「昨天」和「上周」，所以每条 user 消息前面带上它发生的日期。
+    """
+    text = str(timestamp or "").strip()
+    if len(text) < 16:
+        return ""
+    try:
+        moment = datetime.fromisoformat(text.replace("Z", ""))
+    except ValueError:
+        return ""
+    return moment.strftime("%m-%d %H:%M")
+
+
 def to_messages(rows: list[Any]) -> list[dict[str, Any]]:
     """清洗原始 history 行，输出可直接进 messages 的 turn 列表。
 
     纯函数，方便记忆分层复用：连续 user 只留最新、尾部孤立 user 丢掉、
     assistant 空但带 tool_calls 的保留一条「已调用工具处理」标记。
+
+    行可以是 4 元组（role, content, tool_calls, tool_call_id，旧格式）或
+    5 元组（末尾多一个 timestamp）。有时间戳的 **user** 行内容前加
+    ``[11-14 20:32] ``；assistant 行不加，免得模型学样把时间写进回复。
     """
     history: list[dict[str, Any]] = []
-    for role, content, tool_calls, _ in rows:
+    for row in rows:
+        role, content, tool_calls = row[0], row[1], row[2]
+        stamp = format_stamp(row[4]) if len(row) > 4 else ""
         if role == "user":
-            # Two user turns in a row mean the earlier one never got a reply
-            # (see save_turn). Only the newest survives: the older one was
-            # either already answered by a tool or is stale by now, and
-            # keeping both is what makes the model answer two questions.
             if history and history[-1]["role"] == "user":
-                history[-1] = {"role": "user", "content": content or ""}
+                # Two user turns in a row mean the earlier one never got a reply
+                # (see save_turn). Only the newest survives, with its own stamp.
+                history[-1] = {"role": "user", "content": _stamp_user(content, stamp)}
                 continue
-            history.append({"role": "user", "content": content or ""})
+            history.append({"role": "user", "content": _stamp_user(content, stamp)})
         elif role == "assistant":
             if content and content.strip():
                 history.append({"role": "assistant", "content": content.strip()})
@@ -61,6 +81,11 @@ def to_messages(rows: list[Any]) -> list[dict[str, Any]]:
         history.pop()
 
     return history
+
+
+def _stamp_user(content: Any, stamp: str) -> str:
+    body = content or ""
+    return f"[{stamp}] {body}" if stamp else body
 
 
 def load_history(db: Any, uid: str, gid: str | None,

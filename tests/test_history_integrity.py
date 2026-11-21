@@ -11,9 +11,21 @@ way, so this was not a rare edge case.
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from chat_history import MAX_HISTORY, load_history, save_turn
+
+_STAMP_RE = re.compile(r"^\[\d{2}-\d{2} \d{2}:\d{2}\] ")
+
+
+def _unstamped(history):
+    """user 行现在带 [MM-DD HH:MM] 时间戳，比较结构前先剥掉。"""
+    return [
+        {"role": h["role"], "content": _STAMP_RE.sub("", h["content"])}
+        for h in history
+    ]
 
 TOOL_CHAIN = '[{"name": "web_search", "arguments": "{\\"query\\": \\"x\\"}"}]'
 
@@ -21,7 +33,7 @@ TOOL_CHAIN = '[{"name": "web_search", "arguments": "{\\"query\\": \\"x\\"}"}]'
 class TestSaveTurn:
     def test_a_normal_turn_stores_both_halves(self, db):
         save_turn(db, "u1", "g1", "问题", "回答")
-        assert load_history(db, "u1", "g1") == [
+        assert _unstamped(load_history(db, "u1", "g1")) == [
             {"role": "user", "content": "问题"},
             {"role": "assistant", "content": "回答"},
         ]
@@ -40,7 +52,7 @@ class TestSaveTurn:
         save_turn(db, "u1", "g1", "Sgt Pepper 封面有谁", "",
                   reasoning="查一下", tool_chain=TOOL_CHAIN, handled=True)
         history = load_history(db, "u1", "g1")
-        assert history == [
+        assert _unstamped(history) == [
             {"role": "user", "content": "Sgt Pepper 封面有谁"},
             {"role": "assistant", "content": "[已调用工具处理]"},
         ]
@@ -61,8 +73,8 @@ class TestSaveTurn:
     def test_scopes_are_separated(self, db):
         save_turn(db, "u1", "g1", "群里的话", "群里回答")
         save_turn(db, "u1", None, "私聊的话", "私聊回答")
-        assert load_history(db, "u1", "g1")[0]["content"] == "群里的话"
-        assert load_history(db, "u1", None)[0]["content"] == "私聊的话"
+        assert _STAMP_RE.sub("", load_history(db, "u1", "g1")[0]["content"]) == "群里的话"
+        assert _STAMP_RE.sub("", load_history(db, "u1", None)[0]["content"]) == "私聊的话"
 
 
 class TestLoadHistory:
@@ -75,7 +87,7 @@ class TestLoadHistory:
         history = load_history(db, "u1", "g1")
         roles = [h["role"] for h in history]
         assert roles == ["user", "assistant"]
-        assert history[0]["content"] == "第二条", "the newest question wins"
+        assert _STAMP_RE.sub("", history[0]["content"]) == "第二条", "the newest question wins"
         assert all(
             not (roles[i] == "user" and roles[i + 1] == "user")
             for i in range(len(roles) - 1)
@@ -92,7 +104,7 @@ class TestLoadHistory:
         db.deposit_chat_history("user", "u1", "g1", "甲", "", "")
         db.deposit_chat_history("assistant", "u1", "g1", "答甲", "", "")
         db.deposit_chat_history("user", "u1", "g1", "没人回答的问题", "", "")
-        assert load_history(db, "u1", "g1") == [
+        assert _unstamped(load_history(db, "u1", "g1")) == [
             {"role": "user", "content": "甲"},
             {"role": "assistant", "content": "答甲"},
         ]
@@ -102,7 +114,7 @@ class TestLoadHistory:
         db.deposit_chat_history("assistant", "u1", "g1", "答甲", "", "")
         for text in ("第一", "第二", "第三", "第四"):
             db.deposit_chat_history("user", "u1", "g1", text, "", "")
-        assert load_history(db, "u1", "g1") == [
+        assert _unstamped(load_history(db, "u1", "g1")) == [
             {"role": "user", "content": "甲"},
             {"role": "assistant", "content": "答甲"},
         ]
@@ -122,7 +134,7 @@ class TestLoadHistory:
         db.deposit_chat_history("user", "u1", "g1", "乙没人答", "", "")
         db.deposit_chat_history("user", "u1", "g1", "丙", "", "")
         db.deposit_chat_history("assistant", "u1", "g1", "答丙", "", "")
-        assert load_history(db, "u1", "g1") == [
+        assert _unstamped(load_history(db, "u1", "g1")) == [
             {"role": "user", "content": "甲"},
             {"role": "assistant", "content": "答甲"},
             {"role": "user", "content": "丙"},
@@ -140,7 +152,7 @@ class TestLoadHistory:
         db.deposit_chat_history("assistant", "u1", "g1", "", "", "")
         db.deposit_chat_history("user", "u1", "g1", "乙", "", "")
         db.deposit_chat_history("assistant", "u1", "g1", "答乙", "", "")
-        assert load_history(db, "u1", "g1") == [
+        assert _unstamped(load_history(db, "u1", "g1")) == [
             {"role": "user", "content": "乙"},
             {"role": "assistant", "content": "答乙"},
         ]
@@ -188,4 +200,4 @@ class TestTheReportedScenario:
         save_turn(db, "u1", "g1", "第一个问题", "")          # e.g. empty completion
         save_turn(db, "u1", "g1", "第二个问题", "第二个回答")
         history = load_history(db, "u1", "g1")
-        assert [h["content"] for h in history] == ["第二个问题", "第二个回答"]
+        assert [_STAMP_RE.sub("", h["content"]) for h in history] == ["第二个问题", "第二个回答"]

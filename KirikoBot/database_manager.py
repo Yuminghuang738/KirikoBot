@@ -583,7 +583,7 @@ class DatabaseManager:
         scope = "group_id = ?" if group_id else "group_id IS NULL"
         params: tuple[Any, ...] = (user_id, group_id) if group_id else (user_id,)
         rows = self.fetch_data(
-            "SELECT role, content, tool_calls, tool_call_id FROM history "
+            "SELECT role, content, tool_calls, tool_call_id, timestamp FROM history "
             f"WHERE user_id = ? AND {scope} AND role IN ('user', 'assistant') "
             "ORDER BY id DESC LIMIT ?",
             (*params, int(limit or self.CHAT_HISTORY_RAW_LIMIT)),
@@ -682,7 +682,7 @@ class DatabaseManager:
         """按时间正序返回最近 limit 条（含 id），供记忆层判断缺口。"""
         where, params = self.memory_scope_clause(scope_id)
         rows = self.fetch_data(
-            "SELECT id, role, content, tool_calls, tool_call_id FROM history "
+            "SELECT id, role, content, tool_calls, tool_call_id, timestamp FROM history "
             f"WHERE user_id = ? AND {where} AND role IN ('user', 'assistant') "
             "ORDER BY id DESC LIMIT ?",
             (user_id, *params, int(limit)),
@@ -690,7 +690,8 @@ class DatabaseManager:
         rows.reverse()
         return [
             {"id": r[0], "role": r[1], "content": r[2] or "",
-             "tool_calls": r[3] or "", "tool_call_id": r[4] or ""}
+             "tool_calls": r[3] or "", "tool_call_id": r[4] or "",
+             "timestamp": r[5] or ""}
             for r in rows
         ]
 
