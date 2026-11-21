@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 
 import pytest
@@ -9,6 +10,14 @@ import pytest
 import memory_service
 from config import Config
 from database_manager import DatabaseManager
+
+_STAMP_RE = re.compile(r"^\[\d{2}-\d{2} \d{2}:\d{2}\] ")
+
+
+def _body(content: str) -> str:
+    """去掉 user 行前面的 [MM-DD HH:MM] 时间戳。"""
+    return _STAMP_RE.sub("", content)
+
 
 SUMMARY_JSON = json.dumps({"summary": "记得用户在准备考试", "facts": ["用户在准备考试", "用户喜欢猫"]}, ensure_ascii=False)
 
@@ -201,7 +210,7 @@ def test_load_context_injects_contiguous_summary(db):
 
     assert summary == "更早的摘要"
     assert len(messages) == 24
-    assert messages[0]["content"] == "m6"
+    assert _body(messages[0]["content"]) == "m6"
 
 
 def test_load_context_drops_summary_on_unfillable_gap(db):
@@ -222,7 +231,22 @@ def test_load_context_fills_small_gap(db):
     messages, summary = memory_service.load_context(db, "u1", "g1")
 
     assert summary == "更早的摘要"
-    assert messages[0]["content"] == "m6"
+    assert _body(messages[0]["content"]) == "m6"
+
+
+def test_load_context_prefixes_user_rows_with_local_time(db):
+    """给模型的 user 行带 [MM-DD HH:MM]；assistant 行不带（免得模型学样）。"""
+    _seed(db, n=30)
+    messages, _ = memory_service.load_context(db, "u1", "g1")
+
+    users = [m for m in messages if m["role"] == "user"]
+    assistants = [m for m in messages if m["role"] == "assistant"]
+    assert users and all(
+        re.match(r"^\[\d{2}-\d{2} \d{2}:\d{2}\] m\d+$", m["content"]) for m in users
+    )
+    assert assistants and all(
+        re.match(r"^m\d+$", m["content"]) for m in assistants
+    )
 
 
 def test_load_context_use_summary_false(db):

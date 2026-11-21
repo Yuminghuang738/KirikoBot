@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -284,3 +285,67 @@ class TestNegativeFilterIsNotOverBroad:
     def test_real_attacks_are_still_refused(self, bad):
         from profile_service import MEMORY_NEGATIVE_RE
         assert MEMORY_NEGATIVE_RE.search(bad), f"该拦的没拦：{bad}"
+
+
+class TestDatedPrompts:
+    """模型分不清「昨天」和「上周」，所以喂进去的样本和产出的记忆都要带日期。"""
+
+    def test_memory_prompt_requires_a_date_prefix(self):
+        assert "每条以日期开头" in ProfileService.MEMORY_SYSTEM
+        assert "11-10" in ProfileService.MEMORY_SYSTEM
+        assert "不写「昨天」" in ProfileService.MEMORY_SYSTEM
+
+    def test_profile_prompt_requires_dates_for_recent_and_memories(self):
+        prompt = ProfileService.SYSTEM_PROMPT
+        assert "recent 和 memories 里的每一项都要带日期" in prompt
+        assert "不要用「昨天」" in prompt
+        assert "11-10" in prompt
+
+    def test_extraction_input_lines_are_stamped(self, db, svc, monkeypatch):
+        _talk(db, "u1", ProfileService.MEMORY_GAP)
+        captured: dict[str, str] = {}
+
+        def fake_quick_chat(system, user, **kw):
+            captured["system"] = system
+            captured["user"] = user
+            return '{"memories": []}'
+
+        monkeypatch.setattr(ps, "quick_chat", fake_quick_chat)
+        svc.extract_memories(db, "u1", "小明")
+
+        assert re.search(
+            r"^\[\d{2}-\d{2} \d{2}:\d{2}\] (小明|Kiriko): ", captured["user"], re.M
+        ), "喂给模型的每行对话都要带日期"
+
+    def test_saved_memory_keeps_the_date(self, db, svc):
+        _talk(db, "u1", ProfileService.MEMORY_GAP)
+        svc.replies.append(json.dumps({"memories": [
+            {"content": "11-10 约好一起听录音", "kind": "约定"},
+        ]}, ensure_ascii=False))
+
+        saved = svc.extract_memories(db, "u1", "小明")
+
+        assert saved == ["11-10 约好一起听录音"]
+        assert db.get_profile_memories("u1")[0]["content"] == "11-10 约好一起听录音"
+
+    def test_profile_analysis_sample_uses_mm_dd_hh_mm(self, db, monkeypatch):
+        for i in range(ProfileService.MIN_MESSAGES):
+            db.deposit_chat_history("user", "u1", "g1", f"第{i}句", "", "")
+        captured: dict[str, str] = {}
+
+        def fake_quick_chat(system, user, **kw):
+            captured["system"] = system
+            captured["user"] = user
+            return json.dumps({
+                "stable": {}, "recent": {"mentioned": ["11-10 说下周考试"]},
+                "memories": ["11-10 约好一起听录音"],
+            }, ensure_ascii=False)
+
+        monkeypatch.setattr(ps, "quick_chat", fake_quick_chat)
+        service = ProfileService()
+        assert service._do_analyze(db, "u1", "小明") is not None
+
+        assert re.search(
+            r"^\[\d{2}-\d{2} \d{2}:\d{2}\]: 第\d+句$", captured["user"], re.M
+        ), "画像样本的 [ts] 要统一成 MM-DD HH:MM"
+        assert db.get_profile_memories("u1")[0]["content"].startswith("11-10")

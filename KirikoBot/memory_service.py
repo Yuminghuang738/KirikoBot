@@ -431,7 +431,8 @@ def load_context(
             logger.debug("memory_service: raw 窗口 %d 字符，超过软上限 %d", total, max_chars)
 
     messages = to_messages([
-        (r["role"], r["content"], r["tool_calls"], r["tool_call_id"]) for r in raw
+        (r["role"], r["content"], r["tool_calls"], r["tool_call_id"], r.get("timestamp"))
+        for r in raw
     ])
     return messages, summary_text
 

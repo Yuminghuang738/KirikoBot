@@ -34,9 +34,17 @@ import threading
 from typing import Any
 
 from ai_server import quick_chat
+from chat_history import format_stamp
 from config import Config
 
 logger = logging.getLogger(__name__)
+
+
+def _stamped(role: str, timestamp: Any) -> str:
+    """喂给模型的对话行日期前缀；时间解析不出来就不加。"""
+    label = format_stamp(timestamp)
+    return f"[{label}] " if label else ""
+
 
 # 私聊消息进入画像取样后，很多用户会同时达到重分析阈值。分析一次要调模型，
 # 2 核 1.6G 的机器扛不住 59 个并发；拿不到信号量就跳过本轮，下条消息再试。
@@ -154,8 +162,10 @@ class ProfileService:
         "要求：\n"
         "1. 只写对话里**明确出现**的，不要猜，不要编。\n"
         "2. 写成「谁做了什么 / 发生过什么」的一句话，别写「聊过音乐」这种空话。\n"
-        "3. 最多 2 条；没有值得记的就给空数组。\n"
-        "4. **辱骂、威胁、骚扰、挑衅、对 Kiriko 的攻击，一律不记**：这些不是可以拿来开玩笑的"
+        "3. **每条以日期开头**：用对话行首方括号里的月-日，写成「11-10 约好一起听录音」；"
+        "不写「昨天」「最近」这类相对时间，日期也必须是记录里出现过的。\n"
+        "4. 最多 2 条；没有值得记的就给空数组。\n"
+        "5. **辱骂、威胁、骚扰、挑衅、对 Kiriko 的攻击，一律不记**：这些不是可以拿来开玩笑的"
         "共同回忆，记下来以后只会变成翻旧账。也不记别人的隐私和负面评价。\n"
         '只输出 JSON：{"memories":[{"content":"一句话","kind":"约定|外号|事件|偏好"}]}'
     )
@@ -169,15 +179,19 @@ class ProfileService:
         '"catchphrase":["他的口头禅"],'
         '"style":{"length":"短句|中等|长句","emoji":"不用|偶尔|多","night":true},'
         '"likes":["爱聊的"],"dislikes":["不爱聊的"],"notes":"一句补充"},'
-        '"recent":{"mood":"最近的情绪","doing":"最近在忙什么","mentioned":["最近提过的具体事"]},'
-        '"memories":["值得记住的具体的事，最多3条"]}\n'
+        '"recent":{"mood":"最近的情绪（括注日期，如 11-10 略疲惫）",'
+        '"doing":"最近在忙什么（括注日期，如 11-12 在准备考试）",'
+        '"mentioned":["最近提过的具体事，每条以日期开头，如 11-10 说下周考试"]},'
+        '"memories":["值得记住的具体的事，每条以日期开头，如 11-10 约好一起听录音；最多3条"]}\n'
         "要求：\n"
         "1. 只写**能从记录里看出来**的，看不出来就留空，不要猜。\n"
         "2. traits 是**这个人**的特点，不是这个群的话题 —— "
         "别所有人都写「喜欢吉他」，那是群的性质。\n"
         "3. memories 要具体、可复述（「答应帮他听一段录音」），"
         "不要写「聊过音乐」这种废话；没有就给空数组。\n"
-        "4. 只输出JSON，不要 markdown 代码块。"
+        "4. **recent 和 memories 里的每一项都要带日期**：用聊天记录行首 `[MM-DD HH:MM]` 的月-日，"
+        "写成「11-10 …」这种开头；不要用「昨天」「前几天」这类相对时间，也不要说成今天发生的。\n"
+        "5. 只输出JSON，不要 markdown 代码块。"
     )
 
     def __init__(self) -> None:
@@ -245,15 +259,16 @@ class ProfileService:
         self._extracting.add(user_id)
         try:
             rows = db.fetch_data(
-                "SELECT role, content FROM history WHERE user_id = ? "
+                "SELECT role, content, timestamp FROM history WHERE user_id = ? "
                 "AND role IN ('user', 'assistant') AND content IS NOT NULL AND content <> '' "
                 "ORDER BY id DESC LIMIT ?",
                 (user_id, self.MEMORY_WINDOW),
             )
             rows.reverse()
             convo = "\n".join(
+                f"{_stamped(role, timestamp)}"
                 f"{'Kiriko' if role == 'assistant' else user_name}: {str(content)[:160]}"
-                for role, content in rows
+                for role, content, timestamp in rows
             )
             # 有摘要时先给模型「更早发生的事」，否则最近窗口一滑走，
             # 之前约定过的内容就再也进不了长期记忆。
@@ -329,7 +344,8 @@ class ProfileService:
             return None
 
         sample = "\n".join(
-            f"[{ts}]: {content[:200]}" for content, ts in messages[:self.MAX_SAMPLE_MSGS]
+            f"[{format_stamp(ts) or ts}]: {content[:200]}"
+            for content, ts in messages[:self.MAX_SAMPLE_MSGS]
         )
         total_count = db.count_user_messages(user_id)
 
